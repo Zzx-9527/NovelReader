@@ -70,6 +70,13 @@ export class AppConstants {
    * 阈值太小会把"点右侧翻下一页"识别成滑动，一次操作翻两页。
    */
   static readonly PAGE_SWIPE_MIN_DISTANCE: number = 40;
+  /**
+   * 章末自动衔接下一章后的冷却时间（ms）。
+   *
+   * 切章过程中还会陆续到达若干次滚动回调，此时"是否滚到底"的判断
+   * 用的仍是旧内容的高度 —— 不冷却就会一口气连跳好几章。
+   */
+  static readonly AUTO_CONTINUE_COOLDOWN_MS: number = 800;
 
   // ---------------------------------------------------------------- 分章
   /** 首章之前超过这么多字节才补一条"前言" */

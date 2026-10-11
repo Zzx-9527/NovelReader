@@ -102,6 +102,14 @@ export class AppTheme {
   static readonly SPLASH_MIN_MS: number = 450;
   /** 启动页硬超时（预热挂住也要跳走） */
   static readonly SPLASH_TIMEOUT_MS: number = 3000;
+  /**
+   * 阅读页字号的一档（"大一号 / 小一号" = 正文 ± 2）。
+   *
+   * 为什么用相对量而不是写死字号：正文字号由用户设置（默认 18，可调到 30），
+   * 章节标题若固定 20vp，用户把正文调到 28 时标题反而比正文小，层级就反了；
+   * 底栏同理。所有"比正文大/小一号"的地方都从这里取。
+   */
+  static readonly SIZE_STEP: number = 2;
 }
 
 /**

@@ -39,6 +39,8 @@ export class ReaderViewModel {
   private layoutKey: string = '';
   private contentWidth: number = 0;
   private contentHeight: number = 0;
+  /** 第一页被章节标题占掉的高度（vp）；0 表示本章没有标题 */
+  private firstPageExtraHeight: number = 0;
   private lastScrollReportAt: number = 0;
   /**
    * 待恢复的章内偏移。
@@ -118,18 +120,29 @@ export class ReaderViewModel {
   }
 
   /** 进入阅读页时由页面提供正文区尺寸 */
-  setContentSize(width: number, height: number): void {
+  setContentSize(width: number, height: number, firstPageExtraHeight: number = 0): void {
     this.contentWidth = width;
     this.contentHeight = height;
+    // 首页要给章节标题让位（分页模式下标题只出现在本章第一页）
+    this.firstPageExtraHeight = firstPageExtraHeight;
   }
 
   // ------------------------------------------------------------ 章节加载
 
-  async loadChapter(chapterIndex: number): Promise<void> {
+  /**
+   * 加载并渲染某一章。
+   *
+   * @param silent true 时不置 loading。
+   *   给"章末自动衔接下一章"用：正常切章会闪一下 LoadingView，
+   *   而续读最怕的就是这一下中断感（正文区整个换成转圈的占位符）。
+   */
+  async loadChapter(chapterIndex: number, silent: boolean = false): Promise<void> {
     if (this.readService === null || chapterIndex < 0 || chapterIndex >= this.state.chapters.length) {
       return;
     }
-    this.state.loading = true;
+    if (!silent) {
+      this.state.loading = true;
+    }
     try {
       const chapter: Chapter = this.state.chapters[chapterIndex];
       const text: string = this.readService.decodeChapter(
@@ -172,7 +185,7 @@ export class ReaderViewModel {
       return;
     }
     this.layoutKey = PaginationService.buildLayoutKey(
-      this.state.settings, this.contentWidth, this.contentHeight);
+      this.state.settings, this.contentWidth, this.contentHeight, this.firstPageExtraHeight);
 
     const cached: number[] = await PageCacheRepository.getBreaks(
       book.id, this.state.chapterIndex, this.layoutKey);
@@ -185,7 +198,8 @@ export class ReaderViewModel {
     this.state.repaginating = true;
     try {
       const breaks: number[] = PaginationService.computeBreaks(
-        this.state.getFullText(), this.state.settings, this.contentWidth, this.contentHeight);
+        this.state.getFullText(), this.state.settings, this.contentWidth, this.contentHeight,
+        this.firstPageExtraHeight);
       this.state.breaks = breaks;
       this.state.pageCount = breaks.length;
       await PageCacheRepository.save(book.id, this.state.chapterIndex, this.layoutKey, breaks);
@@ -277,6 +291,23 @@ export class ReaderViewModel {
     await this.switchChapter(this.state.chapterIndex + 1, 0);
   }
 
+  /**
+   * 章末自动衔接下一章（滚动模式用）。
+   *
+   * 与 `nextChapter()` 的区别只有一处，但很关键：**静默加载**。
+   * 滚动模式读到章末时不该出现"正文消失 → 转圈 → 新正文"这一步 ——
+   * 那正是"不能无缝衔接"的观感来源。
+   *
+   * @returns 是否真的切了章；没有下一章时返回 false，页面据此不再重试
+   */
+  async continueToNextChapter(): Promise<boolean> {
+    if (this.state.loading || !this.state.hasNext) {
+      return false;
+    }
+    await this.switchChapter(this.state.chapterIndex + 1, 0, true);
+    return true;
+  }
+
   async prevChapter(): Promise<void> {
     if (!this.state.hasPrev) {
       return;
@@ -285,12 +316,13 @@ export class ReaderViewModel {
     await this.switchChapter(this.state.chapterIndex - 1, -1);
   }
 
-  /** 切换章节；toOffset 为 -1 表示定位到末尾 */
-  async switchChapter(chapterIndex: number, toOffset: number): Promise<void> {
+  /** 切换章节；toOffset 为 -1 表示定位到末尾；silent 见 loadChapter */
+  async switchChapter(chapterIndex: number, toOffset: number,
+    silent: boolean = false): Promise<void> {
     await this.progress?.flush(true);
     // 主动跳章时不要沿用"待恢复偏移"
     this.restoreToOffset = -1;
-    await this.loadChapter(chapterIndex);
+    await this.loadChapter(chapterIndex, silent);
     const offset: number = toOffset < 0
       ? Math.max(0, this.state.getFullText().length - 1)
       : toOffset;

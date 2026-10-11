@@ -18,11 +18,17 @@ export class PaginationService {
    * 用可读字符串而不是哈希：
    *  - 单条缓存行几百字节，存储压力可忽略；
    *  - 出问题时能直接在 DB 里看出这条缓存的排版参数，便于排查。
+   *
+   * ⚠️ `firstPageExtraHeight` 也必须进指纹：同一个容器尺寸下，
+   * "首页多了章节标题"与"首页没有标题"得到的是**不同的断点数组**，
+   * 共用 key 会让两者互相覆盖。
    */
-  static buildLayoutKey(settings: ReaderSettings, contentWidth: number, contentHeight: number): string {
+  static buildLayoutKey(settings: ReaderSettings, contentWidth: number, contentHeight: number,
+    firstPageExtraHeight: number = 0): string {
     const w: number = Math.round(contentWidth);
     const h: number = Math.round(contentHeight);
-    return `w${w}_h${h}_fs${settings.fontSize}_lh${settings.lineHeight}_`
+    const hx: number = Math.round(Math.max(0, firstPageExtraHeight));
+    return `w${w}_h${h}_hx${hx}_fs${settings.fontSize}_lh${settings.lineHeight}_`
       + `ps${settings.paragraphSpacing}_ls${settings.letterSpacing}_`
       + `fi${settings.firstLineIndent}_ff${settings.fontFamily}`;
   }
@@ -30,14 +36,16 @@ export class PaginationService {
   /**
    * 计算分页断点。
    *
-   * @param text            该章正文（章内下标以它为准）
-   * @param settings        阅读设置
-   * @param contentWidth    正文区宽度（vp）
-   * @param contentHeight   正文区高度（vp）
+   * @param text                  该章正文（章内下标以它为准）
+   * @param settings              阅读设置
+   * @param contentWidth          正文区宽度（vp）
+   * @param contentHeight         正文区高度（vp）
+   * @param firstPageExtraHeight  第一页被"章节标题"占掉的高度（vp），0 表示首页无标题
    * @returns 断点数组，breaks[0] === 0；第 i 页覆盖 [breaks[i], breaks[i+1])
    */
   static computeBreaks(
-    text: string, settings: ReaderSettings, contentWidth: number, contentHeight: number
+    text: string, settings: ReaderSettings, contentWidth: number, contentHeight: number,
+    firstPageExtraHeight: number = 0
   ): number[] {
     const breaks: number[] = [0];
     if (text.length === 0) {
@@ -46,6 +54,9 @@ export class PaginationService {
 
     const lineHeight: number = settings.fontSize * settings.lineHeight;
     const linesPerPage: number = Math.max(1, Math.floor(contentHeight / Math.max(1, lineHeight)));
+    // 首页要给章节标题让位：容量可能比后续页少若干行
+    const firstPageLines: number = Math.max(1,
+      Math.floor((contentHeight - Math.max(0, firstPageExtraHeight)) / Math.max(1, lineHeight)));
     // 每行可容纳的字符数。中文按 1 个字宽、ASCII 约 0.5 估算，取下限保护。
     const charsPerLine: number = Math.max(1,
       Math.floor(contentWidth / Math.max(1, settings.fontSize)));
@@ -53,6 +64,11 @@ export class PaginationService {
     const spacingLines: number = Math.max(0, Math.round(settings.paragraphSpacing * 2));
 
     let lineCount: number = 0;
+
+    // 当前正在填充的那一页能放几行：首页可能是"矮"的
+    const capacity = (): number => {
+      return breaks.length === 1 ? firstPageLines : linesPerPage;
+    };
 
     const startNewPage = (offset: number): void => {
       // 连续两页同一起点没有意义，避免产生空页
@@ -76,18 +92,21 @@ export class PaginationService {
         : Math.max(1, Math.ceil(lineText.length / charsPerLine));
       const totalLines: number = wrappedLines + spacingLines;
 
-      if (lineCount > 0 && lineCount + totalLines > linesPerPage) {
+      if (lineCount > 0 && lineCount + totalLines > capacity()) {
         startNewPage(lineStart);
       }
 
-      if (totalLines >= linesPerPage) {
+      if (totalLines >= capacity()) {
         // 单段就超过一页：按页切分，避免出现"永远放不下"的死循环
         let consumed: number = 0;
         let remainingLines: number = wrappedLines;
-        while (remainingLines > linesPerPage) {
-          consumed += linesPerPage * charsPerLine;
-          remainingLines -= linesPerPage;
+        // 首页容量可能更小，先按当前页容量切一刀，之后都按标准容量
+        let cap: number = capacity();
+        while (remainingLines > cap) {
+          consumed += cap * charsPerLine;
+          remainingLines -= cap;
           startNewPage(lineStart + Math.min(consumed, lineText.length));
+          cap = linesPerPage;
         }
         lineCount = remainingLines + spacingLines;
       } else {
