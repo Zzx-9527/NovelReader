@@ -1,9 +1,9 @@
 import { ReaderTheme } from '../../common/theme/AppTheme';
 
-/** 阅读页顶栏：返回、章节名、菜单入口 */
+/** 阅读页顶栏：返回、章节名、目录入口。章节名需 @Prop 才会随翻页更新。 */
 @Component
 export struct ReaderTopBar {
-  title: string = '';
+  @Prop title: string = '';
   theme: ReaderTheme = new ReaderTheme();
   onBack?: () => void;
   onMenu?: () => void;

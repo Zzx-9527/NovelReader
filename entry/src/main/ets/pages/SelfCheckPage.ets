@@ -195,6 +195,7 @@ struct SelfCheckPage {
       await this.checkDatabase();
       await this.checkSettings();
       this.checkByteLengthAndDecoder();
+      this.checkDetectorOnRealBytes();
       await this.checkEncodingAndParser(Encodings.UTF8, 'probe-utf8.txt');
       await this.checkDataPipeline();
       await this.probeTransactionInsert();
@@ -311,6 +312,51 @@ struct SelfCheckPage {
       }
       this.addCheck(label, true,
         `utf-8 一致/字节${utf8Len} · gb18030 一致/字节${gbkLen} · 汉字按 2 字节计`);
+    } catch (e) {
+      this.addCheck(label, false, Logger.errText(e as Object));
+    }
+  }
+
+  /**
+   * 4b) 用【手工核算过的真实字节】验证探测算法。
+   *
+   * 这组用例专门防"GBK 被误判成 UTF-16"：旧算法用 UTF-16 解 GBK 时，
+   * 大量字节对会落进 CJK 区导致得分虚高，正文变乱码。
+   */
+  private checkDetectorOnRealBytes(): void {
+    const label: string = '编码探测(GBK/UTF-16/UTF-8)';
+    try {
+      // a) GBK 文本：必须判成 gb18030（或 gbk），绝不能是 utf-16
+      const gbk = EncodingDetector.detectFromBytes(new Uint8Array(PROBE_GBK));
+      const gbkOk: boolean = gbk.encoding === Encodings.GB18030
+        || gbk.encoding === Encodings.GBK;
+      if (!gbkOk) {
+        this.addCheck(label, false,
+          `GBK 字节被误判为 ${gbk.encoding}（期望 gb18030）→ 这正是正文乱码的成因`);
+        return;
+      }
+
+      // b) UTF-8 文本
+      const utf8 = EncodingDetector.detectFromBytes(new Uint8Array(PROBE_UTF8));
+      if (utf8.encoding !== Encodings.UTF8) {
+        this.addCheck(label, false, `UTF-8 字节被误判为 ${utf8.encoding}`);
+        return;
+      }
+
+      // c) UTF-16LE（带 BOM）
+      const utf16: number[] = [0xFF, 0xFE];
+      for (let i = 0; i < PROBE_UTF8.length; i++) {
+        utf16.push(PROBE_UTF8[i]);
+      }
+      const u16 = EncodingDetector.detectFromBytes(new Uint8Array(utf16));
+      if (u16.encoding !== Encodings.UTF16LE) {
+        this.addCheck(label, false, `UTF-16LE(BOM) 被误判为 ${u16.encoding}`);
+        return;
+      }
+
+      this.addCheck(label, true,
+        `gbk→${gbk.encoding}(conf=${gbk.confidence}) · utf8→${utf8.encoding} · ` +
+        `utf16le→${u16.encoding}（三种都判对）`);
     } catch (e) {
       this.addCheck(label, false, Logger.errText(e as Object));
     }

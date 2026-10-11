@@ -3,17 +3,20 @@ import { ReaderTheme } from '../../common/theme/AppTheme';
 /**
  * 阅读页底部进度栏。
  *
- * 拖动过程中只更新 UI（onChange），松手才真正跳章（onChange 结束用 onSubmit）——
+ * ⚠️ 这几个值必须用 `@Prop`：普通成员只在组件**创建时**取一次快照，
+ * 父组件后续的状态变化不会同步进来 —— 表现为"拖动进度条后数字又弹回去"。
+ *
+ * 拖动过程中只更新本地状态（draggingPercent），松手才真正跳章（SliderChangeMode.End），
  * 避免拖动时反复触发重排。
  */
 @Component
 export struct ReaderBottomBar {
   theme: ReaderTheme = new ReaderTheme();
   /** 0~1 */
-  percent: number = 0;
-  chapterTitle: string = '';
+  @Prop percent: number = 0;
+  @Prop chapterTitle: string = '';
   /** 页码文案，如 "3/12"；scroll 模式传空串 */
-  pageText: string = '';
+  @Prop pageText: string = '';
   onJump?: (percent: number) => void;
 
   @State private draggingPercent: number = -1;

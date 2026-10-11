@@ -26,7 +26,11 @@ export enum ImportOutcome {
   CANCELLED = 1,
   /** 书架里已有同一本书（未删除） */
   DUPLICATE_ACTIVE = 2,
-  /** 命中一本已软删除的书，需由调用方询问"恢复还是作为新书导入" */
+  /**
+   * 保留值：历史版本曾用它表示"命中已删除的同一文件，等用户选择"。
+   * 现在这个分支已改为直接清理旧记录后正常导入 —— 挂起等选择会让用户
+   * 觉得"点了导入没反应"。留着枚举位以免与旧数据/日志对不上。
+   */
   DUPLICATE_DELETED = 3,
   FAILED = 4
 }
@@ -83,8 +87,6 @@ export class ImportPreparation {
   chapters: ParsedChapter[] = [];
   parseRule: string = '';
   fallback: boolean = false;
-  /** 命中"已删除"分支时，那本书的 id，供"恢复"使用 */
-  deletedBookId: number = 0;
 }
 
 /**
@@ -117,7 +119,7 @@ export class ImportService {
       return preparation;
     }
 
-    const uuid: string = util.generateRandomUUID(true);
+    const uuid: string = ImportService.makeUuid();
     preparation.uuid = uuid;
     const relativePath: string = PathUtil.bookRelativePath(uuid);
     const absolutePath: string = PathUtil.toAbsolute(relativePath);
@@ -164,14 +166,20 @@ export class ImportService {
         ImportService.deleteSandboxFile(absolutePath);
         return preparation;
       }
-      if (lookup.status === HashLookup.DELETED) {
-        result.outcome = ImportOutcome.DUPLICATE_DELETED;
-        result.existingBook = lookup.book;
-        result.bookId = lookup.book !== null ? lookup.book.id : 0;
-        result.error = '检测到一本已删除的同一文件';
-        preparation.deletedBookId = result.bookId;
-        // 沙箱文件保留，等待调用方决定"恢复"还是"作为新书导入"
-        return preparation;
+      // 命中"已删除的同一文件"：不挂起、不询问，直接导入。
+      //
+      // 之前这里返回 DUPLICATE_DELETED 等用户选"恢复还是作为新书"，
+      // 结果是用户点导入没反应（状态被挂起、流程中断）—— 那不符合直觉。
+      // 用户的意图很明确："我要导入"。所以这里只做一件事：
+      // 把阻挡唯一索引的旧记录物理删掉（连同它的孤儿文件），让本次导入正常走完。
+      if (lookup.status === HashLookup.DELETED && lookup.book !== null) {
+        const stale = lookup.book;
+        Logger.info(LogTag.IMPORT,
+          `清理已删除的同文件记录后重新导入: oldBookId=${stale.id}`);
+        await BookRepository.hardDelete(stale.id);
+        if (stale.filePath.length > 0 && stale.filePath !== relativePath) {
+          ImportService.deleteSandboxFile(PathUtil.toAbsolute(stale.filePath));
+        }
       }
     }
 
@@ -199,6 +207,9 @@ export class ImportService {
 
     // 4) 分章解析
     ImportService.report(callback, ImportStage.PARSING, -1, '正在解析章节…');
+    // 说明：这一步是 CPU 密集的（整文件解码 + 行级正则 + 逐行字节换算），
+    // 大文件（10 MB+）会有明显停顿。彻底的解法是放进 taskpool，
+    // 但那要求把解析器与文件访问做成可序列化的任务体，属后续优化。
     const parseResult: ImportResult = ImportService.parseInto(preparation, encoding);
     if (parseResult.outcome === ImportOutcome.FAILED) {
       return preparation;
@@ -344,26 +355,15 @@ export class ImportService {
     ImportService.deleteSandboxFile(PathUtil.toAbsolute(preparation.relativePath));
   }
 
-  /** 命中"已删除"书籍时，用户选择"恢复"：把书恢复上架，并丢弃本次复制的新文件 */
-  static async restoreDeleted(preparation: ImportPreparation): Promise<ImportResult> {
-    const result = preparation.result;
-    if (preparation.deletedBookId <= 0) {
-      result.outcome = ImportOutcome.FAILED;
-      result.error = '要恢复的书籍 id 无效';
-      return result;
-    }
-    await BookRepository.restore(preparation.deletedBookId);
-    ImportService.discard(preparation);
-    result.outcome = ImportOutcome.SUCCESS;
-    result.bookId = preparation.deletedBookId;
-    return result;
-  }
-
   /**
    * 以用户选定的编码重新分章并覆盖入库。
    *
    * ⚠️ 会因外键 CASCADE 删除该书全部书签/划线/笔记。
    * 调用方必须先向用户确认（可用 ChapterRepository.countAnnotationsImpacted 取数量）。
+   *
+   * ⚠️ 性能：这是 CPU 密集操作（整文件解码 + 行级正则 + 逐行字节换算 + 全量重写章节）。
+   * 10 MB 级别的小说会有数秒停顿，调用方必须给出可见进度（ShelfState.reparseMessage），
+   * 否则用户会以为卡死。
    */
   static async reparse(
     bookId: number, encoding: string = ''
@@ -440,6 +440,23 @@ export class ImportService {
   }
 
   // ------------------------------------------------------------ 内部工具
+
+  /**
+   * 生成书籍 uuid。
+   *
+   * 不用裸的 `util.generateRandomUUID`：它一旦抛错会让整个导入在最开头失败，
+   * 且失败原因对用户毫无意义。这里做降级 —— 时间戳 + 递增序号同样唯一。
+   */
+  private static uuidSeq: number = 0;
+
+  private static makeUuid(): string {
+    try {
+      return util.generateRandomUUID(true);
+    } catch (e) {
+      ImportService.uuidSeq++;
+      return `book-${Date.now()}-${ImportService.uuidSeq}`;
+    }
+  }
 
   private static toChapters(bookId: number, parsed: ParsedChapter[]): Chapter[] {
     const rows: Chapter[] = [];

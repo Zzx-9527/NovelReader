@@ -18,12 +18,15 @@ import { Logger } from '../../common/utils/Logger';
 export class ChapterReadService {
   private source: ByteSource;
   private encoding: string;
+  /** 缓存 key 必须带 bookId，否则换书时会命中旧内容 */
+  private bookId: number;
   private cache: ChapterCache = new ChapterCache();
   private disposed: boolean = false;
 
-  constructor(source: ByteSource, encoding: string) {
+  constructor(source: ByteSource, encoding: string, bookId: number = 0) {
     this.source = source;
     this.encoding = encoding;
+    this.bookId = bookId;
   }
 
   getCacheSize(): number {
@@ -46,7 +49,8 @@ export class ChapterReadService {
     }
     const limit: number = maxBytes === null ? AppConstants.DEFAULT_CHAPTER_MAX_BYTES : maxBytes;
     const endKey: string = endOffset === null ? 'eof' : `${endOffset}`;
-    const cacheKey: string = `${startOffset}_${endKey}_${limit}`;
+    // key 前缀带 bookId：换书/重建服务后不会误命中旧书内容
+    const cacheKey: string = `${this.bookId}_${startOffset}_${endKey}_${limit}`;
 
     const cached: string | null = this.cache.get(cacheKey);
     if (cached !== null) {

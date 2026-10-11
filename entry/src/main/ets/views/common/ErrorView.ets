@@ -1,4 +1,4 @@
-import { AppTheme } from '../../common/theme/AppTheme';
+import { AppColor, AppTheme } from '../../common/theme/AppTheme';
 
 /**
  * 错误状态：解析失败 / 文件丢失 / 加载失败。
@@ -16,23 +16,23 @@ export struct ErrorView {
     Column({ space: AppTheme.GAP_M }) {
       Text('✗')
         .fontSize(28)
-        .fontColor(AppTheme.DANGER)
+        .fontColor(AppColor.danger)
       Text(this.message)
         .fontSize(AppTheme.FONT_BODY)
-        .fontColor(AppTheme.TEXT_PRIMARY)
+        .fontColor(AppColor.textPrimary)
         .textAlign(TextAlign.Center)
         .padding({ left: 32, right: 32 })
       if (this.hint.length > 0) {
         Text(this.hint)
           .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppTheme.TEXT_HINT)
+          .fontColor(AppColor.textHint)
           .textAlign(TextAlign.Center)
           .padding({ left: 32, right: 32 })
       }
       if (this.actionText.length > 0 && this.onRetry !== undefined) {
         Button(this.actionText)
           .fontSize(AppTheme.FONT_BODY)
-          .backgroundColor(AppTheme.PRIMARY)
+          .backgroundColor(AppColor.brand)
           .onClick(() => {
             if (this.onRetry !== undefined) {
               this.onRetry();

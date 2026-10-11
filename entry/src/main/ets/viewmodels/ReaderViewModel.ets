@@ -40,6 +40,15 @@ export class ReaderViewModel {
   private contentWidth: number = 0;
   private contentHeight: number = 0;
   private lastScrollReportAt: number = 0;
+  /**
+   * 待恢复的章内偏移。
+   *
+   * 为什么需要它：分页依赖正文区实际尺寸，而尺寸要等首帧布局后才知道。
+   * 于是流程是 open()（恢复进度）→ 拿到尺寸 → 重算分页 → 重新 loadChapter()，
+   * 而 loadChapter 会把 offset 归零 —— 不加这个字段，恢复的进度就被清掉了。
+   * 取值 -1 表示"无需恢复，从章首开始"。
+   */
+  private restoreToOffset: number = -1;
 
   get readerTheme(): ReaderTheme {
     return ReaderTheme.of(this.state.settings.theme);
@@ -75,7 +84,7 @@ export class ReaderViewModel {
         this.state.error = '无法打开文件';
         return;
       }
-      this.readService = new ChapterReadService(source, book.encoding);
+      this.readService = new ChapterReadService(source, book.encoding, book.id);
       this.progress = new ProgressService(bookId);
       this.progress.markActive();
 
@@ -94,19 +103,18 @@ export class ReaderViewModel {
   private async restorePosition(book: Book): Promise<void> {
     const pos: ReadingPosition = book.currentPosition();
     const chapterIndex: number = pos.chapterIndex < 0 ? 0 : pos.chapterIndex;
+    // 记下要恢复到的位置：拿到正文区尺寸后还会重新分页并重载本章，
+    // 届时 loadChapter 会归零 offset，需要靠这个字段把位置找回来。
+    this.restoreToOffset = book.hasNoProgress() ? 0 : pos.offset;
     await this.loadChapter(chapterIndex);
     this.state.percent = pos.percent;
     if (chapterIndex > 0 || book.hasNoProgress()) {
+      // 章节位置已恢复；章内偏移为 0 或由后续重新分页时统一处理
+      this.renderAt(0);
+      this.state.percent = pos.percent;
       return;
     }
-    // 恢复页内偏移
-    if (this.state.breaks.length > 0) {
-      const pageIndex: number = PaginationService.locatePage(this.state.breaks, pos.offset);
-      this.state.pageIndex = pageIndex;
-      this.renderAt(pos.offset);
-    } else {
-      this.state.offset = pos.offset;
-    }
+    this.renderAt(pos.offset);
   }
 
   /** 进入阅读页时由页面提供正文区尺寸 */
@@ -130,6 +138,10 @@ export class ReaderViewModel {
         this.state.error = `第 ${chapter.displayNumber()} 章内容为空，可能文件已变化`;
         return;
       }
+      // 取出并消费"待恢复偏移"：分页重建后要回到这里，而不是章首
+      const target: number = this.restoreToOffset;
+      this.restoreToOffset = -1;
+
       this.state.chapterIndex = chapterIndex;
       this.state.chapterTitle = chapter.title;
       this.state.setFullText(text);
@@ -137,7 +149,8 @@ export class ReaderViewModel {
       this.state.offset = 0;
       this.state.error = '';
       await this.buildPagination();
-      this.renderAt(this.state.offset);
+      // target >= 0 时说明是"恢复进度"触发的加载，定位到该偏移；否则停在章首
+      this.renderAt(target >= 0 ? target : 0);
       this.progress?.updatePosition(chapterIndex, this.state.offset, this.computePercent());
     } catch (e) {
       this.state.error = `加载章节失败：${Logger.errText(e as BusinessError)}`;
@@ -275,6 +288,8 @@ export class ReaderViewModel {
   /** 切换章节；toOffset 为 -1 表示定位到末尾 */
   async switchChapter(chapterIndex: number, toOffset: number): Promise<void> {
     await this.progress?.flush(true);
+    // 主动跳章时不要沿用"待恢复偏移"
+    this.restoreToOffset = -1;
     await this.loadChapter(chapterIndex);
     const offset: number = toOffset < 0
       ? Math.max(0, this.state.getFullText().length - 1)

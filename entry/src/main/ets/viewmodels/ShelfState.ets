@@ -34,8 +34,16 @@ export class ShelfState {
   importMessage: string = '';
   importing: boolean = false;
 
+  /**
+   * 换编码重新解析进行中。
+   * 大文件解析是 CPU 密集的，必须给出可见反馈，
+   * 否则用户无法区分"卡住了"和"正在处理"。
+   */
+  reparsing: boolean = false;
+  reparseMessage: string = '';
+
   get isEmpty(): boolean {
-    return !this.loading && this.books.length === 0;
+    return !this.loading && !this.reparsing && this.books.length === 0;
   }
 }
 

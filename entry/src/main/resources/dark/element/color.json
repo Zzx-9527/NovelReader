@@ -3,6 +3,58 @@
     {
       "name": "start_window_background",
       "value": "#000000"
+    },
+    {
+      "name": "splash_bg",
+      "value": "#111111"
+    },
+    {
+      "name": "brand",
+      "value": "#5C8DBE"
+    },
+    {
+      "name": "brand_container",
+      "value": "#22303F"
+    },
+    {
+      "name": "on_brand",
+      "value": "#0D0D0D"
+    },
+    {
+      "name": "bg_page",
+      "value": "#121212"
+    },
+    {
+      "name": "bg_card",
+      "value": "#1E1E1E"
+    },
+    {
+      "name": "text_primary",
+      "value": "#E6E6E6"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#A0A0A0"
+    },
+    {
+      "name": "text_hint",
+      "value": "#6E6E6E"
+    },
+    {
+      "name": "divider",
+      "value": "#2A2A2A"
+    },
+    {
+      "name": "danger",
+      "value": "#E07068"
+    },
+    {
+      "name": "success",
+      "value": "#57A874"
+    },
+    {
+      "name": "mask",
+      "value": "#99000000"
     }
   ]
 }

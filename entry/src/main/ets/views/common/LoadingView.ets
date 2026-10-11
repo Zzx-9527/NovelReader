@@ -1,4 +1,4 @@
-import { AppTheme } from '../../common/theme/AppTheme';
+import { AppColor, AppTheme } from '../../common/theme/AppTheme';
 
 /** 加载中占位 */
 @Component
@@ -10,10 +10,10 @@ export struct LoadingView {
       LoadingProgress()
         .width(36)
         .height(36)
-        .color(AppTheme.PRIMARY)
+        .color(AppColor.brand)
       Text(this.message)
         .fontSize(AppTheme.FONT_CAPTION)
-        .fontColor(AppTheme.TEXT_HINT)
+        .fontColor(AppColor.textHint)
     }
     .width('100%')
     .height('100%')

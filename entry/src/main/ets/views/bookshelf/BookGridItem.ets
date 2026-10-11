@@ -1,5 +1,5 @@
 import { Book } from '../../model/Book';
-import { AppTheme } from '../../common/theme/AppTheme';
+import { AppColor, AppTheme } from '../../common/theme/AppTheme';
 import { FileUtil } from '../../common/utils/FileUtil';
 
 /**
@@ -32,20 +32,20 @@ export struct BookGridItem {
           Text(this.coverLabel())
             .fontSize(22)
             .fontWeight(FontWeight.Bold)
-            .fontColor(AppTheme.PRIMARY)
+            .fontColor(AppColor.brand)
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Center)
-        .backgroundColor(AppTheme.PRIMARY_LIGHT)
+        .backgroundColor(AppColor.brandContainer)
 
         // 阅读进度角标
         if (this.book.progressPercent > 0) {
           Text(FileUtil.humanPercent(this.book.progressPercent))
             .fontSize(10)
-            .fontColor(AppTheme.TEXT_ON_PRIMARY)
-            .backgroundColor(AppTheme.BG_MASK)
+            .fontColor(AppColor.onBrand)
+            .backgroundColor(AppColor.mask)
             .borderRadius(4)
             .padding({ left: 4, right: 4, top: 1, bottom: 1 })
             .position({ right: 4, bottom: 4 })
@@ -55,11 +55,11 @@ export struct BookGridItem {
       .aspectRatio(3 / 4)
       .borderRadius(AppTheme.ITEM_RADIUS)
       .clip(true)
-      .backgroundColor(AppTheme.BG_CARD)
+      .backgroundColor(AppColor.bgCard)
 
       Text(this.book.title)
         .fontSize(AppTheme.FONT_CAPTION)
-        .fontColor(AppTheme.TEXT_PRIMARY)
+        .fontColor(AppColor.textPrimary)
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')

@@ -1,9 +1,8 @@
-import { router } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { ReaderState } from '../viewmodels/ReaderState';
 import { ReaderViewModel } from '../viewmodels/ReaderViewModel';
 import { RouteParam } from '../model/RouteParam';
-import { ReaderTheme, AppTheme } from '../common/theme/AppTheme';
+import { AppColor, ReaderTheme } from '../common/theme/AppTheme';
 import { Logger } from '../common/utils/Logger';
 import { LogTag } from '../common/constants/AppConstants';
 import { LoadingView } from '../views/common/LoadingView';
@@ -28,7 +27,11 @@ struct ReaderPage {
 
   aboutToAppear(): void {
     this.state = this.vm.state;
-    const params = router.getParams() as RouteParam | null;
+    // ⚠️ 用 UIContext 上的 Router，不用 @ohos.router 的全局函数 ——
+    // 后者（pushUrl/replaceUrl/back/getParams）自 API 18 起全部废弃
+    // （@ohos.router.d.ts:431/632/759 等），查询接口在
+    // @ohos.arkui.UIContext.d.ts 的 class Router 上（getParams: :649）。
+    const params = this.getUIContext().getRouter().getParams() as RouteParam | null;
     const bookId: number = params !== null && params !== undefined ? params.bookId : 0;
     if (bookId <= 0) {
       this.state.error = '缺少书籍参数，无法打开';
@@ -68,6 +71,7 @@ struct ReaderPage {
 
   build() {
     Stack() {
+      // 第 1 层：正文（最底）
       Column() {
         if (this.state.loading) {
           LoadingView({ message: '正在打开…' })
@@ -88,7 +92,14 @@ struct ReaderPage {
       .height('100%')
       .backgroundColor(this.theme().bg)
 
-      // 顶栏 / 底栏：仅在菜单显示时出现
+      // 第 2 层：点击分区。
+      // ⚠️ 必须只在"菜单隐藏时"存在 —— 否则它会覆盖在顶栏/底栏之上把点击截走，
+      // 导致菜单弹出后无法收回（点中间等于又切换一次）。
+      if (!this.state.menuVisible && this.state.error.length === 0 && !this.state.loading) {
+        this.buildTapZones()
+      }
+
+      // 第 3 层：顶栏 / 底栏（只在菜单显示时出现，且位于点击分区之上）
       if (this.state.menuVisible && this.state.error.length === 0) {
         Column() {
           ReaderTopBar({
@@ -116,7 +127,7 @@ struct ReaderPage {
         .height('100%')
       }
 
-      // 目录抽屉
+      // 第 4 层：目录抽屉（最顶，带遮罩）
       if (this.state.tocVisible) {
         Row() {
           TocDrawer({
@@ -135,8 +146,37 @@ struct ReaderPage {
         }
         .width('100%')
         .height('100%')
-        .backgroundColor(AppTheme.BG_MASK)
+        .backgroundColor(AppColor.mask)
       }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  /** 点击分区：左 1/3 上一页、中 1/3 呼出菜单、右 1/3 下一页 */
+  @Builder
+  buildTapZones() {
+    Row() {
+      Column()
+        .width('33%')
+        .height('100%')
+        .onClick(() => {
+          this.vm.prevPage();
+        })
+
+      Column()
+        .width('34%')
+        .height('100%')
+        .onClick(() => {
+          this.vm.toggleMenu();
+        })
+
+      Column()
+        .width('33%')
+        .height('100%')
+        .onClick(() => {
+          this.vm.nextPage();
+        })
     }
     .width('100%')
     .height('100%')
@@ -176,36 +216,7 @@ struct ReaderPage {
         this.vm.reportScrollOffset(lines * charsPerLine);
       })
     } else {
-      // 分页模式：只渲染当前页，点击分区翻页
-      Row() {
-        // 左 1/3：上一页
-        Column()
-          .width('33%')
-          .height('100%')
-          .onClick(() => {
-            this.vm.prevPage();
-          })
-
-        // 中间：呼出菜单
-        Column()
-          .width('34%')
-          .height('100%')
-          .onClick(() => {
-            this.vm.toggleMenu();
-          })
-
-        // 右 1/3：下一页
-        Column()
-          .width('33%')
-          .height('100%')
-          .onClick(() => {
-            this.vm.nextPage();
-          })
-      }
-      .width('100%')
-      .position({ x: 0, y: 0 })
-      .zIndex(1)
-
+      // 分页模式：只渲染当前页；翻页与呼出菜单由上层 buildTapZones 处理
       Text(this.state.renderedText)
         .fontSize(this.state.settings.fontSize)
         .fontColor(this.theme().text)
@@ -240,10 +251,14 @@ struct ReaderPage {
   private goBack(): void {
     this.vm.close().then(() => {
       this.vm.dispose();
-      router.back();
+      this.back();
     }).catch(() => {
       this.vm.dispose();
-      router.back();
+      this.back();
     });
+  }
+
+  private back(): void {
+    this.getUIContext().getRouter().back();
   }
 }

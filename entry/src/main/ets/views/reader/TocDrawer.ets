@@ -1,12 +1,11 @@
 import { Chapter } from '../../model/Chapter';
-import { ReaderTheme } from '../../common/theme/AppTheme';
-import { AppTheme } from '../../common/theme/AppTheme';
+import { AppColor, AppTheme, ReaderTheme } from '../../common/theme/AppTheme';
 
-/** 目录抽屉：章节列表 + 当前章高亮 */
+/** 目录抽屉：章节列表 + 当前章高亮。currentIndex 需 @Prop 才能随阅读位置更新高亮。 */
 @Component
 export struct TocDrawer {
   chapters: Chapter[] = [];
-  currentIndex: number = -1;
+  @Prop currentIndex: number = -1;
   theme: ReaderTheme = new ReaderTheme();
   onSelect?: (chapterIndex: number) => void;
   onClose?: () => void;
@@ -31,7 +30,7 @@ export struct TocDrawer {
       .width('100%')
       .padding({ left: 16, right: 8, top: 12, bottom: 8 })
 
-      Divider().color(AppTheme.DIVIDER)
+      Divider().color(AppColor.divider)
 
       List() {
         ForEach(this.chapters, (chapter: Chapter) => {
@@ -40,7 +39,7 @@ export struct TocDrawer {
               Text(chapter.title.length > 0 ? chapter.title : `第 ${chapter.displayNumber()} 章`)
                 .fontSize(AppTheme.FONT_BODY)
                 .fontColor(chapter.chapterIndex === this.currentIndex
-                  ? AppTheme.PRIMARY
+                  ? AppColor.brand
                   : this.theme.text)
                 .fontWeight(chapter.chapterIndex === this.currentIndex
                   ? FontWeight.Medium
@@ -52,7 +51,7 @@ export struct TocDrawer {
             .width('100%')
             .padding({ left: 16, right: 16, top: 12, bottom: 12 })
             .backgroundColor(chapter.chapterIndex === this.currentIndex
-              ? AppTheme.PRIMARY_LIGHT
+              ? AppColor.brandContainer
               : this.theme.bg)
             .onClick(() => {
               if (this.onSelect !== undefined) {
