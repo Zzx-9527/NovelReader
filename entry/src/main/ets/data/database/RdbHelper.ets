@@ -21,6 +21,11 @@ const ERR_NOT_INIT: string = 'RdbHelper 尚未初始化，请先调用 RdbHelper
  */
 export class RdbHelper {
   private static instance: RdbHelper | null = null;
+  /** 由 EntryAbility 在启动时注入，供 ensureReady 自愈初始化使用 */
+  private static appContext: common.Context | null = null;
+  /** 正在进行/已完成的初始化，保证并发调用只执行一次 */
+  private static readyPromise: Promise<void> | null = null;
+
   private store: relationalStore.RdbStore | null = null;
   private initializing: Promise<void> | null = null;
 
@@ -32,7 +37,24 @@ export class RdbHelper {
   }
 
   static async init(context: common.Context): Promise<void> {
-    await RdbHelper.getInstance().initialize(context);
+    RdbHelper.appContext = context;
+    await RdbHelper.ensureReady();
+  }
+
+  /**
+   * 幂等就绪确认。任何数据访问前都应 await 它。
+   *
+   * 这样即使 UI 抢在 EntryAbility 初始化完成前发起查询，也不会抛"尚未初始化" ——
+   * 初始化顺序不再是需要靠调用方小心翼翼维护的隐式契约。
+   */
+  static async ensureReady(): Promise<void> {
+    if (RdbHelper.readyPromise === null) {
+      if (RdbHelper.appContext === null) {
+        throw new Error('RdbHelper 尚未注入 Context：EntryAbility.onCreate 里必须调用 RdbHelper.init(context)');
+      }
+      RdbHelper.readyPromise = RdbHelper.getInstance().initialize(RdbHelper.appContext);
+    }
+    await RdbHelper.readyPromise;
   }
 
   isReady(): boolean {
@@ -171,6 +193,7 @@ export class RdbHelper {
    * 不这么做的话，ON DELETE CASCADE 可能悄悄失效，删书会留下孤儿章节。
    */
   async withTransaction<T>(action: () => Promise<T>): Promise<T> {
+    await RdbHelper.ensureReady();
     const store = this.getStore();
     await this.execIgnoreError('PRAGMA foreign_keys = ON');
     store.beginTransaction();
@@ -241,6 +264,7 @@ export class RdbHelper {
     args: Array<relationalStore.ValueType>,
     onRow: (rs: relationalStore.ResultSet) => void
   ): Promise<void> {
+    await RdbHelper.ensureReady();
     const rs = await this.getStore().querySql(sql, args);
     try {
       while (rs.goToNextRow()) {
@@ -257,6 +281,7 @@ export class RdbHelper {
     args: Array<relationalStore.ValueType>,
     onRow: (rs: relationalStore.ResultSet) => void
   ): Promise<boolean> {
+    await RdbHelper.ensureReady();
     const rs = await this.getStore().querySql(sql, args);
     try {
       if (rs.goToNextRow()) {
@@ -273,6 +298,7 @@ export class RdbHelper {
   async queryNumber(
     sql: string, args: Array<relationalStore.ValueType>, fallback: number
   ): Promise<number> {
+    await RdbHelper.ensureReady();
     const rs = await this.getStore().querySql(sql, args);
     try {
       if (rs.goToNextRow()) {

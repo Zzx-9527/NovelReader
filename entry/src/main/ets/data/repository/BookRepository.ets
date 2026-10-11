@@ -42,6 +42,7 @@ export class BookRepository {
   // ------------------------------------------------------------ 查询
 
   static async getById(id: number): Promise<Book | null> {
+    await RdbHelper.ensureReady();
     let book: Book | null = null;
     await db().queryFirst(
       `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} WHERE id = ? AND deleted = 0`,
@@ -54,6 +55,7 @@ export class BookRepository {
 
   /** 按 uuid 查（重新导入时对账用） */
   static async getByUuid(uuid: string): Promise<Book | null> {
+    await RdbHelper.ensureReady();
     let book: Book | null = null;
     await db().queryFirst(
       `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} WHERE uuid = ?`,
@@ -69,6 +71,7 @@ export class BookRepository {
    * 返回的 book 在 ACTIVE / DELETED 两种情况下都不为空。
    */
   static async findByHash(fileHash: string): Promise<HashLookupResult> {
+    await RdbHelper.ensureReady();
     const result = new HashLookupResult();
     if (fileHash.length === 0) {
       return result;
@@ -94,6 +97,7 @@ export class BookRepository {
 
   /** 书架列表（不含回收站） */
   static async listShelf(sort: BookSort, groupId: number | null): Promise<Book[]> {
+    await RdbHelper.ensureReady();
     let sql: string = `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 0`;
     const args: Array<relationalStore.ValueType> = [];
     if (groupId !== null) {
@@ -117,6 +121,7 @@ export class BookRepository {
 
   /** 继续阅读卡片：最近读过且未读完的一本 */
   static async getContinueReading(): Promise<Book | null> {
+    await RdbHelper.ensureReady();
     let book: Book | null = null;
     await db().queryFirst(
       `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} ` +
@@ -131,6 +136,7 @@ export class BookRepository {
 
   /** 回收站列表 */
   static async listDeleted(): Promise<Book[]> {
+    await RdbHelper.ensureReady();
     const list: Book[] = [];
     await db().query(
       `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 1 ORDER BY updated_at DESC`,
@@ -142,6 +148,7 @@ export class BookRepository {
   }
 
   static async countInGroup(groupId: number): Promise<number> {
+    await RdbHelper.ensureReady();
     return db().queryNumber(
       `SELECT COUNT(*) FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 0 AND group_id = ?`,
       [groupId], 0);
@@ -149,18 +156,21 @@ export class BookRepository {
 
   /** 未分组书籍数 */
   static async countUngrouped(): Promise<number> {
+    await RdbHelper.ensureReady();
     return db().queryNumber(
       `SELECT COUNT(*) FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 0 AND group_id IS NULL`,
       [], 0);
   }
 
   static async countAll(): Promise<number> {
+    await RdbHelper.ensureReady();
     return db().queryNumber(
       `SELECT COUNT(*) FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 0`, [], 0);
   }
 
   /** 书名模糊匹配（书架内搜索，不是全文搜索） */
   static async searchByTitle(keyword: string): Promise<Book[]> {
+    await RdbHelper.ensureReady();
     const list: Book[] = [];
     await db().query(
       `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} ` +
@@ -187,6 +197,7 @@ export class BookRepository {
    * 导入整条链都在事务里，所以这里必须是能直接拿 rowId 的写法。
    */
   static async insert(book: Book): Promise<number> {
+    await RdbHelper.ensureReady();
     const now: number = Date.now();
     if (book.addedAt <= 0) {
       book.addedAt = now;
@@ -237,6 +248,7 @@ export class BookRepository {
 
   /** 全量更新（不改 uuid / added_at） */
   static async update(book: Book): Promise<void> {
+    await RdbHelper.ensureReady();
     book.updatedAt = Date.now();
     const sql: string =
       `UPDATE ${DbConstants.TABLE_BOOK} SET title = ?, author = ?, cover_path = ?, file_path = ?, ` +
@@ -259,6 +271,7 @@ export class BookRepository {
     bookId: number, status: number, error: string, rule: string,
     totalChapters: number, wordCount: number
   ): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK} SET parse_status = ?, parse_error = ?, parse_rule = ?, ` +
       `total_chapters = ?, word_count = ?, updated_at = ? WHERE id = ?`,
@@ -274,6 +287,7 @@ export class BookRepository {
     bookId: number, chapterIndex: number, offset: number,
     percent: number, location: string, readStatus: number
   ): Promise<void> {
+    await RdbHelper.ensureReady();
     const now: number = Date.now();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK} SET last_chapter_index = ?, last_offset = ?, ` +
@@ -285,6 +299,7 @@ export class BookRepository {
 
   /** 只更新最后阅读时间（打开书但没翻页时用） */
   static async touchLastRead(bookId: number): Promise<void> {
+    await RdbHelper.ensureReady();
     const now: number = Date.now();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK} SET last_read_at = ? WHERE id = ?`, [now, bookId]);
@@ -296,6 +311,7 @@ export class BookRepository {
    * @param groupId 传 null 表示"未分组"；类型用 ValueType 以匹配 SQL 绑定参数
    */
   static async setGroup(bookId: number, groupId: relationalStore.ValueType): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK} SET group_id = ?, updated_at = ? WHERE id = ?`,
       [groupId, Date.now(), bookId]);
@@ -303,6 +319,7 @@ export class BookRepository {
   }
 
   static async rename(bookId: number, title: string, author: string): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK} SET title = ?, author = ?, updated_at = ? WHERE id = ?`,
       [title, author, Date.now(), bookId]);
@@ -311,6 +328,7 @@ export class BookRepository {
 
   /** 软删除：标记 deleted = 1，沙箱文件保留以便恢复 */
   static async softDelete(bookId: number): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK} SET deleted = 1, updated_at = ? WHERE id = ?`,
       [Date.now(), bookId]);
@@ -318,6 +336,7 @@ export class BookRepository {
   }
 
   static async restore(bookId: number): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK} SET deleted = 0, updated_at = ? WHERE id = ?`,
       [Date.now(), bookId]);
@@ -326,6 +345,7 @@ export class BookRepository {
 
   /** 物理删除；chapter / page_cache / annotation 由外键 CASCADE 带走（需外键已开启） */
   static async hardDelete(bookId: number): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `DELETE FROM ${DbConstants.TABLE_BOOK} WHERE id = ?`, [bookId]);
     AppState.bumpBookshelf();
@@ -333,6 +353,7 @@ export class BookRepository {
 
   /** 标记文件丢失 */
   static async markFileMissing(bookId: number, parseRule: string): Promise<void> {
+    await RdbHelper.ensureReady();
     await BookRepository.updateParseState(
       bookId, AppConstants.PARSE_FAILED, '文件丢失', parseRule, 0, 0);
   }

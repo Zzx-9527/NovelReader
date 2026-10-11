@@ -79,6 +79,7 @@ export class ChapterRepository {
    * 逐条 insert 会非常慢；这里每 CHAPTER_BATCH_SIZE 条拼成一条多值 INSERT。
    */
   static async insertBatch(bookId: number, chapters: Chapter[]): Promise<void> {
+    await RdbHelper.ensureReady();
     if (chapters.length === 0) {
       return;
     }
@@ -119,6 +120,7 @@ export class ChapterRepository {
    * 调用方（重新分章流程）必须先向用户确认。
    */
   static async deleteByBook(bookId: number): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `DELETE FROM ${DbConstants.TABLE_CHAPTER} WHERE book_id = ?`, [bookId]);
   }
@@ -131,6 +133,7 @@ export class ChapterRepository {
   }
 
   static async updateTitle(chapterId: number, title: string): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_CHAPTER} SET title = ?, updated_at = ? WHERE id = ?`,
       [title, Date.now(), chapterId]);

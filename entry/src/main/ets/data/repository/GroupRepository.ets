@@ -63,6 +63,7 @@ export class GroupRepository {
    * 事务内 `querySql` 读不到同一事务刚写入的行（见 BookRepository.insert 的说明）。
    */
   static async insert(name: string, sortOrder: number): Promise<number> {
+    await RdbHelper.ensureReady();
     const now: number = Date.now();
     const bucket: relationalStore.ValuesBucket = {
       'name': name,
@@ -79,6 +80,7 @@ export class GroupRepository {
   }
 
   static async rename(groupId: number, name: string): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK_GROUP} SET name = ?, updated_at = ? WHERE id = ?`,
       [name, Date.now(), groupId]);
@@ -86,6 +88,7 @@ export class GroupRepository {
   }
 
   static async updateSortOrder(groupId: number, sortOrder: number): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_BOOK_GROUP} SET sort_order = ?, updated_at = ? WHERE id = ?`,
       [sortOrder, Date.now(), groupId]);
@@ -94,6 +97,7 @@ export class GroupRepository {
 
   /** 批量更新排序（拖拽排序后一次落库） */
   static async updateSortOrders(groups: BookGroup[]): Promise<void> {
+    await RdbHelper.ensureReady();
     const store = db().getStore();
     await db().withTransaction<void>(async () => {
       for (let i = 0; i < groups.length; i++) {
@@ -123,6 +127,7 @@ export class GroupRepository {
    * @returns 被解绑的书籍数量
    */
   static async softDeleteWithMembers(groupId: number): Promise<number> {
+    await RdbHelper.ensureReady();
     const store = db().getStore();
     const movedCount: number = await db().withTransaction<number>(async () => {
       const bookIds: number[] = await GroupRepository.memberIds(groupId);

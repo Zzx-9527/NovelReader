@@ -89,6 +89,7 @@ export class AnnotationRepository {
     startOffset: number | null, endOffset: number | null,
     selectedText: string, noteContent: string, color: string
   ): Promise<number> {
+    await RdbHelper.ensureReady();
     const chapter = await ChapterRepository.getByIndex(bookId, chapterIndex);
     if (chapter === null) {
       return 0;
@@ -136,12 +137,14 @@ export class AnnotationRepository {
   }
 
   static async updateNote(annotationId: number, noteContent: string, color: string): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_ANNOTATION} SET note_content = ?, color = ?, updated_at = ? WHERE id = ?`,
       [noteContent, color, Date.now(), annotationId]);
   }
 
   static async softDelete(annotationId: number): Promise<void> {
+    await RdbHelper.ensureReady();
     await db().getStore().executeSql(
       `UPDATE ${DbConstants.TABLE_ANNOTATION} SET deleted = 1, updated_at = ? WHERE id = ?`,
       [Date.now(), annotationId]);

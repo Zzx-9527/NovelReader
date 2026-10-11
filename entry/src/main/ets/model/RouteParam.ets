@@ -17,17 +17,15 @@ export class RouteParam {
   from: string = '';
 }
 
-/** 路由名称常量，禁止在页面里写裸字符串 */
+/** 页面路径常量（与 resources/base/profile/main_pages.json 登记的一致） */
 export class RouteName {
-  static readonly BOOK_SHELF: string = 'BookShelfPage';
-  static readonly STATS: string = 'StatsPage';
-  static readonly PROFILE: string = 'ProfilePage';
-  static readonly IMPORT_CONFIRM: string = 'ImportConfirmPage';
-  static readonly BOOK_DETAIL: string = 'BookDetailPage';
-  static readonly READER: string = 'ReaderPage';
-  static readonly BOOKMARK: string = 'BookmarkPage';
-  static readonly SEARCH: string = 'SearchPage';
-  static readonly GROUP_MANAGE: string = 'GroupManagePage';
-  static readonly BACKUP: string = 'BackupPage';
-  static readonly SETTINGS: string = 'SettingsPage';
+  static readonly INDEX_PAGE: string = 'pages/Index';
+  static readonly SHELF_PAGE: string = 'pages/Index';
+  static readonly READER_PAGE: string = 'pages/ReaderPage';
+  static readonly BOOK_DETAIL_PAGE: string = 'pages/BookDetailPage';
+  static readonly SETTINGS_PAGE: string = 'pages/SettingsPage';
+  static readonly IMPORT_CONFIRM_PAGE: string = 'pages/ImportConfirmPage';
+  /** 来源标识（放在 RouteParam.from 里，用于返回时的行为分支） */
+  static readonly BOOK_SHELF: string = 'shelf';
+  static readonly BOOK_DETAIL: string = 'detail';
 }

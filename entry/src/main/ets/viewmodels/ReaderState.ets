@@ -1,0 +1,93 @@
+import { Book } from '../model/Book';
+import { Chapter } from '../model/Chapter';
+import { ReaderSettings } from '../model/ReaderSettings';
+import { ReadingPosition } from '../model/ReadingPosition';
+
+/**
+ * 阅读页状态对象（@Observed + 页面 @ObjectLink）。
+ */
+@Observed
+export class ReaderState {
+  book: Book | null = null;
+  settings: ReaderSettings = new ReaderSettings();
+
+  /** 目录（用于上一章/下一章与进度显示） */
+  chapters: Chapter[] = [];
+
+  chapterIndex: number = -1;
+  chapterTitle: string = '';
+
+  /** 当前章完整正文 */
+  private fullText: string = '';
+  /** 分页断点（scroll 模式下为空） */
+  breaks: number[] = [];
+  pageIndex: number = 0;
+  pageCount: number = 1;
+
+  /** 实际渲染的文本：scroll 模式为整章，page 模式为当前页 */
+  renderedText: string = '';
+
+  /** 章内 UTF-16 偏移（= 当前页起始偏移） */
+  offset: number = 0;
+  /** 跨章节的全局进度 0~1 */
+  percent: number = 0;
+
+  /** 顶栏/底栏是否显示，单击中间切换 */
+  menuVisible: boolean = false;
+  tocVisible: boolean = false;
+
+  loading: boolean = true;
+  error: string = '';
+  /** 分页未命中缓存时提示正在重算 */
+  repaginating: boolean = false;
+
+  get hasPrev(): boolean {
+    return this.chapterIndex > 0;
+  }
+
+  get hasNext(): boolean {
+    return this.chapters.length > 0 && this.chapterIndex < this.chapters.length - 1;
+  }
+
+  get progressText(): string {
+    const percent: number = this.percent < 0 ? 0 : (this.percent > 1 ? 1 : this.percent);
+    return `${(percent * 100).toFixed(1)}%`;
+  }
+
+  get pageText(): string {
+    if (this.settings.pageMode === 'scroll') {
+      return '';
+    }
+    return `${this.pageIndex + 1}/${this.pageCount}`;
+  }
+
+  /** 供 ViewModel 更新正文（fullText 是私有字段，需要显式方法） */
+  setFullText(text: string): void {
+    this.fullText = text;
+  }
+
+  getFullText(): string {
+    return this.fullText;
+  }
+}
+
+/**
+ * 阅读位置恢复结果（给页面弹提示用）。
+ */
+export class ReaderRestoreInfo {
+  restored: boolean = false;
+  chapterIndex: number = 0;
+  pageIndex: number = 0;
+  cacheHit: boolean = false;
+  percent: number = 0;
+
+  static fromPosition(pos: ReadingPosition, pageIndex: number, cacheHit: boolean): ReaderRestoreInfo {
+    const info = new ReaderRestoreInfo();
+    info.restored = pos.chapterIndex >= 0;
+    info.chapterIndex = pos.chapterIndex < 0 ? 0 : pos.chapterIndex;
+    info.pageIndex = pageIndex;
+    info.cacheHit = cacheHit;
+    info.percent = pos.percent;
+    return info;
+  }
+}

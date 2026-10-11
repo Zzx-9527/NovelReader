@@ -19,6 +19,9 @@ import { ReaderSettings } from '../../model/ReaderSettings';
  */
 export class SettingsService {
   private static instance: SettingsService | null = null;
+  private static appContext: common.Context | null = null;
+  private static readyPromise: Promise<void> | null = null;
+
   private store: preferences.Preferences | null = null;
   private flushTimer: number = -1;
   private dirty: boolean = false;
@@ -31,7 +34,19 @@ export class SettingsService {
   }
 
   static async init(context: common.Context): Promise<void> {
-    await SettingsService.getInstance().initialize(context);
+    SettingsService.appContext = context;
+    await SettingsService.ensureReady();
+  }
+
+  /** 幂等就绪确认，任何读写前都应 await 它 */
+  static async ensureReady(): Promise<void> {
+    if (SettingsService.readyPromise === null) {
+      if (SettingsService.appContext === null) {
+        throw new Error('SettingsService 尚未注入 Context：EntryAbility.onCreate 里必须调用 SettingsService.init(context)');
+      }
+      SettingsService.readyPromise = SettingsService.getInstance().initialize(SettingsService.appContext);
+    }
+    await SettingsService.readyPromise;
   }
 
   isReady(): boolean {

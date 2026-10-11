@@ -60,6 +60,7 @@ export class PageCacheRepository {
   static async save(
     bookId: number, chapterIndex: number, layoutKey: string, breaks: number[]
   ): Promise<void> {
+    await RdbHelper.ensureReady();
     if (breaks.length === 0) {
       return;
     }
