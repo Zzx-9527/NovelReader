@@ -4,7 +4,7 @@ import { ReaderViewModel } from '../viewmodels/ReaderViewModel';
 import { RouteParam } from '../model/RouteParam';
 import { AppColor, ReaderTheme } from '../common/theme/AppTheme';
 import { Logger } from '../common/utils/Logger';
-import { LogTag } from '../common/constants/AppConstants';
+import { AppConstants, LogTag } from '../common/constants/AppConstants';
 import { LoadingView } from '../views/common/LoadingView';
 import { ErrorView } from '../views/common/ErrorView';
 import { ReaderTopBar } from '../views/reader/ReaderTopBar';
@@ -92,14 +92,23 @@ struct ReaderPage {
       .height('100%')
       .backgroundColor(this.theme().bg)
 
-      // 第 2 层：点击分区。
-      // ⚠️ 必须只在"菜单隐藏时"存在 —— 否则它会覆盖在顶栏/底栏之上把点击截走，
-      // 导致菜单弹出后无法收回（点中间等于又切换一次）。
-      if (!this.state.menuVisible && this.state.error.length === 0 && !this.state.loading) {
-        this.buildTapZones()
+      // 第 2 层：翻页层（点击分区 + 左右滑动）。
+      // ⚠️ 两条约束，缺一不可：
+      //
+      //  1. 只在"菜单隐藏时"存在 —— 否则它会覆盖在顶栏/底栏之上把点击截走，
+      //     导致菜单弹出后无法收回（点中间等于又切换一次）。
+      //
+      //  2. **滚动模式绝不能有这一层** —— 这三个 Column 都绑了 onClick，
+      //     按 ArkUI 的触摸测试规则（HitTestMode.Default：自身响应 + 阻塞兄弟节点），
+      //     它们会把拖拽事件整个吃掉，下层 `Scroll` 永远收不到滑动。
+      //     实测表现就是"阅读页划不动、只能点"。
+      //     滚动模式下的点击交给 Scroll 自己接管（见 buildReaderBody）。
+      if (!this.state.menuVisible && this.state.error.length === 0 && !this.state.loading
+        && this.state.settings.pageMode !== 'scroll') {
+        this.buildPageControls()
       }
 
-      // 第 3 层：顶栏 / 底栏（只在菜单显示时出现，且位于点击分区之上）
+      // 第 3 层：顶栏 / 底栏（只在菜单显示时出现，且位于翻页层之上）
       if (this.state.menuVisible && this.state.error.length === 0) {
         Column() {
           ReaderTopBar({
@@ -112,7 +121,15 @@ struct ReaderPage {
               this.vm.setTocVisible(true);
             }
           })
+          // 菜单显示时，点中间空白处收回菜单。
+          // 分页模式下翻页层此时**不存在**（两块区域互斥渲染），没有这个点击点，
+          // 用户就只能靠"返回/目录"关菜单 —— 这是"菜单弹出来收不回去"的另一半。
+          // 用 hideMenu() 而不是 toggleMenu()：收起是幂等的，
+          // 不存在"连点两下又打开了"的抖动。
           Blank()
+            .onClick(() => {
+              this.vm.hideMenu();
+            })
           ReaderBottomBar({
             theme: this.theme(),
             percent: this.state.percent,
@@ -153,9 +170,12 @@ struct ReaderPage {
     .height('100%')
   }
 
-  /** 点击分区：左 1/3 上一页、中 1/3 呼出菜单、右 1/3 下一页 */
+  /**
+   * 分页模式的翻页层：左 1/3 上一页、中 1/3 呼出菜单、右 1/3 下一页，
+   * 左右滑动同样翻页（很多人第一反应就是滑，不该只有点击这一条路）。
+   */
   @Builder
-  buildTapZones() {
+  buildPageControls() {
     Row() {
       Column()
         .width('33%')
@@ -180,6 +200,23 @@ struct ReaderPage {
     }
     .width('100%')
     .height('100%')
+    // 手势挂在**整层**而不是三个分区上：一次滑动可能跨过两个分区，
+    // 挂在父节点才能拿到完整位移。
+    //
+    // 用 PanGesture 的 offsetX 而不是 SwipeGesture 的 angle：
+    // 位移的正负没有歧义（左滑为负），不必去记 angle 的角度约定。
+    // 只认水平方向 —— 竖直滑动不属于翻页语义，让它落空即可。
+    .gesture(
+      PanGesture({ direction: PanDirection.Horizontal })
+        .onActionEnd((event: GestureEvent) => {
+          const dx: number = event.offsetX;
+          if (dx <= -AppConstants.PAGE_SWIPE_MIN_DISTANCE) {
+            this.vm.nextPage();
+          } else if (dx >= AppConstants.PAGE_SWIPE_MIN_DISTANCE) {
+            this.vm.prevPage();
+          }
+        })
+    )
   }
 
   // ------------------------------------------------------------ 正文
@@ -199,13 +236,17 @@ struct ReaderPage {
           .onAreaChange((oldArea: Area, newArea: Area) => {
             this.onTextAreaChange(newArea);
           })
-          .onClick(() => {
-            this.vm.toggleMenu();
-          })
       }
       .scrollBar(BarState.Off)
       .width('100%')
       .height('100%')
+      // 单击切菜单挂在 Scroll 上而不是 Text 上，两个原因：
+      //  1. Scroll 铺满整屏，短章节时正文下方的空白区也能点；
+      //  2. 父子同时绑 onClick 会变成两个 TapGesture 竞争，
+      //     万一都触发就是"切换两次 = 菜单根本没开"。
+      .onClick(() => {
+        this.vm.toggleMenu();
+      })
       .onScroll((scrollOffset: number) => {
         // 用滚动量估算当前字符偏移：行高与每行字数都由字号推出
         const lineHeight: number = Math.max(1,
@@ -216,7 +257,7 @@ struct ReaderPage {
         this.vm.reportScrollOffset(lines * charsPerLine);
       })
     } else {
-      // 分页模式：只渲染当前页；翻页与呼出菜单由上层 buildTapZones 处理
+      // 分页模式：只渲染当前页；翻页与呼出菜单由上层 buildPageControls 处理
       Text(this.state.renderedText)
         .fontSize(this.state.settings.fontSize)
         .fontColor(this.theme().text)

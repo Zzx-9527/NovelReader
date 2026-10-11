@@ -63,6 +63,13 @@ export class AppConstants {
   static readonly PAGINATION_DEBOUNCE_MS: number = 300;
   /** 设置落盘合并窗口（500ms） */
   static readonly SETTINGS_FLUSH_DELAY_MS: number = 500;
+  /**
+   * 阅读页左右滑动翻页的最小水平位移（vp）。
+   *
+   * 不能取太小：手指点按时本来就带几个 vp 的抖动，
+   * 阈值太小会把"点右侧翻下一页"识别成滑动，一次操作翻两页。
+   */
+  static readonly PAGE_SWIPE_MIN_DISTANCE: number = 40;
 
   // ---------------------------------------------------------------- 分章
   /** 首章之前超过这么多字节才补一条"前言" */

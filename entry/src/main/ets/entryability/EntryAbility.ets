@@ -5,6 +5,7 @@ import { StorageBootstrap } from '../common/StorageBootstrap';
 import { SettingsService } from '../data/service/SettingsService';
 import { Logger } from '../common/utils/Logger';
 import { LogTag } from '../common/constants/AppConstants';
+import { RouteName } from '../model/RouteParam';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
@@ -34,7 +35,8 @@ export default class EntryAbility extends UIAbility {
 
     // 首个页面是启动页：它负责预热存储底座（见 SplashPage 说明），
     // 预热完成后用 replaceUrl 跳到 pages/Index。
-    windowStage.loadContent('pages/SplashPage', (err) => {
+    // 路径走 RouteName 常量，避免与 main_pages.json 登记的名字两处各写一遍。
+    windowStage.loadContent(RouteName.SPLASH_PAGE, (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;

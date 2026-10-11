@@ -19,6 +19,8 @@ export class RouteParam {
 
 /** 页面路径常量（与 resources/base/profile/main_pages.json 登记的一致） */
 export class RouteName {
+  /** 首个页面：`EntryAbility.onWindowStageCreate` 加载它，预热完 replaceUrl 到书架 */
+  static readonly SPLASH_PAGE: string = 'pages/SplashPage';
   static readonly INDEX_PAGE: string = 'pages/Index';
   static readonly SHELF_PAGE: string = 'pages/Index';
   static readonly READER_PAGE: string = 'pages/ReaderPage';
