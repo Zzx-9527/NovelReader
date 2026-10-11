@@ -8,7 +8,28 @@
  * 章节序号口径（铁律 1）：chapter_index 一律 0-based，"无进度"用 -1。
  */
 export class DbConstants {
-  static readonly DB_NAME: string = 'novel_reader.db';
+  /** 库名（不含构建标记） */
+  static readonly DB_BASE_NAME: string = 'novel_reader';
+
+  /**
+   * 结构构建号。⚠️ **改动 DbSchema 里的任何 DDL 都必须 +1。**
+   *
+   * 为什么需要它：`CREATE TABLE IF NOT EXISTS` 永远不会修改已存在的表，
+   * 所以开发期改过字段/默认值/CHECK 之后，旧库会与新代码不一致 ——
+   * 典型症状是插入时莫名报 "Abort due to constraint violation"
+   * （例如旧表没有 `format ... DEFAULT 'txt'`，省略该列时就会撞上 NOT NULL）。
+   *
+   * 做法：把构建号编进文件名。构建号一变就用一个全新的库文件，
+   * 从根上杜绝"旧表结构污染新代码"。
+   * 代价是旧数据不迁移 —— 这对开发期是可接受的取舍。
+   */
+  static readonly SCHEMA_BUILD: number = 2;
+
+  /** 实际使用的库名 */
+  static get DB_NAME(): string {
+    return `${DbConstants.DB_BASE_NAME}_b${DbConstants.SCHEMA_BUILD}.db`;
+  }
+
   /** 结构版本。改动 DDL 必须同步 +1 并在 RdbHelper.migrate 里补步骤 */
   static readonly DB_VERSION: number = 1;
 

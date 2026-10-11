@@ -102,9 +102,15 @@ export class RdbHelper {
   /**
    * 版本迁移。
    *
-   * v1 是初始版本，无迁移步骤；后续版本在此按 oldVersion 逐级补 ALTER。
-   * 每新增一步都必须幂等（IF NOT EXISTS 或先查 PRAGMA table_info）——
-   * 用户可能在迁移中途被杀进程，下次启动会重跑。
+   * 注意：**开发期改 DDL 只需把 DbConstants.SCHEMA_BUILD +1**，
+   * 库文件名会跟着变，等于每次都用全新的库，不会出现"旧表结构污染新代码"。
+   * 本节负责的是**发布后**的平滑升级：在同一个库文件内按版本号补列/补表。
+   *
+   * 约束：
+   *  - 每新增一步都必须幂等（IF NOT EXISTS 或先查 PRAGMA table_info）——
+   *    用户可能在迁移中途被杀进程，下次启动会重跑；
+   *  - 只允许加列 / 加表 / 加索引。SQLite 不支持修改列类型或删除列，
+   *    真要改就得走"建新表→拷数据→换名"，那属于发布级的破坏性变更，需要单独评估。
    */
   private async migrate(oldVersion: number): Promise<void> {
     if (oldVersion > DbConstants.DB_VERSION) {
@@ -116,12 +122,36 @@ export class RdbHelper {
     if (oldVersion === DbConstants.DB_VERSION) {
       return;
     }
-    // 示例（V1.1 启用）：
+    // 示例（V1.2 启用）：
     // if (oldVersion < 2) {
-    //   await this.getStore().executeSql(`ALTER TABLE book ADD COLUMN ...`);
+    //   await this.addColumnIfMissing(DbConstants.TABLE_BOOK, 'tts_voice', `TEXT NOT NULL DEFAULT ''`);
     // }
     Logger.info(LogTag.DB,
       `执行迁移: v${oldVersion} -> v${DbConstants.DB_VERSION}（当前无待执行步骤）`);
+  }
+
+  /**
+   * 幂等加列：列已存在则跳过。
+   * 供后续版本迁移使用，避免 ALTER TABLE 重复执行报错。
+   */
+  async addColumnIfMissing(table: string, column: string, definition: string): Promise<void> {
+    if (await this.hasColumn(table, column)) {
+      return;
+    }
+    await this.getStore().executeSql(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    Logger.info(LogTag.DB, `已补列: ${table}.${column}`);
+  }
+
+  /** 某张表是否存在指定列 */
+  async hasColumn(table: string, column: string): Promise<boolean> {
+    let found: boolean = false;
+    await this.query(`PRAGMA table_info(${table})`, [],
+      (rs: relationalStore.ResultSet) => {
+        if (rs.getString(1) === column) {
+          found = true;
+        }
+      });
+    return found;
   }
 
   private async execIgnoreError(sql: string): Promise<void> {
@@ -194,16 +224,49 @@ export class RdbHelper {
   /** 诊断用：列出库中全部索引名 */
   async listIndexNames(): Promise<string[]> {
     const names: string[] = [];
-    const rs = await this.getStore().querySql(
-      `SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name`);
+    await this.query(`SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+      [], (rs: relationalStore.ResultSet) => {
+        names.push(rs.getString(0));
+      });
+    return names;
+  }
+
+  /**
+   * 通用查询：自动关闭 ResultSet，调用方只管逐行读取。
+   *
+   * 这样仓储层不必重复写 try/finally；忘记 close 是 RDB 最常见的资源泄漏来源。
+   */
+  async query(
+    sql: string,
+    args: Array<relationalStore.ValueType>,
+    onRow: (rs: relationalStore.ResultSet) => void
+  ): Promise<void> {
+    const rs = await this.getStore().querySql(sql, args);
     try {
       while (rs.goToNextRow()) {
-        names.push(rs.getString(0));
+        onRow(rs);
       }
     } finally {
       rs.close();
     }
-    return names;
+  }
+
+  /** 查询第一行并交给回调；无结果返回 false */
+  async queryFirst(
+    sql: string,
+    args: Array<relationalStore.ValueType>,
+    onRow: (rs: relationalStore.ResultSet) => void
+  ): Promise<boolean> {
+    const rs = await this.getStore().querySql(sql, args);
+    try {
+      if (rs.goToNextRow()) {
+        onRow(rs);
+        return true;
+      }
+      return false;
+    } finally {
+      rs.close();
+    }
   }
 
   /** 查询单个整数（COUNT / MAX / SUM）。无结果返回 fallback。 */

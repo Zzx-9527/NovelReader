@@ -1,0 +1,388 @@
+import { relationalStore } from '@kit.ArkData';
+import { RdbHelper } from '../database/RdbHelper';
+import { Book } from '../../model/Book';
+import { ReadingPosition } from '../../model/ReadingPosition';
+import { BookCol, DbConstants } from '../../common/constants/DbConstants';
+import { AppConstants } from '../../common/constants/AppConstants';
+import { AppState } from '../../model/AppState';
+
+/** 判重结果类型 */
+export enum HashLookup {
+  /** 没有这本书 */
+  NONE = 0,
+  /** 命中一本在架的书 */
+  ACTIVE = 1,
+  /** 命中一本已软删除的书（应询问用户：恢复还是作为新书导入） */
+  DELETED = 2
+}
+
+export class HashLookupResult {
+  status: HashLookup = HashLookup.NONE;
+  book: Book | null = null;
+}
+
+/** 书架排序方式 */
+export enum BookSort {
+  LAST_READ = 'last_read',
+  ADDED = 'added',
+  TITLE = 'title'
+}
+
+const db = (): RdbHelper => RdbHelper.getInstance();
+
+/**
+ * 书籍仓储：唯一允许写 book 表 SQL 的地方。
+ *
+ * 约定：
+ *  - 所有对外的查询都带 `deleted = 0`（除显式查回收站），统一在这里拼；
+ *  - 返回 model 对象，绝不把 ResultSet 泄漏给上层；
+ *  - 写操作成功后自增 AppStorage 的版本号，书架页据此刷新。
+ */
+export class BookRepository {
+  // ------------------------------------------------------------ 查询
+
+  static async getById(id: number): Promise<Book | null> {
+    let book: Book | null = null;
+    await db().queryFirst(
+      `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} WHERE id = ? AND deleted = 0`,
+      [id],
+      (rs: relationalStore.ResultSet) => {
+        book = BookRepository.mapRow(rs);
+      });
+    return book;
+  }
+
+  /** 按 uuid 查（重新导入时对账用） */
+  static async getByUuid(uuid: string): Promise<Book | null> {
+    let book: Book | null = null;
+    await db().queryFirst(
+      `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} WHERE uuid = ?`,
+      [uuid],
+      (rs: relationalStore.ResultSet) => {
+        book = BookRepository.mapRow(rs);
+      });
+    return book;
+  }
+
+  /**
+   * 按内容指纹判重。
+   * 返回的 book 在 ACTIVE / DELETED 两种情况下都不为空。
+   */
+  static async findByHash(fileHash: string): Promise<HashLookupResult> {
+    const result = new HashLookupResult();
+    if (fileHash.length === 0) {
+      return result;
+    }
+    await db().query(
+      `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} ` +
+      `WHERE file_hash = ? ORDER BY deleted ASC, id ASC`,
+      [fileHash],
+      (rs: relationalStore.ResultSet) => {
+        const book: Book = BookRepository.mapRow(rs);
+        if (book.deleted === 0) {
+          if (result.status !== HashLookup.ACTIVE) {
+            result.status = HashLookup.ACTIVE;
+            result.book = book;
+          }
+        } else if (result.book === null) {
+          result.status = HashLookup.DELETED;
+          result.book = book;
+        }
+      });
+    return result;
+  }
+
+  /** 书架列表（不含回收站） */
+  static async listShelf(sort: BookSort, groupId: number | null): Promise<Book[]> {
+    let sql: string = `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 0`;
+    const args: Array<relationalStore.ValueType> = [];
+    if (groupId !== null) {
+      sql += ` AND group_id = ?`;
+      args.push(groupId);
+    }
+    if (sort === BookSort.LAST_READ) {
+      // 从未读过的排在最后，而不是被当成 0 排到最前
+      sql += ` ORDER BY last_read_at IS NULL, last_read_at DESC, id DESC`;
+    } else if (sort === BookSort.ADDED) {
+      sql += ` ORDER BY added_at DESC`;
+    } else {
+      sql += ` ORDER BY title ASC`;
+    }
+    const list: Book[] = [];
+    await db().query(sql, args, (rs: relationalStore.ResultSet) => {
+      list.push(BookRepository.mapRow(rs));
+    });
+    return list;
+  }
+
+  /** 继续阅读卡片：最近读过且未读完的一本 */
+  static async getContinueReading(): Promise<Book | null> {
+    let book: Book | null = null;
+    await db().queryFirst(
+      `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} ` +
+      `WHERE deleted = 0 AND last_read_at IS NOT NULL AND read_status <> ? ` +
+      `ORDER BY last_read_at DESC LIMIT 1`,
+      [AppConstants.READ_STATUS_FINISHED],
+      (rs: relationalStore.ResultSet) => {
+        book = BookRepository.mapRow(rs);
+      });
+    return book;
+  }
+
+  /** 回收站列表 */
+  static async listDeleted(): Promise<Book[]> {
+    const list: Book[] = [];
+    await db().query(
+      `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 1 ORDER BY updated_at DESC`,
+      [],
+      (rs: relationalStore.ResultSet) => {
+        list.push(BookRepository.mapRow(rs));
+      });
+    return list;
+  }
+
+  static async countInGroup(groupId: number): Promise<number> {
+    return db().queryNumber(
+      `SELECT COUNT(*) FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 0 AND group_id = ?`,
+      [groupId], 0);
+  }
+
+  /** 未分组书籍数 */
+  static async countUngrouped(): Promise<number> {
+    return db().queryNumber(
+      `SELECT COUNT(*) FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 0 AND group_id IS NULL`,
+      [], 0);
+  }
+
+  static async countAll(): Promise<number> {
+    return db().queryNumber(
+      `SELECT COUNT(*) FROM ${DbConstants.TABLE_BOOK} WHERE deleted = 0`, [], 0);
+  }
+
+  /** 书名模糊匹配（书架内搜索，不是全文搜索） */
+  static async searchByTitle(keyword: string): Promise<Book[]> {
+    const list: Book[] = [];
+    await db().query(
+      `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} ` +
+      `WHERE deleted = 0 AND (title LIKE ? OR author LIKE ?) ORDER BY last_read_at IS NULL, last_read_at DESC`,
+      [`%${keyword}%`, `%${keyword}%`],
+      (rs: relationalStore.ResultSet) => {
+        list.push(BookRepository.mapRow(rs));
+      });
+    return list;
+  }
+
+  // ------------------------------------------------------------ 写入
+
+  /**
+   * 插入书籍，返回自增主键。
+   *
+   * ⚠️ 必须用 typed `store.insert()`，不能写成 `executeSql` + 回查主键。
+   * 实测结论（自检页 A/B/C/D 四组对照）：
+   *   - 事务外，`executeSql` 插入后回查能拿到 id（A 组正常）；
+   *   - **事务内，`querySql` 读不到同一事务刚写入的数据**：B 组回查得 0、
+   *     D 组连 `last_insert_rowid()` 都得 0，但提交后该行确实存在；
+   *   - typed `insert()` 直接返回 rowId、不查库，因此不受此限制（C 组正常）。
+   *
+   * 导入整条链都在事务里，所以这里必须是能直接拿 rowId 的写法。
+   */
+  static async insert(book: Book): Promise<number> {
+    const now: number = Date.now();
+    if (book.addedAt <= 0) {
+      book.addedAt = now;
+    }
+    if (book.updatedAt <= 0) {
+      book.updatedAt = now;
+    }
+    const bucket: relationalStore.ValuesBucket = BookRepository.toBucket(book);
+    const newId: number = await db().getStore().insert(DbConstants.TABLE_BOOK, bucket);
+    if (newId > 0) {
+      book.id = newId;
+      AppState.bumpBookshelf();
+    }
+    return newId;
+  }
+
+  /** Book -> ValuesBucket（列名与 DbSchema 严格一致） */
+  private static toBucket(book: Book): relationalStore.ValuesBucket {
+    const bucket: relationalStore.ValuesBucket = {
+      'uuid': book.uuid,
+      'title': book.title,
+      'author': book.author,
+      'cover_path': book.coverPath,
+      'file_path': book.filePath,
+      'format': book.format,
+      'encoding': book.encoding,
+      'file_size': book.fileSize,
+      'file_hash': book.fileHash,
+      'group_id': book.groupId,
+      'total_chapters': book.totalChapters,
+      'word_count': book.wordCount,
+      'added_at': book.addedAt,
+      'updated_at': book.updatedAt,
+      'last_read_at': book.lastReadAt,
+      'last_chapter_index': book.lastChapterIndex,
+      'last_offset': book.lastOffset,
+      'read_status': book.readStatus,
+      'progress_percent': book.progressPercent,
+      'location': book.location,
+      'parse_status': book.parseStatus,
+      'parse_error': book.parseError,
+      'parse_rule': book.parseRule,
+      'metadata': book.metadata,
+      'deleted': book.deleted
+    };
+    return bucket;
+  }
+
+  /** 全量更新（不改 uuid / added_at） */
+  static async update(book: Book): Promise<void> {
+    book.updatedAt = Date.now();
+    const sql: string =
+      `UPDATE ${DbConstants.TABLE_BOOK} SET title = ?, author = ?, cover_path = ?, file_path = ?, ` +
+      `format = ?, encoding = ?, file_size = ?, file_hash = ?, group_id = ?, total_chapters = ?, ` +
+      `word_count = ?, updated_at = ?, last_read_at = ?, last_chapter_index = ?, last_offset = ?, ` +
+      `read_status = ?, progress_percent = ?, location = ?, parse_status = ?, parse_error = ?, ` +
+      `parse_rule = ?, metadata = ?, deleted = ? WHERE id = ?`;
+    await db().getStore().executeSql(sql, [
+      book.title, book.author, book.coverPath, book.filePath, book.format, book.encoding,
+      book.fileSize, book.fileHash, book.groupId, book.totalChapters, book.wordCount,
+      book.updatedAt, book.lastReadAt, book.lastChapterIndex, book.lastOffset,
+      book.readStatus, book.progressPercent, book.location, book.parseStatus,
+      book.parseError, book.parseRule, book.metadata, book.deleted, book.id
+    ]);
+    AppState.bumpBookshelf();
+  }
+
+  /** 只更新解析相关字段，避免整行覆写把并发改动冲掉 */
+  static async updateParseState(
+    bookId: number, status: number, error: string, rule: string,
+    totalChapters: number, wordCount: number
+  ): Promise<void> {
+    await db().getStore().executeSql(
+      `UPDATE ${DbConstants.TABLE_BOOK} SET parse_status = ?, parse_error = ?, parse_rule = ?, ` +
+      `total_chapters = ?, word_count = ?, updated_at = ? WHERE id = ?`,
+      [status, error, rule, totalChapters, wordCount, Date.now(), bookId]);
+    AppState.bumpBookshelf();
+  }
+
+  /**
+   * 落库阅读进度。
+   * location 与 last_chapter_index / last_offset 必须同源同事务写入。
+   */
+  static async updateProgress(
+    bookId: number, chapterIndex: number, offset: number,
+    percent: number, location: string, readStatus: number
+  ): Promise<void> {
+    const now: number = Date.now();
+    await db().getStore().executeSql(
+      `UPDATE ${DbConstants.TABLE_BOOK} SET last_chapter_index = ?, last_offset = ?, ` +
+      `progress_percent = ?, location = ?, read_status = ?, last_read_at = ?, updated_at = ? WHERE id = ?`,
+      [chapterIndex, offset, percent, location, readStatus, now, now, bookId]);
+    AppState.bumpBookshelf();
+    AppState.setCurrentBook(bookId);
+  }
+
+  /** 只更新最后阅读时间（打开书但没翻页时用） */
+  static async touchLastRead(bookId: number): Promise<void> {
+    const now: number = Date.now();
+    await db().getStore().executeSql(
+      `UPDATE ${DbConstants.TABLE_BOOK} SET last_read_at = ? WHERE id = ?`, [now, bookId]);
+    AppState.bumpBookshelf();
+  }
+
+  /**
+   * 移入/移出分组。
+   * @param groupId 传 null 表示"未分组"；类型用 ValueType 以匹配 SQL 绑定参数
+   */
+  static async setGroup(bookId: number, groupId: relationalStore.ValueType): Promise<void> {
+    await db().getStore().executeSql(
+      `UPDATE ${DbConstants.TABLE_BOOK} SET group_id = ?, updated_at = ? WHERE id = ?`,
+      [groupId, Date.now(), bookId]);
+    AppState.bumpBookshelf();
+  }
+
+  static async rename(bookId: number, title: string, author: string): Promise<void> {
+    await db().getStore().executeSql(
+      `UPDATE ${DbConstants.TABLE_BOOK} SET title = ?, author = ?, updated_at = ? WHERE id = ?`,
+      [title, author, Date.now(), bookId]);
+    AppState.bumpBookshelf();
+  }
+
+  /** 软删除：标记 deleted = 1，沙箱文件保留以便恢复 */
+  static async softDelete(bookId: number): Promise<void> {
+    await db().getStore().executeSql(
+      `UPDATE ${DbConstants.TABLE_BOOK} SET deleted = 1, updated_at = ? WHERE id = ?`,
+      [Date.now(), bookId]);
+    AppState.bumpBookshelf();
+  }
+
+  static async restore(bookId: number): Promise<void> {
+    await db().getStore().executeSql(
+      `UPDATE ${DbConstants.TABLE_BOOK} SET deleted = 0, updated_at = ? WHERE id = ?`,
+      [Date.now(), bookId]);
+    AppState.bumpBookshelf();
+  }
+
+  /** 物理删除；chapter / page_cache / annotation 由外键 CASCADE 带走（需外键已开启） */
+  static async hardDelete(bookId: number): Promise<void> {
+    await db().getStore().executeSql(
+      `DELETE FROM ${DbConstants.TABLE_BOOK} WHERE id = ?`, [bookId]);
+    AppState.bumpBookshelf();
+  }
+
+  /** 标记文件丢失 */
+  static async markFileMissing(bookId: number, parseRule: string): Promise<void> {
+    await BookRepository.updateParseState(
+      bookId, AppConstants.PARSE_FAILED, '文件丢失', parseRule, 0, 0);
+  }
+
+  // ------------------------------------------------------------ 映射
+
+  private static mapRow(rs: relationalStore.ResultSet): Book {
+    const book = new Book();
+    book.id = rs.getLong(rs.getColumnIndex(BookCol.ID));
+    book.uuid = rs.getString(rs.getColumnIndex(BookCol.UUID));
+    book.title = rs.getString(rs.getColumnIndex(BookCol.TITLE));
+    book.author = rs.getString(rs.getColumnIndex(BookCol.AUTHOR));
+    book.coverPath = rs.getString(rs.getColumnIndex(BookCol.COVER_PATH));
+    book.filePath = rs.getString(rs.getColumnIndex(BookCol.FILE_PATH));
+    book.format = rs.getString(rs.getColumnIndex(BookCol.FORMAT));
+    book.encoding = rs.getString(rs.getColumnIndex(BookCol.ENCODING));
+    book.fileSize = rs.getLong(rs.getColumnIndex(BookCol.FILE_SIZE));
+    book.fileHash = rs.getString(rs.getColumnIndex(BookCol.FILE_HASH));
+
+    const groupIdx: number = rs.getColumnIndex(BookCol.GROUP_ID);
+    book.groupId = rs.isColumnNull(groupIdx) ? null : rs.getLong(groupIdx);
+
+    book.totalChapters = rs.getLong(rs.getColumnIndex(BookCol.TOTAL_CHAPTERS));
+    book.wordCount = rs.getLong(rs.getColumnIndex(BookCol.WORD_COUNT));
+    book.addedAt = rs.getLong(rs.getColumnIndex(BookCol.ADDED_AT));
+    book.updatedAt = rs.getLong(rs.getColumnIndex(BookCol.UPDATED_AT));
+
+    const lastReadIdx: number = rs.getColumnIndex(BookCol.LAST_READ_AT);
+    book.lastReadAt = rs.isColumnNull(lastReadIdx) ? null : rs.getLong(lastReadIdx);
+
+    book.lastChapterIndex = rs.getLong(rs.getColumnIndex(BookCol.LAST_CHAPTER_INDEX));
+    book.lastOffset = rs.getLong(rs.getColumnIndex(BookCol.LAST_OFFSET));
+    book.readStatus = rs.getLong(rs.getColumnIndex(BookCol.READ_STATUS));
+    book.progressPercent = rs.getDouble(rs.getColumnIndex(BookCol.PROGRESS_PERCENT));
+    book.location = rs.getString(rs.getColumnIndex(BookCol.LOCATION));
+    book.parseStatus = rs.getLong(rs.getColumnIndex(BookCol.PARSE_STATUS));
+    book.parseError = rs.getString(rs.getColumnIndex(BookCol.PARSE_ERROR));
+    book.parseRule = rs.getString(rs.getColumnIndex(BookCol.PARSE_RULE));
+    book.metadata = rs.getString(rs.getColumnIndex(BookCol.METADATA));
+    book.deleted = rs.getLong(rs.getColumnIndex(BookCol.DELETED));
+    return book;
+  }
+
+  /** 便于上层构造 location JSON */
+  static buildLocation(chapterIndex: number, offset: number, percent: number): string {
+    const pos = new ReadingPosition();
+    pos.type = AppConstants.FORMAT_TXT;
+    pos.chapterIndex = chapterIndex;
+    pos.offset = offset;
+    pos.percent = percent;
+    return pos.toJson();
+  }
+}

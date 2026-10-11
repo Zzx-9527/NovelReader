@@ -1,10 +1,21 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
+
 import { RdbHelper } from '../data/database/RdbHelper';
 import { SettingsService } from '../data/service/SettingsService';
 import { ChapterReadService } from '../data/service/ChapterReadService';
+import { ImportService, ImportPreparation, ImportResult, ImportOutcome } from '../data/service/ImportService';
+import { ProgressService, RestoredPosition } from '../data/service/ProgressService';
+import { StatsService } from '../data/service/StatsService';
+import { PaginationService } from '../data/service/PaginationService';
+import { BookRepository, BookSort, HashLookup } from '../data/repository/BookRepository';
+import { ChapterRepository } from '../data/repository/ChapterRepository';
+import { AnnotationRepository } from '../data/repository/AnnotationRepository';
+import { PageCacheRepository } from '../data/repository/PageCacheRepository';
 import { RawFileSource } from '../data/source/RawFileSource';
+import { Book } from '../model/Book';
+import { Chapter } from '../model/Chapter';
 import { PathUtil } from '../common/utils/PathUtil';
 import { EncodingDetector, DetectionResult, Encodings } from '../common/utils/EncodingDetector';
 import { ChapterParser, ParseResult, ParsedChapter } from '../common/utils/ChapterParser';
@@ -13,6 +24,7 @@ import { Logger } from '../common/utils/Logger';
 import { DbConstants } from '../common/constants/DbConstants';
 import { SettingsKeys } from '../common/constants/SettingsKeys';
 import { AppConstants } from '../common/constants/AppConstants';
+import { relationalStore } from '@kit.ArkData';
 
 /** 自检项 */
 interface CheckItem {
@@ -22,11 +34,11 @@ interface CheckItem {
 }
 
 /**
- * 用于验证分章与字节偏移的测试文本。
+ * 用于文件 I/O 验证的 UTF-8 测试文本。
  *
  * 结构：作品行 + 前言段 + 三章正文。
- * 前言段刻意小于 200 字节，因此【不会】生成"前言"章节 —— 期望正好解析出 3 章。
- * 每章正文都用 \n\n 结尾，便于逐字符比对。
+ * 前言段刻意小于 AppConstants.PREFACE_MIN_BYTES(200)，因此【不会】生成"前言"章节，
+ * 期望正好解析出 3 章。
  */
 const SAMPLE_TEXT: string =
   '作品：测试小说\n\n前言部分的内容，用来验证首章之前的文本。\n\n' +
@@ -48,8 +60,7 @@ const EXPECTED_CHAPTERS: string[] = [
 // 用途：验证 StringDecoder 的多字节解码，以及 ByteLength 的字节长度计算。
 //
 // 为什么不写成文件：util.TextEncoder 只做 UTF-8（其 encoding 参数无效，
-// 且 SDK 中不存在的 util.StringEncoder），无法用它生成 GB18030 字节；
-// 写死字节数组才能真正压到多字节路径。
+// 且 SDK 中不存在 util.StringEncoder），无法用它生成 GB18030 字节。
 // ============================================================================
 
 /** 样本文本：第一章 风起 + 正文「这是正文。行二。」 */
@@ -57,24 +68,36 @@ const PROBE_TEXT: string = '第一章 风起\n这是正文。行二。';
 
 /** 上述文本的 UTF-8 字节（共 61 字节） */
 const PROBE_UTF8: number[] = [
-  0xE7, 0xAC, 0xAC, 0xE4, 0xB8, 0x80, 0xE7, 0xAB, 0xA0, 0x20, // 第一章␣
-  0xE9, 0xA3, 0x8E, 0xE8, 0xB5, 0xB7, 0x0A,                     // 风起\n
-  0xE8, 0xBF, 0x99, 0xE6, 0x98, 0xAF, 0xE6, 0xAD, 0xA3, 0xE6, 0x96, 0x87, // 这是正文
-  0xE3, 0x80, 0x82,                                             // 。
-  0xE8, 0xA1, 0x8C, 0xE4, 0xBA, 0x8C,                           // 行二
-  0xE3, 0x80, 0x82                                              // 。
+  0xE7, 0xAC, 0xAC, 0xE4, 0xB8, 0x80, 0xE7, 0xAB, 0xA0, 0x20,
+  0xE9, 0xA3, 0x8E, 0xE8, 0xB5, 0xB7, 0x0A,
+  0xE8, 0xBF, 0x99, 0xE6, 0x98, 0xAF, 0xE6, 0xAD, 0xA3, 0xE6, 0x96, 0x87,
+  0xE3, 0x80, 0x82,
+  0xE8, 0xA1, 0x8C, 0xE4, 0xBA, 0x8C,
+  0xE3, 0x80, 0x82
 ];
 
 /** 同一文本的 GB18030 字节（共 28 字节） */
 const PROBE_GBK: number[] = [
-  0xB5, 0xDA, 0xD2, 0xBB, 0xD5, 0xC2, 0x20, // 第一章␣
-  0xB7, 0xE7, 0xC6, 0xF0, 0x0A,             // 风起\n
-  0xD5, 0xE2, 0xCA, 0xC7, 0xD5, 0xFD, 0xCE, 0xC4, 0xA1, 0xA3, // 这是正文。
-  0xD0, 0xD0, 0xB6, 0xFE, 0xA1, 0xA3        // 行二。
+  0xB5, 0xDA, 0xD2, 0xBB, 0xD5, 0xC2, 0x20,
+  0xB7, 0xE7, 0xC6, 0xF0, 0x0A,
+  0xD5, 0xE2, 0xCA, 0xC7, 0xD5, 0xFD, 0xCE, 0xC4, 0xA1, 0xA3,
+  0xD0, 0xD0, 0xB6, 0xFE, 0xA1, 0xA3
+];
+
+/** 期望存在的核心索引（缺任意一条都会影响正确性或性能） */
+const EXPECTED_CORE_INDEXES: string[] = [
+  'uq_book_uuid', 'uq_book_hash', 'idx_book_shelf', 'idx_book_group',
+  'idx_chapter_title', 'idx_annotation_book', 'uq_group_name', 'uq_page_cache'
+];
+
+/** 辅助索引（缺失只影响查询性能，不影响正确性） */
+const EXPECTED_AUX_INDEXES: string[] = [
+  'idx_book_status', 'idx_annotation_chapter', 'idx_annotation_type',
+  'idx_group_sort', 'uq_stats_book_date', 'idx_stats_date', 'idx_page_cache_book'
 ];
 
 /**
- * 临时自检页 —— 验证阶段 ① + 阶段 ② 的底座是否可靠。
+ * 临时自检页 —— 验证阶段 ①②③ 的底座是否可靠。
  *
  * 验证通过后，本页应被 Navigation 路由容器替换（见设计文档 8.1）。
  */
@@ -153,6 +176,16 @@ struct Index {
     this.checks.push(item);
   }
 
+  /** 数组是否包含某个名字（不用 Array.includes，避免 ArkTS 兼容性问题） */
+  private static containsName(names: string[], target: string): boolean {
+    for (const name of names) {
+      if (name === target) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private async runAll(): Promise<void> {
     this.running = true;
     this.checks = [];
@@ -162,9 +195,10 @@ struct Index {
     await this.checkDatabase();
     await this.checkSettings();
     this.checkByteLengthAndDecoder();
-    // 注意：util.TextEncoder 只能产出 UTF-8，所以文件链路只测 UTF-8；
-    // GB18030 的字节长度正确性由上一项用写死的字节数组覆盖。
     await this.checkEncodingAndParser(Encodings.UTF8, 'probe-utf8.txt');
+    await this.checkDataPipeline();
+    // 数据层失败时，用定向探测定位是"事务内插入/回查"的问题
+    await this.probeTransactionInsert();
 
     this.running = false;
     let failed: number = 0;
@@ -189,17 +223,7 @@ struct Index {
     }
   }
 
-  /** 期望存在的索引（与 DbSchema.CREATE_INDEX_SQL 一一对应） */
-  private static readonly EXPECTED_INDEXES: string[] = [
-    'uq_book_uuid', 'uq_book_hash', 'idx_book_shelf', 'idx_book_group', 'idx_book_status',
-    'idx_chapter_title',
-    'idx_annotation_book', 'idx_annotation_chapter', 'idx_annotation_type',
-    'uq_group_name', 'idx_group_sort',
-    'uq_stats_book_date', 'idx_stats_date',
-    'uq_page_cache', 'idx_page_cache_book'
-  ];
-
-  /** 2) 数据库建表 + 索引 + 外键级联是否真的生效 */
+  /** 2) 建表 + 索引 + 外键级联是否真的生效 */
   private async checkDatabase(): Promise<void> {
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -212,8 +236,7 @@ struct Index {
       ];
       const missingTables: string[] = [];
       for (const t of tables) {
-        const exists: boolean = await db.hasTable(t);
-        if (!exists) {
+        if (!await db.hasTable(t)) {
           missingTables.push(t);
         }
       }
@@ -222,36 +245,33 @@ struct Index {
         return;
       }
 
-      // 索引：逐个核对，缺哪条直接点名（部分索引在旧版 SQLite 上会创建失败）
       const actual: string[] = await db.listIndexNames();
-      const missingIndexes: string[] = [];
-      for (const expected of Index.EXPECTED_INDEXES) {
-        let found: boolean = false;
-        for (const name of actual) {
-          if (name === expected) {
-            found = true;
-            break;
-          }
+      const missingCore: string[] = [];
+      for (const expected of EXPECTED_CORE_INDEXES) {
+        if (!Index.containsName(actual, expected)) {
+          missingCore.push(expected);
         }
-        if (!found) {
-          missingIndexes.push(expected);
+      }
+      const missingAux: string[] = [];
+      for (const expected of EXPECTED_AUX_INDEXES) {
+        if (!Index.containsName(actual, expected)) {
+          missingAux.push(expected);
         }
       }
 
-      // 外键：用"插入孤儿行应当失败"来确定性验证（PRAGMA 查询结果不可靠）
       const fkEnforced: boolean = await db.verifyForeignKeyEnforced();
 
-      const ok: boolean = missingIndexes.length === 0 && fkEnforced;
-      this.addCheck('数据库建表', ok,
-        `6 张表 · 索引 ${actual.length}/${Index.EXPECTED_INDEXES.length} 条` +
-        (missingIndexes.length > 0 ? ` 缺:${missingIndexes.join(',')}` : '') +
-        ` · 外键级联 ${fkEnforced ? '生效' : '未生效(删书会留下孤儿章节)'}`);
+      this.addCheck('数据库建表', missingCore.length === 0 && fkEnforced,
+        `${DbConstants.DB_NAME} · 6 张表 · 索引 ${actual.length} 条` +
+        (missingCore.length > 0 ? ` · 缺核心:${missingCore.join(',')}` : '') +
+        (missingAux.length > 0 ? ` · 缺辅助:${missingAux.join(',')}` : '') +
+        ` · 外键级联 ${fkEnforced ? '生效' : '未生效'}`);
     } catch (e) {
       this.addCheck('数据库建表', false, Logger.errText(e as Object));
     }
   }
 
-  /** 3) Preferences 读写一致性 */
+  /** 3) Preferences 读写一致性（写探针值后立即恢复，不污染真实设置） */
   private async checkSettings(): Promise<void> {
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -264,8 +284,6 @@ struct Index {
       settings.putNumber(SettingsKeys.FONT_SIZE, probe);
       await settings.flushNow();
       const readBack: number = settings.getNumber(SettingsKeys.FONT_SIZE, -1);
-
-      // 读回后立即恢复原值，避免污染真实设置
       settings.putNumber(SettingsKeys.FONT_SIZE, original);
       await settings.flushNow();
 
@@ -279,14 +297,10 @@ struct Index {
   }
 
   /**
-   * 4) 多字节解码 + 字节长度计算（纯内存，不依赖任何编码器）。
+   * 4) 多字节解码 + 字节长度计算（纯内存）。
    *
-   * 同一段文本按 UTF-8(61B) 与 GB18030(28B) 两组手工核算的字节解码，要求：
-   *  - 两种编码解码出的字符串完全一致；
-   *  - ByteLength.of 分别返回 61 与 28。
-   *
-   * 这一项专门用来挡住 "TextEncoder 只做 UTF-8" 造成的字节长度算错 ——
-   * 若有人再改回用 TextEncoder 计算，GB18030 那半边会立刻变红。
+   * 这一项专门挡住 "TextEncoder 只做 UTF-8" 造成的字节长度算错：
+   * 若有人改回用 TextEncoder 计算，GB18030 那半边会立刻变红。
    */
   private checkByteLengthAndDecoder(): void {
     const label: string = '多字节解码与字节长度';
@@ -301,8 +315,7 @@ struct Index {
       }
       if (gbkText !== PROBE_TEXT) {
         this.addCheck(label, false,
-          `GB18030 解码不符（StringDecoder 多字节路径有问题）\n` +
-          `期望：${JSON.stringify(PROBE_TEXT)}\n实际：${JSON.stringify(gbkText)}`);
+          `GB18030 解码不符\n期望：${JSON.stringify(PROBE_TEXT)}\n实际：${JSON.stringify(gbkText)}`);
         return;
       }
 
@@ -322,18 +335,14 @@ struct Index {
       }
 
       this.addCheck(label, true,
-        `utf-8 解码一致/字节${utf8Len} · gb18030 解码一致/字节${gbkLen} · ` +
-        `汉字按 2 字节计（若误用 TextEncoder 会算成 3 字节）`);
+        `utf-8 解码一致/字节${utf8Len} · gb18030 解码一致/字节${gbkLen} · 汉字按 2 字节计`);
     } catch (e) {
       this.addCheck(label, false, Logger.errText(e as Object));
     }
   }
 
   /**
-   * 5) 端到端验证：写样本文件 → 编码探测 → 分章 → 按字节偏移反查原文 → 逐字符比对。
-   *
-   * 这是最关键的一项：只要字节偏移差一个字节（例如 \r\n 被当成 \n 计数），
-   * 或者多字节字符跨块时游标算错，比对就会失败。
+   * 5) 文件链路：写样本 → 探测 → 分章 → 按字节偏移反查 → 逐字符比对。
    *
    * 只用 UTF-8：util.TextEncoder 无法产出其它编码的字节。
    */
@@ -345,9 +354,6 @@ struct Index {
       absolutePath = PathUtil.toAbsolute(relativePath);
       PathUtil.ensureDir(PathUtil.booksDir());
 
-      // ---- 写入样本文件
-      // 注意：TextEncoder 只做 UTF-8，其 encoding 参数无效（SDK 中也没有 StringEncoder）。
-      // 因此本方法只能测 UTF-8；GB18030 的字节长度由上一项覆盖。
       const encoder: util.TextEncoder = new util.TextEncoder();
       const bytes: Uint8Array = encoder.encodeInto(SAMPLE_TEXT);
       const file = fs.openSync(absolutePath,
@@ -363,11 +369,9 @@ struct Index {
 
       const source = RawFileSource.open(absolutePath);
       try {
-        // ---- 编码探测
         const detection: DetectionResult = EncodingDetector.detect(source);
         const detectOk: boolean = detection.encoding === encoding;
 
-        // ---- 分章
         const parsed: ParseResult = ChapterParser.parse(source, encoding);
         if (parsed.chapters.length !== EXPECTED_CHAPTERS.length) {
           this.addCheck(label, false,
@@ -376,7 +380,6 @@ struct Index {
           return;
         }
 
-        // ---- 校验字节偏移的单调性与边界
         for (let i = 0; i < parsed.chapters.length; i++) {
           const c: ParsedChapter = parsed.chapters[i];
           if (c.startOffset < 0 || c.startOffset >= writtenSize) {
@@ -384,8 +387,7 @@ struct Index {
             return;
           }
           if (c.endOffset !== null && c.endOffset <= c.startOffset) {
-            this.addCheck(label, false,
-              `第 ${i + 1} 章区间非法：${c.startOffset}~${c.endOffset}`);
+            this.addCheck(label, false, `第 ${i + 1} 章区间非法：${c.startOffset}~${c.endOffset}`);
             return;
           }
           if (i > 0 && c.startOffset < parsed.chapters[i - 1].startOffset) {
@@ -394,8 +396,6 @@ struct Index {
           }
         }
 
-        // ---- 按字节偏移反查每一章，与预期逐字符比对
-        // （走 ChapterReadService，顺带验证随机读与 LRU；它会接管 source 的释放）
         const reader = new ChapterReadService(source, encoding);
         let offsetText: string = '';
         for (let i = 0; i < parsed.chapters.length; i++) {
@@ -412,7 +412,6 @@ struct Index {
           offsetText += (i > 0 ? ' , ' : '') + `${c.startOffset}-${endText}`;
         }
 
-        // ---- 缓存命中检查：同章再读一次应命中 LRU
         const again: string = reader.decodeChapter(
           parsed.chapters[0].startOffset, parsed.chapters[0].endOffset, null);
         const cacheOk: boolean = again === EXPECTED_CHAPTERS[0] && reader.getCacheSize() > 0;
@@ -423,20 +422,355 @@ struct Index {
           `缓存${cacheOk ? '命中' : '未命中'}(${reader.getCacheSize()})`);
         reader.dispose();
       } finally {
-        // reader.dispose() 已关闭 source；这里只在异常提前返回时兜底
         source.close();
       }
     } catch (e) {
       this.addCheck(label, false, Logger.errText(e as Object));
     } finally {
-      // 清理样本文件，避免污染沙箱
       try {
         if (absolutePath.length > 0 && fs.accessSync(absolutePath)) {
           fs.unlinkSync(absolutePath);
         }
       } catch (cleanupErr) {
-        // 清理失败不影响自检结论
+        // 清理失败不影响结论
       }
+    }
+  }
+
+  /**
+   * 6) 数据层全链路：导入 → 目录 → 读章 → 分页 → 进度 → 统计 → 判重 → 书签 → 级联删除。
+   *
+   * 覆盖 6 个 Repository 与导入/读章/进度/统计/分页服务，
+   * 但不经过 picker（没法自动化点系统 UI），而是直接合成沙箱文件再走 prepare → commit。
+   */
+  private async checkDataPipeline(): Promise<void> {
+    const label: string = '数据层全链路';
+    let bookId: number = 0;
+    let absolutePath: string = '';
+
+    try {
+      const uuid: string = `selftest-${Date.now()}`;
+      const relativePath: string = PathUtil.bookRelativePath(uuid);
+      absolutePath = PathUtil.toAbsolute(relativePath);
+      PathUtil.ensureDir(PathUtil.booksDir());
+
+      const encoder = new util.TextEncoder();
+      const bytes: Uint8Array = encoder.encodeInto(SAMPLE_TEXT);
+      const file = fs.openSync(absolutePath,
+        fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      fs.writeSync(file.fd, bytes.buffer.slice(0, bytes.length));
+      fs.closeSync(file);
+
+      const preparation = new ImportPreparation();
+      preparation.uri = `file://selftest/${uuid}.txt`;
+      preparation.uuid = uuid;
+      preparation.relativePath = relativePath;
+      preparation.fileSize = bytes.length;
+      preparation.fileHash = `selftest-hash-${uuid}`;
+      preparation.encoding = Encodings.UTF8;
+      const parseResult: ImportResult = ImportService.parseInto(preparation, Encodings.UTF8);
+      if (parseResult.outcome !== ImportOutcome.SUCCESS) {
+        this.addCheck(label, false, `解析失败：${parseResult.error}`);
+        return;
+      }
+      if (parseResult.chapterCount !== EXPECTED_CHAPTERS.length) {
+        this.addCheck(label, false,
+          `期望 ${EXPECTED_CHAPTERS.length} 章，实际 ${parseResult.chapterCount} 章`);
+        return;
+      }
+
+      const commitResult: ImportResult = await ImportService.commit(preparation, '自检样本');
+      if (commitResult.outcome !== ImportOutcome.SUCCESS || commitResult.bookId <= 0) {
+        this.addCheck(label, false, `入库失败：${commitResult.error}`);
+        return;
+      }
+      bookId = commitResult.bookId;
+
+      const shelf: Book[] = await BookRepository.listShelf(BookSort.LAST_READ, null);
+      let found: Book | null = null;
+      for (const b of shelf) {
+        if (b.id === bookId) {
+          found = b;
+          break;
+        }
+      }
+      if (found === null) {
+        this.addCheck(label, false, '入库后书架里查不到这本书');
+        return;
+      }
+      if (found.totalChapters !== EXPECTED_CHAPTERS.length) {
+        this.addCheck(label, false,
+          `total_chapters=${found.totalChapters}，期望 ${EXPECTED_CHAPTERS.length}`);
+        return;
+      }
+
+      const chapters: Chapter[] = await ChapterRepository.listByBook(bookId);
+      if (chapters.length !== EXPECTED_CHAPTERS.length) {
+        this.addCheck(label, false, `目录 ${chapters.length} 章，期望 ${EXPECTED_CHAPTERS.length} 章`);
+        return;
+      }
+
+      const source = RawFileSource.tryOpen(absolutePath);
+      if (source === null) {
+        this.addCheck(label, false, '无法打开沙箱文件读取正文');
+        return;
+      }
+      let firstChapterText: string = '';
+      try {
+        const reader = new ChapterReadService(source, Encodings.UTF8);
+        for (let i = 0; i < chapters.length; i++) {
+          const text: string = reader.decodeChapter(
+            chapters[i].startOffset, chapters[i].endOffset, null);
+          if (text !== EXPECTED_CHAPTERS[i]) {
+            this.addCheck(label, false,
+              `第 ${i + 1} 章内容与偏移不符\n期望：${JSON.stringify(EXPECTED_CHAPTERS[i])}\n` +
+              `实际：${JSON.stringify(text)}`);
+            reader.dispose();
+            return;
+          }
+        }
+        firstChapterText = reader.decodeChapter(
+          chapters[0].startOffset, chapters[0].endOffset, null);
+        reader.dispose();
+      } finally {
+        source.close();
+      }
+
+      const settings = SettingsService.getInstance().loadReaderSettings();
+      const layoutKey: string = PaginationService.buildLayoutKey(settings, 360, 640);
+      const breaks: number[] = PaginationService.computeBreaks(
+        firstChapterText, settings, 360, 640);
+      if (breaks.length === 0 || breaks[0] !== 0) {
+        this.addCheck(label, false, '分页断点非法（breaks[0] 必须为 0）');
+        return;
+      }
+      // 缓存【第 0 章】的分页：进度与恢复必须落在同一章，否则 cacheHit 断言不自洽
+      await PageCacheRepository.save(bookId, 0, layoutKey, breaks);
+      const cachedBreaks: number[] = await PageCacheRepository.getBreaks(bookId, 0, layoutKey);
+      if (cachedBreaks.length !== breaks.length) {
+        this.addCheck(label, false,
+          `分页缓存读回不一致：写入 ${breaks.length} 条，读回 ${cachedBreaks.length} 条`);
+        return;
+      }
+      const pageIndex: number = PaginationService.locatePage(cachedBreaks, 0);
+      if (pageIndex !== 0) {
+        this.addCheck(label, false, `offset=0 应落在第 0 页，实际第 ${pageIndex} 页`);
+        return;
+      }
+
+      // 进度落在第 0 章，这样 restore 才能命中上面写入的缓存
+      const progress = new ProgressService(bookId);
+      progress.updatePosition(0, 0, 0.1);
+      progress.markActive();
+      await progress.flush(true);
+      const reloaded = await BookRepository.getById(bookId);
+      if (reloaded === null) {
+        this.addCheck(label, false, '进度落库后读不回书籍');
+        return;
+      }
+      if (reloaded.lastChapterIndex !== 0 || reloaded.lastOffset !== 0) {
+        this.addCheck(label, false,
+          `进度不符：chapterIndex=${reloaded.lastChapterIndex} offset=${reloaded.lastOffset}，期望 0/0`);
+        return;
+      }
+      const restored: RestoredPosition = await ProgressService.restore(reloaded, layoutKey);
+      if (restored.chapterIndex !== 0 || !restored.cacheHit) {
+        this.addCheck(label, false,
+          `恢复位置不符：chapterIndex=${restored.chapterIndex}（期望 0）` +
+          ` cacheHit=${restored.cacheHit}（期望 true）`);
+        return;
+      }
+
+      await StatsService.submit(bookId, 12);
+      await StatsService.submit(bookId, 8);
+      const bookSeconds: number = await StatsService.bookDuration(bookId);
+      if (bookSeconds !== 20) {
+        this.addCheck(label, false, `统计累加不符：期望 20 秒，实际 ${bookSeconds} 秒`);
+        return;
+      }
+
+      const lookup = await BookRepository.findByHash(preparation.fileHash);
+      if (lookup.status !== HashLookup.ACTIVE) {
+        this.addCheck(label, false, `判重未命中在架书（status=${lookup.status}）`);
+        return;
+      }
+
+      const bookmarkId: number = await AnnotationRepository.addBookmark(bookId, 1, 5);
+      if (bookmarkId <= 0) {
+        this.addCheck(label, false, '新增书签失败（chapter_id 冗余列可能未填充）');
+        return;
+      }
+      const bookmarkCount: number = await AnnotationRepository.countByBook(
+        bookId, AppConstants.ANNOTATION_BOOKMARK);
+      if (bookmarkCount !== 1) {
+        this.addCheck(label, false, `书签数量期望 1，实际 ${bookmarkCount}`);
+        return;
+      }
+
+      await BookRepository.softDelete(bookId);
+      if ((await BookRepository.getById(bookId)) !== null) {
+        this.addCheck(label, false, '软删除后仍能按 id 查到（deleted 过滤失效）');
+        return;
+      }
+      await BookRepository.restore(bookId);
+      if ((await BookRepository.getById(bookId)) === null) {
+        this.addCheck(label, false, '恢复后查不到书籍');
+        return;
+      }
+
+      await BookRepository.hardDelete(bookId);
+      const orphanChapters: number = await ChapterRepository.countByBook(bookId);
+      const orphanCache: number = await PageCacheRepository.countByBook(bookId);
+      const orphanAnnotations: number = await AnnotationRepository.countByBook(
+        bookId, AppConstants.ANNOTATION_ALL);
+      if (orphanChapters !== 0 || orphanCache !== 0 || orphanAnnotations !== 0) {
+        this.addCheck(label, false,
+          `级联删除未生效：残留章节 ${orphanChapters} / 缓存 ${orphanCache} / 标注 ${orphanAnnotations}`);
+        return;
+      }
+      bookId = 0;
+
+      this.addCheck(label, true,
+        `导入3章·目录与偏移一致·分页${breaks.length}页·进度恢复·统计累加20s·` +
+        `判重命中·书签填充·软删恢复·级联清理 全部通过`);
+    } catch (e) {
+      this.addCheck(label, false, Logger.errText(e as Object));
+    } finally {
+      if (bookId > 0) {
+        try {
+          await BookRepository.hardDelete(bookId);
+        } catch (cleanupErr) {
+          // 忽略
+        }
+      }
+      try {
+        if (absolutePath.length > 0 && fs.accessSync(absolutePath)) {
+          fs.unlinkSync(absolutePath);
+        }
+      } catch (cleanupErr) {
+        // 忽略
+      }
+    }
+  }
+
+  /**
+   * 定向探测：验证"事务内调用仓储 insert"是否会失败。
+   *
+   * 上一轮已证明：事务外调用 BookRepository.insert 完全正常
+   * （返回 id、能按 id 查、能按 hash 查，表内行数 0→1）。
+   * 而 ImportService.commit 里唯一的差别就是它把这个调用包在 withTransaction 内。
+   *
+   * 本页在同一批数据、同一次运行里做 A/B/C/D 四组对照，一次定论。
+   */
+  private async probeTransactionInsert(): Promise<void> {
+    const db = RdbHelper.getInstance();
+    const store = db.getStore();
+    const now: number = Date.now();
+
+    // ---- A 组：事务外，走仓储
+    const uuidA: string = `tx-a-${now}`;
+    try {
+      const idA: number = await BookRepository.insert(Index.buildProbeBook(uuidA, now));
+      this.addCheck('A 事务外·仓储 insert', idA > 0, `返回 id=${idA}`);
+    } catch (e) {
+      this.addCheck('A 事务外·仓储 insert', false, `抛错：${Logger.errText(e as Object)}`);
+    } finally {
+      await this.safeCleanup(uuidA);
+    }
+
+    // ---- B 组：事务内，走仓储（复现 commit 的路径）
+    const uuidB: string = `tx-b-${now}`;
+    try {
+      let idInner: number = -1;
+      await db.withTransaction<void>(async () => {
+        idInner = await BookRepository.insert(Index.buildProbeBook(uuidB, now));
+      });
+      const idAfter: number = await db.queryNumber(
+        `SELECT id FROM ${DbConstants.TABLE_BOOK} WHERE uuid = ?`, [uuidB], -1);
+      this.addCheck('B 事务内·仓储 insert', idInner > 0 && idAfter > 0,
+        `事务内返回=${idInner}，提交后按 uuid 查=${idAfter}`);
+    } catch (e) {
+      this.addCheck('B 事务内·仓储 insert', false, `抛错：${Logger.errText(e as Object)}`);
+    } finally {
+      await this.safeCleanup(uuidB);
+    }
+
+    // ---- C 组：事务内，改用 typed insert（直接拿 rowId，不回查）
+    const uuidC: string = `tx-c-${now}`;
+    try {
+      let rowId: number = -1;
+      await db.withTransaction<void>(async () => {
+        const bucket: relationalStore.ValuesBucket = {
+          'uuid': uuidC,
+          'title': '探测C',
+          'file_path': 'books/probe-c.txt',
+          'format': 'txt',
+          'added_at': now,
+          'updated_at': now
+        };
+        rowId = await store.insert(DbConstants.TABLE_BOOK, bucket);
+      });
+      this.addCheck('C 事务内·typed insert', rowId > 0, `rowId=${rowId}（不需要回查）`);
+    } catch (e) {
+      this.addCheck('C 事务内·typed insert', false, `抛错：${Logger.errText(e as Object)}`);
+    } finally {
+      await this.safeCleanup(uuidC);
+    }
+
+    // ---- D 组：事务内，executeSql 插入 + last_insert_rowid()
+    //
+    // 这一组【预期就是失败的】：它用来记录"事务内取主键的另一条路也走不通"。
+    // 保留它是因为下次有人想用 last_insert_rowid() 时会先看到这条结论。
+    const uuidD: string = `tx-d-${now}`;
+    try {
+      let rowId: number = -1;
+      await db.withTransaction<void>(async () => {
+        await store.executeSql(
+          `INSERT INTO ${DbConstants.TABLE_BOOK} (uuid, title, file_path, format, added_at, updated_at) ` +
+          `VALUES (?,?,?,?,?,?)`,
+          [uuidD, '探测D', 'books/probe-d.txt', 'txt', now, now]);
+        rowId = await db.queryNumber(`SELECT last_insert_rowid()`, [], -1);
+      });
+      // 提交后交叉核对，证明"行确实写进去了，只是事务内取不到 rowid"
+      const afterCommit: number = await db.queryNumber(
+        `SELECT COUNT(*) FROM ${DbConstants.TABLE_BOOK} WHERE uuid = ?`, [uuidD], -1);
+      this.addCheck('D 事务内·executeSql + rowid',
+        rowId <= 0 && afterCommit === 1,
+        `last_insert_rowid=${rowId}（事务内取不到）· 提交后表内行数=${afterCommit}` +
+        ` → 已确认此路不可用，取主键必须用 typed insert（C 组）`);
+    } catch (e) {
+      this.addCheck('D 事务内·executeSql + rowid', false, `抛错：${Logger.errText(e as Object)}`);
+    } finally {
+      await this.safeCleanup(uuidD);
+    }
+  }
+
+  /** 构造与 ImportService.commit 同构的 Book */
+  private static buildProbeBook(uuid: string, now: number): Book {
+    const book = new Book();
+    book.uuid = uuid;
+    book.title = '定向探测书';
+    book.filePath = 'books/probe.txt';
+    book.format = AppConstants.FORMAT_TXT;
+    book.encoding = Encodings.UTF8;
+    book.fileSize = 1024;
+    book.fileHash = `probe-hash-${uuid}`;
+    book.totalChapters = 3;
+    book.wordCount = 500;
+    book.addedAt = now;
+    book.updatedAt = now;
+    book.parseStatus = AppConstants.PARSE_SUCCESS;
+    book.parseRule = 'probe';
+    book.lastChapterIndex = -1;
+    return book;
+  }
+
+  private async safeCleanup(uuid: string): Promise<void> {
+    try {
+      await RdbHelper.getInstance().getStore().executeSql(
+        `DELETE FROM ${DbConstants.TABLE_BOOK} WHERE uuid = ?`, [uuid]);
+    } catch (e) {
+      // 忽略清理失败
     }
   }
 }
