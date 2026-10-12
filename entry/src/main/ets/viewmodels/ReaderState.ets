@@ -35,6 +35,14 @@ export class ReaderState {
   /** 顶栏/底栏是否显示，单击中间切换 */
   menuVisible: boolean = false;
   tocVisible: boolean = false;
+  /**
+   * 阅读设置面板是否显示。
+   *
+   * 与 `menuVisible` 分开而不是复用：设置面板弹出时，底栏里那个"设置"
+   * 按钮最好仍可见（用户可能想连调几项），两者显隐规则并不一致。
+   * 面板盖住底栏这件事由 `ReaderPage` 的 Stack 层级决定，状态各管各的。
+   */
+  settingsVisible: boolean = false;
 
   loading: boolean = true;
   error: string = '';

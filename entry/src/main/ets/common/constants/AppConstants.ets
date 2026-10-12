@@ -94,6 +94,19 @@ export class AppConstants {
   static readonly DEFAULT_PARAGRAPH_SPACING: number = 0.5;
   static readonly DEFAULT_PAGE_MARGIN: number = 16;
   static readonly DEFAULT_FIRST_LINE_INDENT: number = 2;
+
+  // ---------------------------------------------------------------- 排版可调范围
+  /**
+   * 行距倍数上下限。
+   *
+   * ⚠️ 下限取 1.0 不是随口定的：行距小于 1 时汉字上下笔画会咬在一起，
+   * 而且 `PaginationService` 用 `fontSize * lineHeight` 当行高，
+   * 小于 1 会让"每页行数"虚高，分页结果与肉眼看到的对不上。
+   */
+  static readonly MIN_LINE_HEIGHT: number = 1.0;
+  static readonly MAX_LINE_HEIGHT: number = 2.4;
+  /** 段间距上限（单位：行） */
+  static readonly MAX_PARAGRAPH_SPACING: number = 2.0;
 }
 
 /** 日志 tag，便于按模块过滤 */

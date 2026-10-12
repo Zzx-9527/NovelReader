@@ -10,6 +10,8 @@ import { ErrorView } from '../views/common/ErrorView';
 import { ReaderTopBar } from '../views/reader/ReaderTopBar';
 import { ReaderBottomBar } from '../views/reader/ReaderBottomBar';
 import { TocDrawer } from '../views/reader/TocDrawer';
+import { SettingsPanel } from '../views/reader/SettingsPanel';
+import { ReaderSettings } from '../model/ReaderSettings';
 
 /**
  * 阅读页（全屏，不显示底部 Tab）。
@@ -82,6 +84,13 @@ struct ReaderPage {
     if (this.pageAreaHeight <= 0 || this.contentWidth <= 0) {
       return;
     }
+    // 分页尺寸对不上时最难查（表现是"每页字多字少/上下留白"），
+    // 而这两个数字决定了页面里到底能放几行 —— 直接打到日志里，
+    // DevEco 按 LogTag.READ 过滤就能看到实际值，不用反复猜。
+    Logger.info(LogTag.READ,
+      `分页尺寸: w=${this.contentWidth.toFixed(1)} h=${this.pageAreaHeight.toFixed(1)}`
+        + ` 标题占位=${this.headingHeight().toFixed(1)}`
+        + ` 字号=${this.state.settings.fontSize} 行距=${this.state.settings.lineHeight}`);
     this.vm.setContentSize(this.contentWidth, this.pageAreaHeight, this.headingHeight());
     if (this.state.settings.pageMode !== 'scroll') {
       this.vm.loadChapter(this.state.chapterIndex);
@@ -130,7 +139,8 @@ struct ReaderPage {
       //     它们会把拖拽事件整个吃掉，下层 `Scroll` 永远收不到滑动。
       //     实测表现就是"阅读页划不动、只能点"。
       //     滚动模式下的点击交给 Scroll 自己接管（见 buildReaderBody）。
-      if (!this.state.menuVisible && this.state.error.length === 0 && !this.state.loading
+      if (!this.state.menuVisible && !this.state.settingsVisible
+        && this.state.error.length === 0 && !this.state.loading
         && this.state.settings.pageMode !== 'scroll') {
         this.buildPageControls()
       }
@@ -145,6 +155,9 @@ struct ReaderPage {
               this.goBack();
             },
             onMenu: () => {
+              // 先收起设置面板再开目录：两层浮层叠着时，
+              // 谁盖谁完全取决于 Stack 顺序，用户只会觉得"点了没反应"
+              this.vm.setSettingsVisible(false);
               this.vm.setTocVisible(true);
             }
           })
@@ -175,6 +188,9 @@ struct ReaderPage {
             },
             onNextChapter: () => {
               this.vm.nextChapter();
+            },
+            onOpenSettings: () => {
+              this.vm.setSettingsVisible(true);
             }
           })
         }
@@ -182,7 +198,44 @@ struct ReaderPage {
         .height('100%')
       }
 
-      // 第 4 层：目录抽屉（最顶，带遮罩）
+      // 第 4 层：设置面板。
+      // 铺满全屏：下半部是面板本体，上半部是**透明的关闭热区** ——
+      // 点空白处收起是浮层的通用预期，不给块遮罩是为了还能看见正文改了什么样。
+      // 但没有透明热区又会"点面板以外毫无反应"，只能去点右上角"完成"。
+      if (this.state.settingsVisible && this.state.error.length === 0) {
+        Column() {
+          // 上半部：空白热区，点了收起面板。
+          // 给个最小高度，保证小屏上也不会被面板挤成 0 ——
+          // 热区没了，用户就只能去点"完成"才能关面板。
+          Column()
+            .width('100%')
+            .constraintSize({ minHeight: 56 })
+            .layoutWeight(1)
+            .onClick(() => {
+              this.vm.setSettingsVisible(false);
+            })
+
+          SettingsPanel({
+            settings: this.state.settings,
+            theme: this.theme(),
+            onChange: (next: ReaderSettings) => {
+              // 就地生效：改完立刻重排，用户能直接看着正文调
+              this.vm.updateSettings(next).catch((e: Object) => {
+                Logger.error(LogTag.READ, `应用阅读设置失败: ${Logger.errText(e)}`);
+              });
+            },
+            onClose: () => {
+              this.vm.setSettingsVisible(false);
+            }
+          })
+          // 面板最多占屏幕七成：留出热区，也让"改完能瞄一眼正文"
+          .constraintSize({ maxHeight: '70%' })
+        }
+        .width('100%')
+        .height('100%')
+      }
+
+      // 第 5 层：目录抽屉（最顶，带遮罩）
       if (this.state.tocVisible) {
         Row() {
           TocDrawer({
@@ -285,15 +338,24 @@ struct ReaderPage {
   }
 
   /**
-   * 章节标题占用的总高度；本章没有标题则为 0。
+   * 章节标题占用的总高度（分页时首页要让位的量）。
    *
-   * 分页模式必须把它交给分页服务：**首页的可用高度比其它页少这一截**，
-   * 不告诉它就会多算一行，首页最后一行被裁掉（而且裁掉的是正文，用户看不出原因）。
+   * ⚠️ **刻意不依赖 `headingText()`**，只由排版参数决定。
+   *
+   * 原因：`headingText()` 依赖 `state.chapterTitle`，而它是**异步加载**的 ——
+   * 首帧布局时 `chapterTitle` 还是空串，此时算出的占位是 0；等章节加载完
+   * 再算就变成 `headingLineHeight() + GAP_S + GAP_M`（默认排版下是 50）。
+   * 同一个章节于是产生两个 `hx`、落进**两份分页缓存**，
+   * 谁先命中就用谁 —— 表现正是"同一章有时排满、有时只排几段"这种飘忽的 bug。
+   *
+   * 判据：**凡是会进 `layoutKey` 的量，都必须是稳定的排版参数，
+   * 不能依赖任何异步加载的内容**。
+   *
+   * 代价：本章若真的没有标题（`headingText()` 返回空），首页会白让位一行。
+   * 可接受 —— 换来分页结果可复现，而"章节没标题"极少见
+   * （`ChapterParser` 兜底也会给个"第 N 章"）。
    */
   private headingHeight(): number {
-    if (this.headingText().length === 0) {
-      return 0;
-    }
     return this.headingLineHeight() + AppTheme.GAP_S + AppTheme.GAP_M;
   }
 
@@ -383,9 +445,58 @@ struct ReaderPage {
         .letterSpacing(this.state.settings.letterSpacing)
         .textIndent(this.state.settings.firstLineIndent * this.state.settings.fontSize)
         .width('100%')
-        // 占满"减去标题"的剩余高度（layoutWeight 取的是剩余空间，不是父容器的 100%）
-        .layoutWeight(1)
+        .align(Alignment.TopStart)
+        // ⚠️ **不**用 layoutWeight 撑满。
+        //
+        // 曾经用 `layoutWeight(1)`，是为了让 onAreaChange 报出"确定的可用高度"
+        // 好喂给分页。代价是它把两个量搞混了：
+        //  - 分页需要的"可用高度" → 已经由第 1 层 Column 的 pageAreaHeight 提供；
+        //  - 校验需要的"文字真实高度" → 一旦撑满就永远报容器高度，**测不到**。
+        // 现在改成自适应内容：Text 高度 = 文字实际占的高度，
+        // 与 pageAreaHeight 一比就能立刻判断"算法认为能放几行"和
+        // "实际渲染了几行"是否一致（分页准不准的唯一判据）。
+        .onAreaChange((oldArea: Area, newArea: Area) => {
+          this.onPagedTextAreaChange(newArea);
+        })
     }
+  }
+
+  /**
+   * 分页模式：正文 Text 的尺寸变化。
+   *
+   * 这条日志是**校验分页准不准的唯一判据**：
+   * `Text` 现在高度自适应内容，所以报出的就是"这些文字实际占了多高"。
+   * 把它除以行高得到**实测行数**，与分页算法假设的"每页行数"一比：
+   *  - 实测行数 ≈ 假设行数 → 分页是准的；
+   *  - 实测行数 < 假设行数 → 算法把行数算多了（切给这页的字太少）；
+   *  - 实测行数 > 假设行数 → 算少了（会溢出、末行被裁）。
+   */
+  private onPagedTextAreaChange(area: Area): void {
+    const height: number = Number(area.height);
+    const text: string = this.state.renderedText;
+    const lineHeight: number = Math.max(1,
+      this.state.settings.fontSize * this.state.settings.lineHeight);
+    const measuredLines: number = height / lineHeight;
+
+    // 数换行与空行：判断"物理行 vs 自然段"的关键证据
+    let nlCount: number = 0;
+    let blankCount: number = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text.charAt(i) !== '\n') {
+        continue;
+      }
+      nlCount++;
+      const next: number = i + 1;
+      if (next < text.length && text.charAt(next) === '\n') {
+        blankCount++;
+      }
+    }
+    Logger.info(LogTag.PAGINATION,
+      `分页正文实测: 实高=${height.toFixed(1)} 行高=${lineHeight.toFixed(1)}`
+        + ` 实测行数=${measuredLines.toFixed(1)}`
+        + ` | 容器可用=${this.pageAreaHeight.toFixed(1)}`
+        + ` 标题占位=${this.headingHeight().toFixed(1)}`
+        + ` 本页字数=${text.length} 换行数=${nlCount} 空行段数=${blankCount}`);
   }
 
   /**
@@ -447,6 +558,11 @@ struct ReaderPage {
     if (width <= 0 || height <= 0) {
       return;
     }
+    // 与 Scroll 的实测高度对照打日志：两者应当接近（差一个标题高度）。
+    // "每页字多字少/上下留白"这类问题几乎都出在这里，有日志就不用反复猜。
+    Logger.info(LogTag.READ,
+      `阅读区实测: w=${width.toFixed(1)} h=${height.toFixed(1)}`
+        + ` | Scroll 视口=${this.viewportHeight.toFixed(1)}`);
     const changed: boolean = Math.abs(width - this.contentWidth) > 1
       || Math.abs(height - this.pageAreaHeight) > 1;
     this.contentWidth = width;

@@ -33,6 +33,7 @@ export struct ReaderBottomBar {
   onJump?: (percent: number) => void;
   onPrevChapter?: () => void;
   onNextChapter?: () => void;
+  onOpenSettings?: () => void;
 
   @State private draggingPercent: number = -1;
 
@@ -63,6 +64,19 @@ export struct ReaderBottomBar {
         Text(`${(this.displayPercent() * 100).toFixed(1)}%`)
           .fontSize(this.fontSize())
           .fontColor(this.theme.secondary)
+
+        // 设置入口放在这一行，而不是第二行进度条两端：
+        // 那两个位置已经被上一章/下一章占了（相邻章切换是高频动作），
+        // 再挤进去会让进度条短得没法拖。
+        Text('设置')
+          .fontSize(this.fontSize())
+          .fontColor(this.theme.text)
+          .padding({ left: 8, top: 2, bottom: 2 })
+          .onClick(() => {
+            if (this.onOpenSettings !== undefined) {
+              this.onOpenSettings();
+            }
+          })
       }
       .width('100%')
 

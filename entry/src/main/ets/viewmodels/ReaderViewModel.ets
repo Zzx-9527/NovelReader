@@ -190,6 +190,12 @@ export class ReaderViewModel {
     const cached: number[] = await PageCacheRepository.getBreaks(
       book.id, this.state.chapterIndex, this.layoutKey);
     if (cached.length > 0) {
+      // ⚠️ 命中缓存时**不会**重算 —— 如果怀疑断点是旧的（改了分页算法之后），
+      // 先看这条日志：cache=HIT 就说明现在跑的是历史结果，
+      // 必须等 layoutKey 变化（改字号/行距/容器尺寸）或清缓存才会重算。
+      Logger.info(LogTag.PAGINATION,
+        `分页 cache=HIT 章=${this.state.chapterIndex} 页数=${cached.length}`
+          + ` key=${this.layoutKey} 首 3 断点=[${cached[0]},${cached[1]},${cached[2]}]`);
       this.state.breaks = cached;
       this.state.pageCount = cached.length;
       return;
@@ -203,6 +209,17 @@ export class ReaderViewModel {
       this.state.breaks = breaks;
       this.state.pageCount = breaks.length;
       await PageCacheRepository.save(book.id, this.state.chapterIndex, this.layoutKey, breaks);
+      // 诊断：把"输入尺寸 → 输出断点"一次打全。首 3 个断点的差值 = 首页字符数，
+      // 与正文总长对比就能立刻看出首页切得是多是少。
+      const firstPageChars: number = breaks.length > 1 ? breaks[1] - breaks[0] : -1;
+      Logger.info(LogTag.PAGINATION,
+        `分页 cache=MISS 章=${this.state.chapterIndex}`
+          + ` 容器=${this.contentWidth.toFixed(0)}x${this.contentHeight.toFixed(0)}`
+          + ` 首页让位=${this.firstPageExtraHeight.toFixed(1)}`
+          + ` 字号=${this.state.settings.fontSize} 行距=${this.state.settings.lineHeight}`
+          + ` 段距=${this.state.settings.paragraphSpacing}`
+          + ` 总字数=${this.state.getFullText().length}`
+          + ` 页数=${breaks.length} 首页字数=${firstPageChars}`);
     } finally {
       this.state.repaginating = false;
     }
@@ -359,17 +376,34 @@ export class ReaderViewModel {
 
   // ------------------------------------------------------------ 设置
 
-  /** 改字号等排版参数：更新设置、清缓存、重新分页并尽量保持相对位置 */
+  /**
+   * 改字号等排版参数：更新设置、清缓存、重新分页并尽量保持相对位置。
+   *
+   * ⚠️ 切换**翻页方式**必须重载整章，不能只重算分页：
+   * `page` 模式下 `renderedText` 只是当前那一页的文本，
+   * 切到 `scroll` 却只重算分页的话，正文区会只显示一页内容 ——
+   * 看起来就是"切到滚动模式后整章没了"。
+   * 所以这里比对 pageMode 是否变化，变了就整体重载。
+   */
   async updateSettings(next: ReaderSettings): Promise<void> {
     const keepOffset: number = this.state.offset;
+    const modeChanged: boolean = next.pageMode !== this.state.settings.pageMode;
     this.state.settings = next;
     SettingsService.getInstance().saveReaderSettings(next);
+
     if (this.state.book !== null) {
       // 排版变了，旧 key 的缓存不会被命中，这里顺手清掉避免堆积
       await PageCacheRepository.deleteByBook(this.state.book.id);
     }
-    await this.buildPagination();
-    this.renderAt(keepOffset);
+
+    if (modeChanged) {
+      // 让 loadChapter 把位置恢复到当前偏移，而不是章首
+      this.restoreToOffset = keepOffset;
+      await this.loadChapter(this.state.chapterIndex);
+    } else {
+      await this.buildPagination();
+      this.renderAt(keepOffset);
+    }
     this.commitPosition();
   }
 
@@ -380,6 +414,11 @@ export class ReaderViewModel {
   hideMenu(): void {
     this.state.menuVisible = false;
     this.state.tocVisible = false;
+    this.state.settingsVisible = false;
+  }
+
+  setSettingsVisible(visible: boolean): void {
+    this.state.settingsVisible = visible;
   }
 
   setTocVisible(visible: boolean): void {
