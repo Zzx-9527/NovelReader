@@ -98,6 +98,19 @@ export class AppTheme {
   static readonly TAB_BAR_HEIGHT: number = 48;
   /** 顶栏高度 */
   static readonly TOP_BAR_HEIGHT: number = 52;
+  /**
+   * 阅读页**常驻**底栏的**文字区**高度（左章节名 / 右进度）。
+   *
+   * ⚠️ 不含底部安全区 —— 手势条那部分由**实测值**（`safeAreaBottom`）动态叠加：
+   * 底栏总高 = `READER_FOOTER_HEIGHT + safeAreaBottom`（见 `ReaderPage.footerTotalHeight()`）。
+   * 把安全区写死在这里是不行的：各机型手势条高度不同（有的还没有）。
+   *
+   * 这个值必须被**两处**同时使用，且含义一致：
+   *   1. 底栏自身的文字区高度；
+   *   2. 菜单栏整体上移的量（否则菜单栏会压住常驻栏）。
+   * 两处不一致就会重叠或留缝 —— 所以只留这一个常量，别处不要再写数字。
+   */
+  static readonly READER_FOOTER_HEIGHT: number = 30;
   /** 启动页最少停留时长（避免一闪而过） */
   static readonly SPLASH_MIN_MS: number = 450;
   /** 启动页硬超时（预热挂住也要跳走） */
@@ -127,7 +140,17 @@ export class ReaderTheme {
   bg: string = '#FFFFFF';
   text: string = '#1A1A1A';
   secondary: string = '#888888';
-  /** 顶栏/底栏浮层背景（半透明，让正文若隐若现） */
+  /**
+   * 半透明底色（alpha `F2`）。
+   *
+   * ⚠️ **不要用它做任何"浮层栏"的背景**（顶栏/菜单底栏/设置面板/常驻底栏）——
+   * 这些栏弹出时下方压着正文，半透明会让正文文字透出来，看起来像渲染错误。
+   * 它们统一用**不透明**的 `bg`（本项目实测踩过：顶栏半透明、底栏不透明，
+   * 屏幕上出现"上面透、下面不透"的割裂感）。
+   *
+   * 现在仅用于**不透明容器内部**的小色块（如设置面板里未选中的字号胶囊），
+   * 那里下方是纯色面板、不存在文字透出的问题。
+   */
   barBg: string = '#F2FFFFFF';
 
   static of(theme: string): ReaderTheme {

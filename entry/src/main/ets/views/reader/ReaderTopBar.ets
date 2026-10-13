@@ -40,7 +40,16 @@ export struct ReaderTopBar {
     }
     .width('100%')
     .height(52)
-    .backgroundColor(this.theme.barBg)
+    /**
+     * ⚠️ 背景必须**不透明**（`theme.bg`，不用半透明的 `theme.barBg`）。
+     *
+     * 顶栏弹出时下方压着正文，半透明会让正文文字从它后面透出来
+     * （实测：标题上叠着正文的"修"字，看起来像渲染错误）。
+     *
+     * 全 app 的阅读页浮层统一用不透明底色：顶栏、菜单底栏、设置面板、常驻底栏
+     * 四者一致，不会出现"上面透、下面不透"的割裂感。
+     */
+    .backgroundColor(this.theme.bg)
     .alignItems(VerticalAlign.Center)
   }
 }

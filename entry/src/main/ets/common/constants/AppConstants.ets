@@ -107,6 +107,23 @@ export class AppConstants {
   static readonly MAX_LINE_HEIGHT: number = 2.4;
   /** 段间距上限（单位：行） */
   static readonly MAX_PARAGRAPH_SPACING: number = 2.0;
+  /**
+   * 字间距范围（vp）。
+   *
+   * 上限取 6：再大就不成句子了。注意它**直接参与**每行字数计算
+   * （`PaginationService.charWidth = fontSize × 0.92 + letterSpacing`），
+   * 调大后每行放的字明显变少，分页会跟着重算 —— 这是预期行为。
+   */
+  static readonly MIN_LETTER_SPACING: number = 0;
+  static readonly MAX_LETTER_SPACING: number = 6;
+  /**
+   * 左右页边距范围（vp）。
+   *
+   * 上限 48 是"内容区不至于窄到一行只放几个字"的经验值；
+   * 它同时影响分页的可用宽度，渲染端也用同一个值做 padding。
+   */
+  static readonly MIN_PAGE_MARGIN: number = 0;
+  static readonly MAX_PAGE_MARGIN: number = 48;
 }
 
 /** 日志 tag，便于按模块过滤 */

@@ -52,6 +52,14 @@ struct SplashPage {
   /** 跳转彻底失败（含重试用尽）时显示错误态，而不是一个永远转的圈 */
   @State failed: boolean = false;
 
+  /**
+   * 安全区高度（vp），由 `EntryAbility` 测好后放进 `AppStorage`。
+   * 整个 app 沉浸式全屏，本页也要让出上下两条，
+   * 否则品牌区会与状态栏/手势条挤在一起。
+   */
+  @StorageProp('safeAreaTop') safeAreaTop: number = 0;
+  @StorageProp('safeAreaBottom') safeAreaBottom: number = 0;
+
   /** 已发起跳转：预热回调与超时定时器可能同时到达，用它做去重 */
   private leaving: boolean = false;
   /** 页面已销毁：此后落地的定时器一律空转，不再碰路由 */
@@ -194,8 +202,24 @@ struct SplashPage {
     }
     .width('100%')
     .height('100%')
-    .padding(AppTheme.PAGE_PADDING)
+    // 让出上下安全区：品牌区与加载圈都落在状态栏/手势条之间，
+    // 背景色仍铺满全屏（沉浸式），不会露出系统色边
+    .padding({
+      left: AppTheme.PAGE_PADDING,
+      right: AppTheme.PAGE_PADDING,
+      top: this.safeAreaTop + AppTheme.PAGE_PADDING,
+      bottom: this.safeAreaBottom
+    })
     // ⚠️ 必须是 splash_bg：与 module.json5 的 startWindowBackground 同一令牌
     .backgroundColor(AppColor.splashBg)
+    /**
+     * 让整页**铺满屏幕**（含状态栏与手势条区域）—— 沉浸式的基础。
+     *
+     * ⚠️ 与上面的 `padding` 分工不同，两者缺一不可：
+     *  - `expandSafeArea` 决定**绘制范围** → 背景铺到屏幕最边缘，与
+     *    系统启动窗口的 `startWindowBackground` 无缝相接（否则会闪一条色边）；
+     *  - `padding` 决定**内容范围** → 品牌区/加载圈不钻到状态栏、手势条下面。
+     */
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }

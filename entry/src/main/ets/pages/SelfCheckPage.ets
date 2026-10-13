@@ -23,7 +23,7 @@ import { ChapterParser, ParseResult, ParsedChapter } from '../common/utils/Chapt
 import { ByteLength } from '../common/utils/ByteLength';
 import { Logger } from '../common/utils/Logger';
 import { StorageBootstrap } from '../common/StorageBootstrap';
-import { AppTheme } from '../common/theme/AppTheme';
+import { AppColor, AppTheme } from '../common/theme/AppTheme';
 import { DbConstants } from '../common/constants/DbConstants';
 import { SettingsKeys } from '../common/constants/SettingsKeys';
 import { AppConstants } from '../common/constants/AppConstants';
@@ -105,6 +105,10 @@ struct SelfCheckPage {
   @State running: boolean = false;
   @State summary: string = '正在自检…';
 
+  /** 安全区高度（vp），由 `EntryAbility` 测好后放进 `AppStorage`（沉浸式全屏配套） */
+  @StorageProp('safeAreaTop') safeAreaTop: number = 0;
+  @StorageProp('safeAreaBottom') safeAreaBottom: number = 0;
+
   aboutToAppear(): void {
     this.runAll();
   }
@@ -162,9 +166,26 @@ struct SelfCheckPage {
           this.runAll();
         })
     }
-    .padding(16)
     .width('100%')
     .height('100%')
+    /**
+     * 让出上下安全区：本页虽是开发用，但窗口全屏是**全局**的，
+     * 不让位标题会被状态栏盖住、按钮会压在手势条上。
+     * 在 16 的基础内边距上再叠加安全区高度。
+     */
+    .padding({
+      left: 16,
+      right: 16,
+      top: this.safeAreaTop + 16,
+      bottom: this.safeAreaBottom + 16
+    })
+    /**
+     * ⚠️ 必须给背景色：沉浸式全屏后，安全区那两条由页面自己负责填色。
+     * 不设背景就会露出窗口默认色（通常是白或黑），与页面内容不搭。
+     */
+    .backgroundColor(AppColor.bgPage)
+    // 让绘制范围铺满全屏（沉浸式）：与 padding 分工不同，见 Index.ets 的说明
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   private addCheck(name: string, ok: boolean, detail: string): void {

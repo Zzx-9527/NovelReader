@@ -1,17 +1,20 @@
 import { AppTheme, ReaderTheme } from '../../common/theme/AppTheme';
 
 /**
- * 阅读页底部进度栏。
+ * 阅读页**菜单底栏**（点屏幕中间才出现，负责"操作"）。
  *
  * 版面（从上到下）：
  * ```
- * 章节名 ............................... 3/12  42.3%   ← 左=在哪一章，右=全书进度
+ *                                                     设置
  * [上一章] ============进度条============ [下一章]
  * ```
- * 章节名与百分比必须在**这里常驻**：顶栏的章节名只在菜单弹出时可见，
- * 而"读到第几章了、全书读了百分之多少"是阅读中随时想知道的。
  *
- * ⚠️ 几个展示值必须用 `@Prop`：普通成员只在组件**创建时**取一次快照，
+ * ⚠️ 本栏**只放操作**，不放任何"告知类"信息 ——
+ * 章节名、页码、全书百分比全部由阅读页的**常驻底栏**
+ * （`ReaderPage.buildReaderFooter`）承担，它永远可见。
+ * 本栏只在呼出菜单时出现，重复显示同一份信息毫无意义、还挤占操作空间。
+ *
+ * ⚠️ 展示值必须用 `@Prop`：普通成员只在组件**创建时**取一次快照，
  * 父组件后续的状态变化不会同步进来 —— 表现为"拖动进度条后数字又弹回去"。
  *
  * 拖动过程中只更新本地状态（draggingPercent），松手才真正跳章（SliderChangeMode.End），
@@ -24,12 +27,16 @@ export struct ReaderBottomBar {
   @Prop baseFontSize: number = 18;
   /** 0~1 */
   @Prop percent: number = 0;
-  @Prop chapterTitle: string = '';
-  /** 页码文案，如 "3/12"；scroll 模式传空串 */
-  @Prop pageText: string = '';
   /** 是否还有上一章 / 下一章：首末章时把按钮置灰 */
   @Prop hasPrev: boolean = false;
   @Prop hasNext: boolean = false;
+  /**
+   * 底部安全区（手势条）高度，vp。
+   *
+   * ⚠️ 本栏要盖住常驻底栏、铺到屏幕最底边，所以必须自己把这一段也涂上色；
+   * 由父组件传入（它从 `AppStorage` 拿得到，本组件拿不到）。
+   */
+  @Prop safeAreaBottom: number = 0;
   onJump?: (percent: number) => void;
   onPrevChapter?: () => void;
   onNextChapter?: () => void;
@@ -48,26 +55,19 @@ export struct ReaderBottomBar {
 
   build() {
     Column({ space: 6 }) {
-      // 左：读到哪一章；右：整本书的进度
+      /**
+       * 第一行：只有"设置"。
+       *
+       * ⚠️ 这里**既不显示章节名/百分比，也不显示页码** —— 它们全都由阅读页的
+       * **常驻底栏**（`ReaderPage.buildReaderFooter`）承担了：
+       * 左=章节名，右=`页码 百分比`。本栏只在呼出菜单时出现，
+       * 重复显示同一份信息没有意义，还挤占操作空间。
+       *
+       * 于是本栏的职责很纯粹：**只放操作**（设置 / 进度条 / 上下章）。
+       */
       Row({ space: 8 }) {
-        Text(this.chapterTitle)
-          .fontSize(this.fontSize())
-          .fontColor(this.theme.secondary)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-        if (this.pageText.length > 0) {
-          Text(this.pageText)
-            .fontSize(this.fontSize())
-            .fontColor(this.theme.secondary)
-        }
-        Text(`${(this.displayPercent() * 100).toFixed(1)}%`)
-          .fontSize(this.fontSize())
-          .fontColor(this.theme.secondary)
+        Blank()
 
-        // 设置入口放在这一行，而不是第二行进度条两端：
-        // 那两个位置已经被上一章/下一章占了（相邻章切换是高频动作），
-        // 再挤进去会让进度条短得没法拖。
         Text('设置')
           .fontSize(this.fontSize())
           .fontColor(this.theme.text)
@@ -133,7 +133,26 @@ export struct ReaderBottomBar {
       .width('100%')
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 8, bottom: 12 })
-    .backgroundColor(this.theme.barBg)
+    /**
+     * 左右与顶部留常规内边距；**底部额外叠加安全区高度**。
+     *
+     * ⚠️ 本栏要**盖住**常驻底栏（从屏幕底部升起），所以它必须自己把
+     * 手势条那一段也涂上色。否则它下方会露出常驻底栏或页面底色，
+     * 看起来像"菜单栏没铺到底"。
+     */
+    .padding({
+      left: 16,
+      right: 16,
+      top: 8,
+      bottom: 12 + Math.max(0, this.safeAreaBottom)
+    })
+    /**
+     * ⚠️ 背景必须**不透明**：本栏是覆盖在正文与常驻底栏之上的，
+     * 用半透明的 `theme.barBg` 会让下层文字透出来（实测观感很乱）。
+     *
+     * 这也与本栏的定位一致 —— 它是"从底部升起的操作面板"，
+     * 而不是"浮在正文上的轻量工具条"。顶栏仍可用半透明（它只压住一行标题）。
+     */
+    .backgroundColor(this.theme.bg)
   }
 }

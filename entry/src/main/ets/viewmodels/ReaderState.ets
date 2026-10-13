@@ -26,6 +26,18 @@ export class ReaderState {
 
   /** 实际渲染的文本：scroll 模式为整章，page 模式为当前页 */
   renderedText: string = '';
+  /**
+   * 本页是否从**段落中间**开始（即上一页把这一段切开了）。
+   *
+   * ⚠️ 它决定首行缩进怎么画：
+   * 段落的第一行在上一页已经缩进过了，本页开头那一行是**续行**，
+   * 再缩进就会让读者误以为"这里新起了一段"。
+   *
+   * `Text.textIndent` 是按 `\n` 对**每一段第一行**生效的，
+   * 没法只对"本页第一行"关闭 —— 所以续排时整页关掉缩进，
+   * 再由 `renderAt` 往**本页内真正的段首行**手工补缩进字符（见 `renderedText` 的构造）。
+   */
+  pageStartsMidParagraph: boolean = false;
 
   /** 章内 UTF-16 偏移（= 当前页起始偏移） */
   offset: number = 0;

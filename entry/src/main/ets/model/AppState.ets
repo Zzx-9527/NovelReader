@@ -19,6 +19,17 @@ export class AppStateKey {
   static readonly CURRENT_BOOK_ID: string = 'currentBookId';
   /** 全局阅读设置是否已加载完成 */
   static readonly SETTINGS_READY: string = 'settingsReady';
+  /**
+   * 顶部安全区（状态栏）高度，单位 **vp**。
+   *
+   * 为什么放进 AppStorage：开启沉浸式全屏后，窗口内容会盖住状态栏/手势条，
+   * 各页面必须**自己**让出这段高度。而安全区高度只有 `EntryAbility`
+   * 拿得到 `Window` 才能测，页面拿不到 —— 于是测一次、全局共享。
+   * 页面用 `@StorageProp` 订阅，值到位后自动重排，不需要自己处理异步时序。
+   */
+  static readonly SAFE_AREA_TOP: string = 'safeAreaTop';
+  /** 底部安全区（手势条）高度，单位 **vp** */
+  static readonly SAFE_AREA_BOTTOM: string = 'safeAreaBottom';
 }
 
 /** 版本号自增（写操作完成后调用） */

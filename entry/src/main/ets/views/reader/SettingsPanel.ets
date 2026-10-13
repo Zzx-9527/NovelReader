@@ -44,6 +44,14 @@ export struct SettingsPanel {
   /** 当前设置快照（由阅读页持有并传进来） */
   @Prop settings: ReaderSettings = new ReaderSettings();
   theme: ReaderTheme = new ReaderTheme();
+  /**
+   * 底部安全区（手势条）高度，vp。
+   *
+   * ⚠️ 本面板从屏幕底部升起、要**盖住**常驻底栏，所以得自己把
+   * 手势条那一段也涂上色；否则面板下方会露出常驻底栏或页面底色。
+   * 由父组件传入（它从 `AppStorage` 拿得到，本组件拿不到）。
+   */
+  @Prop safeAreaBottom: number = 0;
   /** 任一项变化后回调整份设置；页面负责落盘与重排 */
   onChange?: (next: ReaderSettings) => void;
   onClose?: () => void;
@@ -103,6 +111,8 @@ export struct SettingsPanel {
           this.buildLineHeightRow()
           this.buildParagraphSpacingRow()
           this.buildFirstLineIndentRow()
+          this.buildLetterSpacingRow()
+          this.buildPageMarginRow()
           this.buildPageModeRow()
           this.buildThemeRow()
         }
@@ -114,8 +124,24 @@ export struct SettingsPanel {
       .width('100%')
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 8, bottom: 12 })
-    .backgroundColor(this.theme.barBg)
+    /**
+     * 左右与顶部留常规内边距；**底部额外叠加安全区高度**。
+     *
+     * ⚠️ 本面板要**盖住**常驻底栏（从屏幕底部升起），所以它必须自己把
+     * 手势条那一段也涂上色。否则面板下方会露出常驻底栏或页面底色，
+     * 看起来像"面板没铺到底"。
+     */
+    .padding({
+      left: 16,
+      right: 16,
+      top: 8,
+      bottom: 12 + Math.max(0, this.safeAreaBottom)
+    })
+    /**
+     * ⚠️ 背景必须**不透明**（`theme.bg`，不用半透明的 `theme.barBg`）：
+     * 本面板是覆盖在正文与常驻底栏之上的，半透明会让下层文字透出来。
+     */
+    .backgroundColor(this.theme.bg)
     .borderRadius({ topLeft: AppTheme.CARD_RADIUS, topRight: AppTheme.CARD_RADIUS })
   }
 
@@ -341,6 +367,92 @@ export struct SettingsPanel {
           if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
             const next: ReaderSettings = this.derive();
             next.firstLineIndent = Math.round(value) / 10;
+            this.emit(next);
+          }
+        })
+    }
+    .width('100%')
+  }
+
+  // ------------------------------------------------------------ 字间距
+
+  /**
+   * 字间距。
+   *
+   * ⚠️ 它不只是"看着松一点"：**每行能放多少字直接由它决定**
+   * （`charWidth = fontSize × 0.92 + letterSpacing`），
+   * 调大后每行字数变少、页数变多，分页会跟着重算 —— 这是正确行为，不是 bug。
+   */
+  @Builder
+  buildLetterSpacingRow() {
+    Column({ space: AppTheme.GAP_S }) {
+      Row() {
+        Text('字间距')
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(this.theme.text)
+          .layoutWeight(1)
+        Text(`${this.settings.letterSpacing.toFixed(1)} vp`)
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.theme.secondary)
+      }
+      .width('100%')
+
+      Slider({
+        value: this.settings.letterSpacing * 10,
+        min: AppConstants.MIN_LETTER_SPACING * 10,
+        max: AppConstants.MAX_LETTER_SPACING * 10,
+        step: 5
+      })
+        .selectedColor(this.theme.text)
+        .trackColor(this.theme.secondary)
+        .width('100%')
+        .onChange((value: number, mode: SliderChangeMode) => {
+          // 与其他滑块一致：松手才提交（拖动中每帧都重排会卡）
+          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+            const next: ReaderSettings = this.derive();
+            next.letterSpacing = Math.round(value) / 10;
+            this.emit(next);
+          }
+        })
+    }
+    .width('100%')
+  }
+
+  // ------------------------------------------------------------ 页边距
+
+  /**
+   * 左右页边距。
+   *
+   * 渲染端（正文 `Text` 的 padding）与分页端（可用宽度减去 `pageMargin × 2`）
+   * **必须用同一个值**，否则每行字数会算错、页面末尾被裁。
+   */
+  @Builder
+  buildPageMarginRow() {
+    Column({ space: AppTheme.GAP_S }) {
+      Row() {
+        Text('页边距')
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(this.theme.text)
+          .layoutWeight(1)
+        Text(`${Math.round(this.settings.pageMargin)} vp`)
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.theme.secondary)
+      }
+      .width('100%')
+
+      Slider({
+        value: this.settings.pageMargin,
+        min: AppConstants.MIN_PAGE_MARGIN,
+        max: AppConstants.MAX_PAGE_MARGIN,
+        step: 2
+      })
+        .selectedColor(this.theme.text)
+        .trackColor(this.theme.secondary)
+        .width('100%')
+        .onChange((value: number, mode: SliderChangeMode) => {
+          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+            const next: ReaderSettings = this.derive();
+            next.pageMargin = value;
             this.emit(next);
           }
         })

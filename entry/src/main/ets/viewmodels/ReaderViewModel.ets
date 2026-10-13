@@ -41,6 +41,14 @@ export class ReaderViewModel {
   private contentHeight: number = 0;
   /** 第一页被章节标题占掉的高度（vp）；0 表示本章没有标题 */
   private firstPageExtraHeight: number = 0;
+  /**
+   * 文字高度测量函数（由页面注入）。
+   *
+   * 为什么由页面注入而不是 VM 自己调：测量要用 `UIContext.getMeasureUtils()`，
+   * 而 `UIContext` 只有组件（页面）能拿到。VM 保持"不碰 UI"的分层约定，
+   * 只持有一个函数引用。
+   */
+  private measure: ((segment: string, width: number) => number) | null = null;
   private lastScrollReportAt: number = 0;
   /**
    * 待恢复的章内偏移。
@@ -127,6 +135,72 @@ export class ReaderViewModel {
     this.firstPageExtraHeight = firstPageExtraHeight;
   }
 
+  /**
+   * 注入"文字高度测量"函数（由页面提供，因为它才拿得到 `UIContext`）。
+   *
+   * 页面给的应当是**原始能力**：`(文本, 可用宽度) => 高度(vp)`，
+   * 内部负责 `measureTextSize` 调用与 px→vp 换算。
+   * 本类会在其外面再包一层"**先按渲染规则装饰文本、再测量**"，
+   * 这样分页量到的高度与屏幕上真正渲染的高度一致。
+   */
+  setMeasureFn(fn: (segment: string, width: number) => number): void {
+    this.measure = fn;
+  }
+
+  /** 是否已注入测量函数（诊断用：分页走了实测还是估算） */
+  hasMeasureFn(): boolean {
+    return this.measure !== null;
+  }
+
+  /**
+   * 分页专用测量：**先按渲染规则装饰文本，再量高度**。
+   *
+   * ⚠️ 这一步不能省。渲染端在显示前会做两件事（见 `renderAt`）：
+   *   1. 剥掉页首的换行符；
+   *   2. 给页内真正的段首行补缩进字符（`indentParagraphHeads`）。
+   * 若分页只量**原始文本**，量出的高度就比实际渲染的**小** ——
+   * 分页以为还放得下，实际会溢出、末行被裁。
+   *
+   * 反过来也一样：装饰后再量，分页算的容量与渲染所见完全同源。
+   *
+   * @param startsMidParagraph 这段文字是否从段落中间开始（决定页首行要不要缩进）
+   */
+  private measureDecorated(segment: string, width: number,
+    startsMidParagraph: boolean): number {
+    if (this.measure === null) {
+      return 0;
+    }
+    const fn = this.measure;
+    // 与 renderAt 完全相同的装饰顺序：先剥页首换行，再补段首缩进
+    let prepared: string = segment;
+    let head: number = 0;
+    while (head < prepared.length && prepared.charAt(head) === '\n') {
+      head++;
+    }
+    if (head > 0) {
+      prepared = prepared.substring(head);
+    }
+    prepared = ReaderViewModel.indentParagraphHeads(
+      prepared, this.state.settings.firstLineIndent, startsMidParagraph);
+    return fn(prepared, width);
+  }
+
+  /**
+   * 用**装饰后**的文本量高度（vp），供页面自检对比。
+   *
+   * 与分页用的是同一条路径，所以它的结果与 `Text` 实测高度
+   * 应当几乎相等 —— 不等就说明渲染端与测量端的规则仍有出入。
+   */
+  measureHeight(segment: string, width: number): number {
+    // 自检对象是"当前这一页已经渲染出来的文本"，
+    // 它已经被 renderAt 装饰过了，所以这里传 false 避免二次装饰
+    if (this.measure === null) {
+      return 0;
+    }
+    const fn = this.measure;
+    return fn(segment, width);
+  }
+
   // ------------------------------------------------------------ 章节加载
 
   /**
@@ -190,9 +264,6 @@ export class ReaderViewModel {
     const cached: number[] = await PageCacheRepository.getBreaks(
       book.id, this.state.chapterIndex, this.layoutKey);
     if (cached.length > 0) {
-      // ⚠️ 命中缓存时**不会**重算 —— 如果怀疑断点是旧的（改了分页算法之后），
-      // 先看这条日志：cache=HIT 就说明现在跑的是历史结果，
-      // 必须等 layoutKey 变化（改字号/行距/容器尺寸）或清缓存才会重算。
       Logger.info(LogTag.PAGINATION,
         `分页 cache=HIT 章=${this.state.chapterIndex} 页数=${cached.length}`
           + ` key=${this.layoutKey} 首 3 断点=[${cached[0]},${cached[1]},${cached[2]}]`);
@@ -203,9 +274,30 @@ export class ReaderViewModel {
 
     this.state.repaginating = true;
     try {
-      const breaks: number[] = PaginationService.computeBreaks(
-        this.state.getFullText(), this.state.settings, this.contentWidth, this.contentHeight,
-        this.firstPageExtraHeight);
+      const fullText: string = this.state.getFullText();
+      /**
+       * 走**实测**分页：把测量函数交给分页服务，由它二分出每页装多少字。
+       *
+       * 没有测量函数时（理论上不会发生 —— 页面在 `aboutToAppear` 就会注入）
+       * 降级到估算版，保证至少能出页面。
+       */
+      let breaks: number[];
+      if (this.measure !== null) {
+        /**
+         * ⚠️ 传的是 `measureDecorated` 而不是原始测量函数：
+         * 分页必须按"**装饰后**的文本"量高度（剥页首换行 + 补段首缩进），
+         * 才能与渲染端所见一致。否则量出的高度偏小，页面会溢出。
+         */
+        breaks = PaginationService.computeBreaksMeasured(
+          fullText,
+          (seg: string, w: number, mid: boolean): number => this.measureDecorated(seg, w, mid),
+          this.contentWidth, this.contentHeight, this.firstPageExtraHeight);
+      } else {
+        Logger.warn(LogTag.PAGINATION, '未注入测量函数，降级为估算分页（页数可能不准）');
+        breaks = PaginationService.computeBreaks(
+          fullText, this.state.settings, this.contentWidth, this.contentHeight,
+          this.firstPageExtraHeight);
+      }
       this.state.breaks = breaks;
       this.state.pageCount = breaks.length;
       await PageCacheRepository.save(book.id, this.state.chapterIndex, this.layoutKey, breaks);
@@ -214,11 +306,12 @@ export class ReaderViewModel {
       const firstPageChars: number = breaks.length > 1 ? breaks[1] - breaks[0] : -1;
       Logger.info(LogTag.PAGINATION,
         `分页 cache=MISS 章=${this.state.chapterIndex}`
+          + ` 方式=${this.measure !== null ? '实测' : '估算'}`
           + ` 容器=${this.contentWidth.toFixed(0)}x${this.contentHeight.toFixed(0)}`
           + ` 首页让位=${this.firstPageExtraHeight.toFixed(1)}`
           + ` 字号=${this.state.settings.fontSize} 行距=${this.state.settings.lineHeight}`
           + ` 段距=${this.state.settings.paragraphSpacing}`
-          + ` 总字数=${this.state.getFullText().length}`
+          + ` 总字数=${fullText.length}`
           + ` 页数=${breaks.length} 首页字数=${firstPageChars}`);
     } finally {
       this.state.repaginating = false;
@@ -236,7 +329,10 @@ export class ReaderViewModel {
       this.state.offset = clamped;
       this.state.pageIndex = 0;
       this.state.pageCount = 1;
-      this.state.renderedText = text;
+      // 滚动模式整章一次渲染：没有"续排页"概念，第一行永远该按段首处理
+      this.state.pageStartsMidParagraph = false;
+      this.state.renderedText = ReaderViewModel.indentParagraphHeads(
+        text, this.state.settings.firstLineIndent, false);
       return;
     }
 
@@ -247,7 +343,129 @@ export class ReaderViewModel {
       : text.length;
     this.state.pageIndex = pageIndex;
     this.state.offset = start;
-    this.state.renderedText = text.substring(start, end);
+
+    // 本页是否从段落中间开始：起始位置不是章首、且前一个字符不是换行
+    const midParagraph: boolean = start > 0 && text.charAt(start - 1) !== '\n';
+    this.state.pageStartsMidParagraph = midParagraph;
+    /**
+     * **一律**由 `indentParagraphHeads` 手工补段首缩进，`Text.textIndent` 恒为 0。
+     *
+     * 为什么不再交给 `textIndent`（这是本轮的关键简化）：
+     * `textIndent` 是**全局按 `\n`** 生效的，它无法区分下面这些行 ——
+     *   1. 页首的**续行**（上一段没写完的部分）→ 不该缩进；
+     *   2. 原文**自带** `　　` 的段首 → 再缩就是 4 格
+     *      （表现是"同一页里有些段缩进正常、有些特别大"，本项目实测过）；
+     *   3. 真正的段首 → 该缩进。
+     * 而 `indentParagraphHeads` 是**逐行**判断的，三种情况一次全对：
+     * 跳空行、跳本页第一行（续行）、跳已带前导空白的行，其余补缩进。
+     *
+     * 代价：每页多一次字符串拼接（几百字符），可忽略。
+     */
+    /**
+     * ⚠️ 兜底：本页文本**开头的换行符**要剥掉。
+     *
+     * `computeBreaksMeasured` 已经在页边界跳过换行符了，
+     * 这里再兜一次是因为**旧的缓存断点**（`layoutKey` 未变时命中）
+     * 可能仍带着"页首是 `\n`"的切法 —— 那会渲染成
+     * **页面顶部凭空多一个空行**（用户反馈的"有时候顶部空了一行"）。
+     * 剥掉它，无论断点怎么来的，页首都不会是空白。
+     */
+    let pageText: string = text.substring(start, end);
+    let trimHead: number = 0;
+    while (trimHead < pageText.length && pageText.charAt(trimHead) === '\n') {
+      trimHead++;
+    }
+    if (trimHead > 0) {
+      pageText = pageText.substring(trimHead);
+    }
+    this.state.renderedText = ReaderViewModel.indentParagraphHeads(
+      pageText, this.state.settings.firstLineIndent, midParagraph);
+  }
+
+  /**
+   * 给页内**真正的段首行**补上缩进字符（仅用于渲染）。
+   *
+   * 为什么不交给 `Text.textIndent`：它是**全局按 `\n`** 生效的，
+   * 无法区分"续行"和"段首"，也无法知道原文是否已经自带缩进。
+   * 逐行判断才能一次覆盖全部情况：
+   *   - 空行 → 不补；
+   *   - 本页第一行且本页是**续排**（上一段没写完）→ 不补；
+   *   - 本行已带前导空白（原文自带 `　　`）→ 不补，保持原文；
+   *   - 其余（真正的段首）→ 补 `firstLineIndent` 个全角空格。
+   *
+   * @param startsMidParagraph 本页是否从段落中间开始（见 `ReaderState`）
+   *
+   * ⚠️ 这是在**渲染副本**上做替换，绝不能用它回填 `fullText` ——
+   * 字符偏移必须始终以原文为准（进度、分页、将来的书签都依赖它）。
+   */
+  private static indentParagraphHeads(pageText: string, indentChars: number,
+    startsMidParagraph: boolean): string {
+    if (indentChars <= 0 || pageText.length === 0) {
+      return pageText;
+    }
+    // 用全角空格拼缩进；不用 String.repeat，避免不同版本的行为差异
+    const indentCount: number = Math.max(1, Math.round(indentChars));
+    let pad: string = '';
+    for (let i = 0; i < indentCount; i++) {
+      pad += '　';
+    }
+    let out: string = '';
+    let lineStart: number = 0;
+    while (lineStart <= pageText.length) {
+      const nl: number = pageText.indexOf('\n', lineStart);
+      const isLast: boolean = nl < 0;
+      const lineEnd: number = isLast ? pageText.length : nl;
+      const line: string = pageText.substring(lineStart, lineEnd);
+      const isFirstLine: boolean = lineStart === 0;
+      const isBlank: boolean = ReaderViewModel.isBlankLine(line);
+      /**
+       * 三个"不补"条件，都来自实测踩坑：
+       *
+       * 1. **本页第一行若是续行，不补**。
+       *    本页从段落中间开始时，第一行是上一段没写完的部分 ——
+       *    再缩进会让读者误以为"这里新起了一段"。
+       *    （若本页恰好从段首开始，`startsMidParagraph` 为 false，
+       *     第一行就该缩进，不会被这里跳过。）
+       *
+       * 2. **本行已带前导空白就不补**。
+       *    这本 TXT 部分段落自带 `　　`（全角空格）缩进，
+       *    无条件再补一次就是 4 格 —— 表现是"同一页里
+       *    有些段缩进正常、有些特别大"。
+       *
+       * 3. **空行不补**。而且判空**不能用 `trim()`**：
+       *    它不认全角空格 `U+3000`，而这本书的"空行"恰好就是全角空格，
+       *    用 `trim()` 会把空行当正文行、补上缩进。
+       */
+      const skipFirst: boolean = isFirstLine && startsMidParagraph;
+      const hasLeadingSpace: boolean = line.length > 0
+        && ReaderViewModel.isSpaceChar(line.charCodeAt(0));
+      const shouldIndent: boolean = !isBlank && !skipFirst && !hasLeadingSpace;
+      out += shouldIndent ? pad + line : line;
+      if (isLast) {
+        break;
+      }
+      out += '\n';
+      lineStart = nl + 1;
+    }
+    return out;
+  }
+
+  /** 单个字符是不是空白（含全角空格等 `trim()` 不认的空白） */
+  private static isSpaceChar(c: number): boolean {
+    return c === 0x20 || c === 0x09 || c === 0x0D || c === 0x0A
+      || c === 0x3000 || c === 0x00A0 || c === 0x2007 || c === 0x202F
+      || (c >= 0x2000 && c <= 0x200A)
+      || c === 0x200B || c === 0xFEFF;
+  }
+
+  /** 整行是否为空白行（判据与 `PaginationService.isBlankLine` 保持一致） */
+  private static isBlankLine(line: string): boolean {
+    for (let i = 0; i < line.length; i++) {
+      if (!ReaderViewModel.isSpaceChar(line.charCodeAt(i))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** 整章全局进度：章内页比例 + 章节在书中的比例 */
