@@ -1,15 +1,15 @@
 import { BusinessError } from '@kit.BasicServicesKit';
-import { ReaderState } from '../viewmodels/ReaderState';
+import { ReaderState, BookmarkToggleResult } from '../viewmodels/ReaderState';
 import { ReaderViewModel } from '../viewmodels/ReaderViewModel';
-import { RouteParam } from '../model/RouteParam';
-import { AppColor, AppTheme, ReaderTheme } from '../common/theme/AppTheme';
+import { ReaderJump, ReaderJumpRegistry } from '../viewmodels/ReaderJumpRegistry';
+import { RouteName, RouteParam } from '../model/RouteParam';
+import { AppTheme, ReaderTheme } from '../common/theme/AppTheme';
 import { Logger } from '../common/utils/Logger';
 import { AppConstants, LogTag } from '../common/constants/AppConstants';
 import { LoadingView } from '../views/common/LoadingView';
 import { ErrorView } from '../views/common/ErrorView';
 import { ReaderTopBar } from '../views/reader/ReaderTopBar';
 import { ReaderBottomBar } from '../views/reader/ReaderBottomBar';
-import { TocDrawer } from '../views/reader/TocDrawer';
 import { SettingsPanel } from '../views/reader/SettingsPanel';
 import { ReaderSettings } from '../model/ReaderSettings';
 
@@ -121,12 +121,85 @@ struct ReaderPage {
     });
   }
 
+  /**
+   * 离开本页（跳去目录页、或 App 切后台）时立即结算阅读时长并落盘。
+   *
+   * ⚠️ 与 `aboutToDisappear` 的分工不同，两者都要留：
+   *  - `onPageHide`：页面**还在栈里**（pushUrl 去目录页），此时不能 dispose
+   *    （回来还要继续读），但要把进度结算落库 —— 否则用户在目录页时
+   *    被系统回收，这一段阅读进度就丢了；
+   *  - `aboutToDisappear`：页面**被销毁**（返回书架），必须 dispose 释放文件句柄。
+   *
+   * ⚠️ 调 `flush(true)` 而不是什么都不做，还解决了"计时穿帮"：
+   * `ProgressService` 是按"上次结算时刻 → 现在"累计时长的，
+   * 若离开时不停表，用户在目录页停留的几分钟会被算进**阅读时长**。
+   * `flush` 内部会把计时起点重置到现在，等于在这里停了表。
+   */
+  onPageHide(): void {
+    this.vm.onBackground().catch((e: BusinessError) => {
+      Logger.error(LogTag.READ, `离开阅读页落盘失败: ${e.message}`);
+    });
+  }
+
   aboutToDisappear(): void {
     // 必须释放：结算阅读时长 + 关闭文件句柄
     this.vm.close().then(() => {
       this.vm.dispose();
     }).catch(() => {
       this.vm.dispose();
+    });
+  }
+
+  /**
+   * 从目录页返回时触发：取出"待跳章"请求并执行。
+   *
+   * ⚠️ 为什么用 `onPageShow` + 登记表，而不是路由回传参数：
+   * 见 `ReaderJumpRegistry` 的说明（`back(index, params)` 的下标脆弱，
+   * `back({url, params})` 不承诺把 params 交给目标页）。
+   *
+   * ⚠️ `consume()` 是**取走即清空**的：`onPageShow` 也会在"App 从后台回来"
+   * 时触发，若不清空，用户切个后台再回来就会莫名又跳一次。
+   */
+  onPageShow(): void {
+    const jump: ReaderJump | null = ReaderJumpRegistry.consume();
+    if (jump === null) {
+      return;
+    }
+    // -1 表示"未指定偏移" → 落到章首。
+    // ⚠️ 不能把 -1 直接传给 switchChapter：那里 -1 的含义是"定位到章末"。
+    const toOffset: number = jump.offset < 0 ? 0 : jump.offset;
+    this.vm.switchChapter(jump.chapterIndex, toOffset).catch((e: BusinessError) => {
+      Logger.error(LogTag.READ, `跳章失败: ${e.message}`);
+    });
+  }
+
+  /** 打开目录页（独立页面，push 进去；选章结果由 `ReaderJumpRegistry` 带回） */
+  private openCatalog(): void {
+    const param = new RouteParam();
+    param.bookId = this.state.book !== null ? this.state.book.id : 0;
+    // 传当前章进去，目录页打开时才能自动滚到当前位置
+    param.chapterIndex = this.state.chapterIndex;
+    this.getUIContext().getRouter().pushUrl({
+      url: RouteName.READER_CATALOG_PAGE,
+      params: param
+    }).catch((e: BusinessError) => {
+      Logger.error(LogTag.READ, `打开目录页失败: ${e.message}`);
+    });
+  }
+
+  /** 在当前位置切换书签，并给出明确反馈 */
+  private addBookmarkHere(): void {
+    this.vm.toggleBookmark().then((result: BookmarkToggleResult) => {
+      if (!result.ok) {
+        // ⚠️ 失败必须单独提示：否则会和"成功取消"一样显示"已取消书签"，属于错误反馈
+        this.getUIContext().getPromptAction().showToast({ message: '书签操作失败' });
+        return;
+      }
+      this.getUIContext().getPromptAction().showToast({
+        message: result.added ? '已添加书签' : '已取消书签'
+      });
+    }).catch((e: BusinessError) => {
+      Logger.error(LogTag.READ, `切换书签失败: ${e.message}`);
     });
   }
 
@@ -270,11 +343,13 @@ struct ReaderPage {
             onBack: () => {
               this.goBack();
             },
+            onBookmark: () => {
+              this.addBookmarkHere();
+            },
             onMenu: () => {
-              // 先收起设置面板再开目录：两层浮层叠着时，
-              // 谁盖谁完全取决于 Stack 顺序，用户只会觉得"点了没反应"
-              this.vm.setSettingsVisible(false);
-              this.vm.setTocVisible(true);
+              // 目录已是**独立页面**（不再是浮层），所以这里不用先收设置面板 ——
+              // 页面跳转会把整个阅读页盖住，没有"两层浮层叠着"的问题了。
+              this.openCatalog();
             }
           })
           /**
@@ -407,33 +482,6 @@ struct ReaderPage {
          * 顶部留出安全区，是为了让上面的关闭热区不被状态栏干扰。
          */
         .padding({ top: this.safeAreaTop })
-      }
-
-      // 第 5 层：目录抽屉（最顶，带遮罩）
-      if (this.state.tocVisible) {
-        Row() {
-          TocDrawer({
-            chapters: this.state.chapters,
-            currentIndex: this.state.chapterIndex,
-            theme: this.theme(),
-            onSelect: (chapterIndex: number) => {
-              this.vm.setTocVisible(false);
-              this.vm.jumpToChapter(chapterIndex);
-            },
-            onClose: () => {
-              this.vm.setTocVisible(false);
-            }
-          })
-          Blank()
-        }
-        .width('100%')
-        .height('100%')
-        /**
-         * ⚠️ 顶部让出安全区：抽屉顶部是"目录（N 章）/关闭"那一行，
-         * 不让位会被状态栏盖住，"关闭"就点不到了。
-         */
-        .padding({ top: this.safeAreaTop })
-        .backgroundColor(AppColor.mask)
       }
     }
     .width('100%')

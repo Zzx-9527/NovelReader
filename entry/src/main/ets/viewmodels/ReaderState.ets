@@ -46,7 +46,6 @@ export class ReaderState {
 
   /** 顶栏/底栏是否显示，单击中间切换 */
   menuVisible: boolean = false;
-  tocVisible: boolean = false;
   /**
    * 阅读设置面板是否显示。
    *
@@ -88,6 +87,39 @@ export class ReaderState {
 
   getFullText(): string {
     return this.fullText;
+  }
+}
+
+/**
+ * 书签切换结果。
+ *
+ * ⚠️ 为什么要 `ok` 和 `added` 两个字段，而不是直接返回一个 boolean：
+ * "操作失败"与"成功取消了书签"都对应"当前没有书签"，
+ * 用一个 boolean 表示会让页面在**失败时也提示"已取消书签"** —— 那是错的反馈。
+ * 拆成两个字段，页面才能给出准确文案。
+ */
+export class BookmarkToggleResult {
+  /** 操作本身是否成功（查库/写库没抛错） */
+  ok: boolean = false;
+  /** 成功时：是否处于"已加书签"状态 */
+  added: boolean = false;
+
+  static addedNow(): BookmarkToggleResult {
+    const r = new BookmarkToggleResult();
+    r.ok = true;
+    r.added = true;
+    return r;
+  }
+
+  static removed(): BookmarkToggleResult {
+    const r = new BookmarkToggleResult();
+    r.ok = true;
+    r.added = false;
+    return r;
+  }
+
+  static failed(): BookmarkToggleResult {
+    return new BookmarkToggleResult();
   }
 }
 

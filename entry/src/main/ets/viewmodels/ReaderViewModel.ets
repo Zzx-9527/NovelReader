@@ -1,13 +1,15 @@
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Book } from '../model/Book';
 import { Chapter } from '../model/Chapter';
+import { Annotation } from '../model/Annotation';
 import { ReadingPosition } from '../model/ReadingPosition';
 import { ReaderSettings } from '../model/ReaderSettings';
 import { PageCache } from '../model/PageCache';
-import { ReaderState } from './ReaderState';
+import { ReaderState, BookmarkToggleResult } from './ReaderState';
 import { AppState } from '../model/AppState';
 import { BookRepository } from '../data/repository/BookRepository';
 import { ChapterRepository } from '../data/repository/ChapterRepository';
+import { AnnotationRepository } from '../data/repository/AnnotationRepository';
 import { PageCacheRepository } from '../data/repository/PageCacheRepository';
 import { SettingsService } from '../data/service/SettingsService';
 import { ChapterReadService } from '../data/service/ChapterReadService';
@@ -631,7 +633,6 @@ export class ReaderViewModel {
 
   hideMenu(): void {
     this.state.menuVisible = false;
-    this.state.tocVisible = false;
     this.state.settingsVisible = false;
   }
 
@@ -639,8 +640,61 @@ export class ReaderViewModel {
     this.state.settingsVisible = visible;
   }
 
-  setTocVisible(visible: boolean): void {
-    this.state.tocVisible = visible;
+  // ------------------------------------------------------------ 书签
+
+  /**
+   * 在**当前位置**切换书签。
+   *
+   * 位置 = 当前章序号 + 当前页起始偏移（`state.offset`）。
+   * 若该位置已有书签则删除（软删），否则新增 —— 这样连点两下就是"加了又取消"，
+   * 不会攒出重复书签。
+   *
+   * ⚠️ 为什么放在 ViewModel 而不是页面：`bookId` 与 `state.offset` 都在这里，
+   * 页面拿不到 `bookId`（它只从路由参数读一次就丢了）。
+   *
+   * ⚠️ 返回 `BookmarkToggleResult` 而不是 boolean：见该类型的说明 ——
+   * "失败"和"成功取消"都会表现为"当前没书签"，用一个 boolean 会让页面提示错。
+   */
+  async toggleBookmark(): Promise<BookmarkToggleResult> {
+    if (this.bookId <= 0 || this.state.chapterIndex < 0) {
+      return BookmarkToggleResult.failed();
+    }
+    const chapterIndex: number = this.state.chapterIndex;
+    const offset: number = this.state.offset;
+    try {
+      const existing: Annotation | null = await this.findBookmarkAt(chapterIndex, offset);
+      if (existing !== null) {
+        await AnnotationRepository.softDelete(existing.id);
+        return BookmarkToggleResult.removed();
+      }
+      const id: number = await AnnotationRepository.addBookmark(this.bookId, chapterIndex, offset);
+      if (id <= 0) {
+        // 章节行不存在时会返回 0（见 addBookmark 的说明），此时没有书签可谈
+        return BookmarkToggleResult.failed();
+      }
+      return BookmarkToggleResult.addedNow();
+    } catch (e) {
+      Logger.error(LogTag.READ, `切换书签失败: ${Logger.errText(e as Object)}`);
+      return BookmarkToggleResult.failed();
+    }
+  }
+
+  /** 找当前章、当前偏移处是否已有书签；没有返回 null */
+  private async findBookmarkAt(chapterIndex: number, offset: number): Promise<Annotation | null> {
+    const list: Annotation[] = await AnnotationRepository.listByChapter(this.bookId, chapterIndex);
+    for (const item of list) {
+      /**
+       * ⚠️ 两个条件都不能省：
+       *  - `isBookmark()`：同一章里还可能有划线/笔记；
+       *  - `startOffset !== null`：`startOffset` 的类型是 `number | null`
+       *    （书签允许"只记章首"），先排掉 null 再比数值，避免类型含糊；
+       *  - 比对偏移：同一章里可能有**多个**书签（不同页各一个）。
+       */
+      if (item.isBookmark() && item.startOffset !== null && item.startOffset === offset) {
+        return item;
+      }
+    }
+    return null;
   }
 
   // ------------------------------------------------------------ 生命周期

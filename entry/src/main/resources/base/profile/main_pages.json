@@ -3,6 +3,7 @@
     "pages/SplashPage",
     "pages/Index",
     "pages/ReaderPage",
+    "pages/ReaderCatalogPage",
     "pages/SelfCheckPage"
   ]
 }

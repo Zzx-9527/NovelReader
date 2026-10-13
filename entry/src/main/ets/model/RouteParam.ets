@@ -24,6 +24,14 @@ export class RouteName {
   static readonly INDEX_PAGE: string = 'pages/Index';
   static readonly SHELF_PAGE: string = 'pages/Index';
   static readonly READER_PAGE: string = 'pages/ReaderPage';
+  /**
+   * 阅读页的**目录页**（目录 + 书签两个 Tab）。
+   *
+   * ⚠️ 它与阅读页是两个独立页面，用 `pushUrl` 进入。
+   * 选章结果**不走路由回传**，而是通过 `ReaderJumpRegistry` 交接 ——
+   * 原因见该文件的说明（页面栈下标脆弱、`back` 不承诺传参）。
+   */
+  static readonly READER_CATALOG_PAGE: string = 'pages/ReaderCatalogPage';
   static readonly BOOK_DETAIL_PAGE: string = 'pages/BookDetailPage';
   static readonly SETTINGS_PAGE: string = 'pages/SettingsPage';
   static readonly IMPORT_CONFIRM_PAGE: string = 'pages/ImportConfirmPage';

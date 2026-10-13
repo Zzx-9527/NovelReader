@@ -1,7 +1,16 @@
 import { Chapter } from '../../model/Chapter';
 import { AppColor, AppTheme, ReaderTheme } from '../../common/theme/AppTheme';
 
-/** 目录抽屉：章节列表 + 当前章高亮。currentIndex 需 @Prop 才能随阅读位置更新高亮。 */
+/**
+ * ⚠️ **已废弃，不要使用**（保留文件仅为避免误删历史实现）。
+ *
+ * 目录已从"浮在正文上的抽屉"改为**独立页面** `pages/ReaderCatalogPage`：
+ * 抽屉只占 78% 宽、又浮在正文之上，1000+ 章的长目录翻找时既窄又容易误触正文；
+ * 独立页面能整屏滚动，还能容纳"书签"这第二个 Tab。
+ *
+ * 当前**没有任何文件引用本组件**（`ReaderPage` 里的引用已移除）。
+ * 新代码请用 `ReaderCatalogPage`；确认无回归后可安全删除本文件。
+ */
 @Component
 export struct TocDrawer {
   chapters: Chapter[] = [];
