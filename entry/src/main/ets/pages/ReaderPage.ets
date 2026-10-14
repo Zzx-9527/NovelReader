@@ -77,6 +77,28 @@ struct ReaderPage {
   /** 自动衔接的冷却截止时间戳，见 `AppConstants.AUTO_CONTINUE_COOLDOWN_MS` */
   private autoContinueBlockedUntil: number = 0;
   /**
+   * 待恢复的**滚动位置**（章内原文偏移）；-1 表示无需恢复。
+   *
+   * ⚠️ 为什么分页模式不需要它、滚动模式却必须有：
+   * 分页模式的"翻到第几页"由 `renderAt(offset)` 直接算出并渲染，位置**立即**生效；
+   * 而滚动模式的正文是**整章一次性渲染**在一个 `Scroll` 里，`renderAt` 只能记下偏移，
+   * 真正"看到哪一行"要靠滚动容器自己滚过去。整页原先只有章末衔接用的
+   * `scrollEdge(Edge.Top)`，**没有任何 `scrollTo`** —— 于是滚动模式续读永远停在章首。
+   *
+   * ⚠️ 取 -1 作哨兵而不是 0：偏移 0 是"合法但无需滚动"的位置。
+   * 若用 0 表示"无需恢复"，就分不清"要恢复但恰好在章首"与"根本没有恢复请求"，
+   * 后者会让每次布局都白滚一次。
+   */
+  private scrollRestoreOffset: number = -1;
+  /**
+   * 本次"待恢复滚动位置"的登记时刻；0 表示没有待恢复的请求。
+   *
+   * ⚠️ 存在的唯一理由：给"挡住滚动上报"这道闸**限时**（见
+   * `isScrollRestoreBlocking`）。没有它，恢复一旦不落地，上报就被永久挡住，
+   * 表现是"滚动时进度永不更新" —— 比"位置没恢复"更糟。
+   */
+  private scrollRestoreRequestedAt: number = 0;
+  /**
    * 正文 `Text` 的控制器。
    *
    * ⚠️ 用来**主动关闭系统的选择菜单**（`closeSelectionMenu()`）：
@@ -146,6 +168,13 @@ struct ReaderPage {
    * 不需要参与 `@Observed` 变更通知（弹窗靠 `bookmarkVisible` 开关重建）。
    */
   private bookmarkDraft: BookmarkDraft = new BookmarkDraft();
+  /**
+   * 书签弹窗的当前用途：'bookmark' 或 'note'。
+   *
+   * ⚠️ 是**页面字段**而不是 `ReaderState` 的成员：它只决定"这一个弹窗怎么显示"，
+   * 属于一次交互的临时数据，与 `bookmarkDraft` 同一性质（见上面的说明）。
+   */
+  private annotationMode: string = 'bookmark';
 
   aboutToAppear(): void {
     this.state = this.vm.state;
@@ -178,7 +207,15 @@ struct ReaderPage {
         fontSize: s.fontSize,
         lineHeight: s.fontSize * s.lineHeight,
         letterSpacing: s.letterSpacing,
-        fontFamily: s.fontFamily,
+        /**
+         * ⚠️ 必须走 `resolveFontFamily` 解析，**不能**直接传 `s.fontFamily`。
+         *
+         * `s.fontFamily` 的默认值是哨兵 `'system'`（不是一个真实字体名）。
+         * 而下方三处渲染也必须用同一个解析结果 —— 只要测量与渲染的
+         * 字体名有一处不同，量出的高度就与渲染高度对不上，
+         * 表现为"溢出"或"末行被裁"（正是本次修的 bug）。
+         */
+        fontFamily: ReaderSettings.resolveFontFamily(s.fontFamily),
         textIndent: 0
       });
       // px → vp：这一步不能省，否则高度会虚高约 3 倍
@@ -196,6 +233,18 @@ struct ReaderPage {
       return;
     }
     this.vm.open(bookId).then(() => {
+      /**
+       * ⚠️ 滚动模式先登记"待恢复的滚动位置"，再走 `tryPaginate()`。
+       *
+       * 滚动模式没有分页，`tryPaginate()` 不会重排，正文也不靠它定位 ——
+       * 位置只能由 `Scroll` 自己滚过去，而滚动必须在**内容高度已知**之后
+       * （见 `onScrollContentChange`）。所以这里只是把目标偏移记下来，
+       * 真正的 `scrollTo` 由内容高度回调触发，且只做一次。
+       */
+      if (this.state.settings.pageMode === 'scroll') {
+        this.requestScrollRestore(this.state.offset);
+        this.scheduleScrollRestore();
+      }
       this.tryPaginate();
     }).catch((e: BusinessError) => {
       Logger.error(LogTag.READ, `打开阅读页失败: ${e.message}`);
@@ -249,7 +298,36 @@ struct ReaderPage {
     // -1 表示"未指定偏移" → 落到章首。
     // ⚠️ 不能把 -1 直接传给 switchChapter：那里 -1 的含义是"定位到章末"。
     const toOffset: number = jump.offset < 0 ? 0 : jump.offset;
-    this.vm.switchChapter(jump.chapterIndex, toOffset).catch((e: BusinessError) => {
+    this.vm.switchChapter(jump.chapterIndex, toOffset).then(() => {
+      /**
+       * ⚠️ 滚动模式必须在这里补一次定位。
+       *
+       * 从目录点"书签"跳回来时，`toOffset` 是章内某个偏移 —— 分页模式由
+       * `renderAt` 直接落到那一页，而滚动模式的 `switchChapter` 只会
+       * `scrollEdge(Edge.Top)`（那是给章末衔接用的），跳过去**仍停在章首**。
+       * 于是"点书签跳转"在滚动模式下等于只换章、不定位。
+       *
+       * ⚠️ **只登记目标，不在这里同步滚**。
+       *
+       * `switchChapter` 返回时新正文只是写进了 `state`，**布局还没发生** ——
+       * 此刻 `scrollTo` 会按**上一章的旧内容**做边界裁剪，滚到一个错误位置，
+       * 紧接着 `onScroll` 把它当成新章的章内偏移上报，反而把进度改坏。
+       *
+       * 实际滚动交给 `scheduleScrollRestore()` 的延迟重试与
+       * `onScrollContentChange` 两条路，由"取走即清空"保证只生效一次 ——
+       * 详见 `scheduleScrollRestore` 的说明（两条路都不完备，所以都留）。
+       */
+      if (this.state.settings.pageMode === 'scroll') {
+        if (toOffset > 0) {
+          // 指定了章内偏移（书签）：登记目标，等新内容布局完成后滚过去
+          this.requestScrollRestore(toOffset);
+          this.scheduleScrollRestore();
+        } else {
+          // 只选章（目录里点章节名）：回到章首，与分页模式的行为对齐
+          this.resetScrollAfterChapterChange();
+        }
+      }
+    }).catch((e: BusinessError) => {
       Logger.error(LogTag.READ, `跳章失败: ${e.message}`);
     });
   }
@@ -278,6 +356,16 @@ struct ReaderPage {
    */
   private doRefresh(): void {
     this.vm.refreshCurrentChapter().then(() => {
+      /**
+       * ⚠️ 滚动模式刷新后要**重新对齐到当前位置**，不能用 `resetScrollAfterChapterChange()`
+       * ——那个方法按"章首/章末"二选一，而刷新是"重排"，位置必须保住
+       * （与 `refreshCurrentChapter` 保留 `state.offset` 的意图一致）。
+       *
+       * 走"登记偏移 + 延迟生效"这条路：正文被整章重排后，旧 `y` 与新排版
+       * 已经不对应，必须按偏移重算 —— 否则残留的旧 `y` 会被 `onScroll`
+       * 换算成错误的章内偏移上报，把进度改坏。
+       */
+      this.restoreScrollToCurrentOffset();
       this.toast('已刷新');
     }).catch((e: BusinessError) => {
       Logger.error(LogTag.READ, `刷新阅读页失败: ${e.message}`);
@@ -313,8 +401,21 @@ struct ReaderPage {
         + ` 标题占位=${this.headingHeight().toFixed(1)}`
         + ` 字号=${this.state.settings.fontSize} 行距=${this.state.settings.lineHeight}`);
     this.vm.setContentSize(bodyWidth, this.pageAreaHeight, this.headingHeight());
+
+    /**
+     * ⚠️ 尺寸到位后的重排**必须走 `repaginateCurrentChapter()`**，不能直接
+     * `loadChapter()`。
+     *
+     * `loadChapter` 会消费 `restoreToOffset`（用完置 -1），而首次打开时
+     * 分页还没算过、恢复出来的章内偏移只记在 `state.offset` 上 ——
+     * 直接重载就会 `renderAt(0)`，**把刚恢复的进度推回本章第一页**。
+     * `repaginateCurrentChapter()` 会在重排前把当前偏移重新登记回该通道，
+     * 于是"首次分页"与"转屏/改字号重排"两种情况都能停在原处。
+     */
     if (this.state.settings.pageMode !== 'scroll') {
-      this.vm.loadChapter(this.state.chapterIndex);
+      this.vm.repaginateCurrentChapter().catch((e: Object) => {
+        Logger.error(LogTag.READ, `重排当前章失败: ${Logger.errText(e)}`);
+      });
     }
   }
 
@@ -478,15 +579,27 @@ struct ReaderPage {
             // 与正文背景（this.theme()）是两回事
             appDarkMode: this.appDarkMode,
             onJump: (percent: number) => {
-              this.vm.jumpToChapterByPercent(percent);
+              this.vm.jumpToChapterByPercent(percent).then(() => {
+                this.resetScrollAfterChapterChange();
+              }).catch((e: Object) => {
+                Logger.error(LogTag.READ, `进度条跳章失败: ${Logger.errText(e)}`);
+              });
             },
             // 上一章回到"上一章的最后一页"（switchChapter 内部处理），
             // 符合"往回翻"的直觉
             onPrevChapter: () => {
-              this.vm.prevChapter();
+              this.vm.prevChapter().then(() => {
+                this.resetScrollAfterChapterChange();
+              }).catch((e: Object) => {
+                Logger.error(LogTag.READ, `上一章失败: ${Logger.errText(e)}`);
+              });
             },
             onNextChapter: () => {
-              this.vm.nextChapter();
+              this.vm.nextChapter().then(() => {
+                this.resetScrollAfterChapterChange();
+              }).catch((e: Object) => {
+                Logger.error(LogTag.READ, `下一章失败: ${Logger.errText(e)}`);
+              });
             },
             onOpenCatalog: () => {
               this.openCatalog();
@@ -555,7 +668,18 @@ struct ReaderPage {
             safeAreaBottom: this.safeAreaBottom,
             onChange: (next: ReaderSettings) => {
               // 就地生效：改完立刻重排，用户能直接看着正文调
-              this.vm.updateSettings(next).catch((e: Object) => {
+              this.vm.updateSettings(next).then(() => {
+                /**
+                 * ⚠️ 改排版参数（尤其**切到滚动模式**）后必须按当前偏移重新对齐：
+                 * `updateSettings` 会重排正文，而滚动容器的偏移仍停在旧排版上。
+                 * 用户在分页模式调完字号再切到滚动模式时最明显 ——
+                 * 否则正文会停在一个与进度无关的位置，并立刻把错误偏移写进进度。
+                 *
+                 * ⚠️ 这里**不能**走 `resetScrollAfterChapterChange()`：
+                 * 改字号/行距不该改变阅读位置，回到章首或章末都是错的。
+                 */
+                this.restoreScrollToCurrentOffset();
+              }).catch((e: Object) => {
                 Logger.error(LogTag.READ, `应用阅读设置失败: ${Logger.errText(e)}`);
               });
             },
@@ -605,8 +729,19 @@ struct ReaderPage {
         BookmarkDialog({
           draft: this.bookmarkDraft,
           theme: this.theme(),
+          // 'bookmark' 或 'note'：决定标题、备注提示语与"备注是否必填"
+          mode: this.annotationMode,
           onSave: (note: string) => {
-            this.saveBookmark(note);
+            /**
+             * ⚠️ 按 `annotationMode` 分流到两个不同的保存方法：
+             * 它们写的是不同的标注类型（bookmark / note），
+             * 混在一个方法里会让"保存成功"的文案也说不清存了什么。
+             */
+            if (this.annotationMode === 'note') {
+              this.saveNote(note);
+            } else {
+              this.saveBookmark(note);
+            }
           },
           onCancel: () => {
             this.vm.setBookmarkVisible(false);
@@ -838,6 +973,8 @@ struct ReaderPage {
    */
   private buildTextEditMenu(): EditMenuOptions {
     const bookmarkId: TextMenuItemId = TextMenuItemId.of('reader_bookmark');
+    const highlightId: TextMenuItemId = TextMenuItemId.of('reader_highlight');
+    const noteId: TextMenuItemId = TextMenuItemId.of('reader_note');
     /**
      * ⚠️ 先声明成**带类型的局部变量**再返回，不直接 `return { ... }`：
      * ArkTS 的 `arkts-no-untyped-obj-literals` 要求对象字面量有明确的目标类型，
@@ -845,20 +982,20 @@ struct ReaderPage {
      */
     const options: EditMenuOptions = {
       onCreateMenu: (menuItems: Array<TextMenuItem>): Array<TextMenuItem> => {
-        const bookmark: TextMenuItem = {
-          content: '书签',
-          id: bookmarkId
-        };
         /**
-         * ⚠️ 书签放在**最前面**，不是追加到末尾。
+         * ⚠️ 三项都放在**最前面**，不是追加到末尾。
          *
          * 系统菜单项较多，追加到末尾会被折进那个 `∨` 展开箭头里 ——
          * 用户实测反馈"看不到书签"。放到首位就始终可见。
          *
-         * 代价是「复制」被挤到第二位。可接受：本 App 里"加书签"是这个
-         * 菜单的**主要**用途（见 §5.5.2），复制是系统附带的通用能力。
+         * ⚠️ 顺序按**使用频率**排：书签（最常用）→ 划线 → 笔记。
+         * 这三项是本 App 在这个菜单里的主要用途（见 §5.5.2），
+         * 复制是系统附带的通用能力，排在它们之后。
          */
-        const mine: Array<TextMenuItem> = [bookmark];
+        const bookmark: TextMenuItem = { content: '书签', id: bookmarkId };
+        const highlight: TextMenuItem = { content: '划线', id: highlightId };
+        const note: TextMenuItem = { content: '笔记', id: noteId };
+        const mine: Array<TextMenuItem> = [bookmark, highlight, note];
 
         /**
          * ⚠️ 过滤掉不需要的系统项，但**保留搜索**。
@@ -904,6 +1041,8 @@ struct ReaderPage {
 
         const id: TextMenuItemId = menuItem.id;
         const isBookmark: boolean = id.equals(bookmarkId);
+        const isHighlight: boolean = id.equals(highlightId);
+        const isNote: boolean = id.equals(noteId);
         const isCopy: boolean = id.equals(TextMenuItemId.COPY);
         /**
          * 仍然保留一点延迟：系统菜单是在自己的后续帧里收起的，
@@ -913,6 +1052,10 @@ struct ReaderPage {
         setTimeout(() => {
           if (isBookmark) {
             this.openBookmarkDialog(start, end);
+          } else if (isHighlight) {
+            this.saveHighlight(start, end);
+          } else if (isNote) {
+            this.openNoteDialog(start, end);
           } else if (isCopy) {
             this.copySelection(start, end);
           }
@@ -920,10 +1063,10 @@ struct ReaderPage {
 
         /**
          * 返回值只决定"要不要让系统继续执行它的默认行为"：
-         *  - 书签/复制是我们自己实现的 → `true` 消费掉；
+         *  - 书签/划线/笔记/复制是我们自己实现的 → `true` 消费掉；
          *  - 其余（全选等）交回系统 → `false`。
          */
-        return isBookmark || isCopy;
+        return isBookmark || isHighlight || isNote || isCopy;
       }
     };
     return options;
@@ -1030,7 +1173,42 @@ struct ReaderPage {
     const startOriginal: number = this.vm.toOriginalOffset(renderedStart);
     const endOriginal: number = this.vm.toOriginalOffset(renderedEnd);
     this.bookmarkDraft = this.vm.buildBookmarkDraft(startOriginal, endOriginal);
+    this.annotationMode = 'bookmark';
     this.vm.setBookmarkVisible(true);
+  }
+
+  /**
+   * 打开写笔记弹窗（长按选中 → 菜单「笔记」）。
+   *
+   * ⚠️ 与书签走**同一个弹窗组件**，只把 `annotationMode` 换成 'note' ——
+   * 两者要展示/收集的内容完全一样，区别只在标题与"备注是否必填"。
+   */
+  private openNoteDialog(renderedStart: number, renderedEnd: number): void {
+    const startOriginal: number = this.vm.toOriginalOffset(renderedStart);
+    const endOriginal: number = this.vm.toOriginalOffset(renderedEnd);
+    this.bookmarkDraft = this.vm.buildAnnotationDraft(startOriginal, endOriginal);
+    this.annotationMode = 'note';
+    this.vm.setBookmarkVisible(true);
+  }
+
+  /**
+   * 划线（长按选中 → 菜单「划线」）。
+   *
+   * ⚠️ 划线**不弹窗**、直接保存：它只需要"选中的区间"这一个信息，
+   * 没有任何要用户填的东西。弹一个只有"确定"的窗纯属多余步骤。
+   * 需要写想法时用户会走「笔记」。
+   *
+   * ⚠️ 失败必须提示：静默失败会让用户以为划上了，翻页回来发现没有。
+   */
+  private saveHighlight(renderedStart: number, renderedEnd: number): void {
+    const startOriginal: number = this.vm.toOriginalOffset(renderedStart);
+    const endOriginal: number = this.vm.toOriginalOffset(renderedEnd);
+    this.vm.addHighlight(startOriginal, endOriginal).then((id: number) => {
+      this.toast(id > 0 ? '已划线' : '划线失败：请选中一段文字');
+    }).catch((e: BusinessError) => {
+      Logger.error(LogTag.READ, `划线失败: ${e.message}`);
+      this.toast('划线失败');
+    });
   }
 
   /** 保存书签（弹窗点"保存"） */
@@ -1050,6 +1228,28 @@ struct ReaderPage {
       });
     }).catch((e: BusinessError) => {
       Logger.error(LogTag.READ, `保存书签失败: ${e.message}`);
+    });
+  }
+
+  /**
+   * 保存笔记（弹窗点"保存"，`annotationMode === 'note'` 时走这里）。
+   *
+   * ⚠️ 与书签**分开处理**：两者写的是不同的标注类型（bookmark / note），
+   * 用同一个 `saveBookmark` 加 if 分支会让"保存成功"的文案也混在一起。
+   */
+  private saveNote(note: string): void {
+    const draft: BookmarkDraft = this.bookmarkDraft;
+    const startOriginal: number = draft.startOffset;
+    // draft.endOffset 为 -1 表示没有具体区间（只记一个点），此时用起点兜底
+    const endOriginal: number = draft.endOffset >= 0 ? draft.endOffset : startOriginal;
+    this.vm.addNote(startOriginal, endOriginal, note).then((id: number) => {
+      this.vm.setBookmarkVisible(false);
+      this.getUIContext().getPromptAction().showToast({
+        message: id > 0 ? '已保存笔记' : '笔记保存失败'
+      });
+    }).catch((e: BusinessError) => {
+      Logger.error(LogTag.READ, `保存笔记失败: ${e.message}`);
+      this.getUIContext().getPromptAction().showToast({ message: '笔记保存失败' });
     });
   }
 
@@ -1124,6 +1324,8 @@ struct ReaderPage {
         .fontSize(this.state.settings.fontSize + AppTheme.SIZE_STEP)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.theme().text)
+        // 字体必须与分页测量同源（见 ReaderSettings.resolveFontFamily）
+        .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
         // 显式给行高：高度要可预测，分页按 headingHeight() 扣它
         .lineHeight(this.headingLineHeight())
         .maxLines(1)
@@ -1143,6 +1345,9 @@ struct ReaderPage {
           Text(this.state.renderedText, { controller: this.textController })
             .fontSize(this.state.settings.fontSize)
             .fontColor(this.theme().text)
+            // 字体与分页测量同源（见 ReaderSettings.resolveFontFamily）——
+            // 缺了这一行，分页按设置字体量、渲染却用系统字体，会溢出/裁行
+            .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
             .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
             .letterSpacing(this.state.settings.letterSpacing)
             // 同 paged 模式：缩进一律由文本承担，`textIndent` 恒为 0。
@@ -1184,6 +1389,15 @@ struct ReaderPage {
       // 量出可视高度：判断"这一章能不能滚""是否已滚到章末"都要它
       .onAreaChange((oldArea: Area, newArea: Area) => {
         this.viewportHeight = Number(newArea.height);
+        /**
+         * 视口高度也是"恢复滚动位置"的前置条件之一，所以这里同样要试一次。
+         *
+         * ⚠️ 不能只依赖 `onScrollContentChange`：那两个 `onAreaChange`
+         * （内容高度 / 视口高度）的触发顺序在框架里没有承诺，
+         * 谁先到谁后到都可能。两处都调、由 `scrollRestoreOffset`
+         * 自己保证幂等，才能不依赖顺序。
+         */
+        this.applyPendingScrollRestore();
       })
       // 单击切菜单。
       //
@@ -1206,8 +1420,14 @@ struct ReaderPage {
           this.touchDownAt = Date.now();
         }
       })
-      .onScroll((scrollOffset: number) => {
-        this.onReaderScroll(scrollOffset);
+      /**
+       * ⚠️ `onScroll` 回调的参数是**每帧增量**，不可用作绝对偏移 ——
+       * 所以这里**刻意不接收它**，`onReaderScroll` 内部改用
+       * `scroller.currentOffset()` 取绝对偏移（详见该方法说明）。
+       * 声明成无参回调就是"别用它"的显式表达，避免后来者又顺手捡起来用。
+       */
+      .onScroll(() => {
+        this.onReaderScroll();
       })
     } else {
       // 分页模式：标题只出现在本章第一页。首页让位的那一截高度
@@ -1247,6 +1467,8 @@ struct ReaderPage {
       Text(this.state.renderedText, { controller: this.textController })
         .fontSize(this.state.settings.fontSize)
         .fontColor(this.theme().text)
+        // 字体与分页测量同源（见 ReaderSettings.resolveFontFamily）
+        .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
         .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
         .letterSpacing(this.state.settings.letterSpacing)
         // ⚠️ `textIndent` **恒为 0**：段首缩进一律由 ViewModel 在
@@ -1386,14 +1608,58 @@ struct ReaderPage {
 
   /**
    * 滚动模式的每帧回调：上报阅读进度 + 判断是否该无缝衔接下一章。
+   *
+   * ⚠️ **入参 `scrollOffset` 一律不用**，绝对偏移必须取
+   * `this.scroller.currentOffset().yOffset`。
+   *
+   * 这是"滚动模式退出再进仍在章首"的**根因**（用户实测反馈）：
+   * `Scroll.onScroll` 回调给的是**每帧滚动增量**，不是当前绝对偏移 ——
+   * SDK 原文（`component/scroll.d.ts`，`ScrollOnScrollCallback`）：
+   * "Vertical offset **per frame** during scrolling"。
+   * 早期实现直接拿它当绝对偏移换算章内进度，于是每帧算出的都是
+   * 几 vp 对应的一行半行 ⇒ 存进库的偏移几乎恒为 0 ⇒ 续读永远回到章首。
+   *
+   * 判据：**同一个量只允许有一个真相来源**。本项目早已在章末判断里
+   * 用 `currentOffset()` 拿绝对偏移（见 `shouldContinueToNextChapter`），
+   * 进度上报却仍在用回调参数 —— 两处口径不一致，正是设计文档第 28 条
+   * 那类"同一件事两处实现"的坑。现在统一到 `currentOffset()`。
+   *
+   * ⚠️ **不接收 `onScroll` 的回调参数**（见调用点说明）：它是每帧增量，
+   * 不是绝对偏移。绝对偏移一律取 `this.scroller.currentOffset().yOffset`。
    */
-  private onReaderScroll(scrollOffset: number): void {
+  private onReaderScroll(): void {
+    /**
+     * ⚠️ **恢复尚未落地前，一律不上报滚动进度**。
+     *
+     * 为什么必须有这道闸（否则"恢复位置"会被自己人抹掉）：
+     * 内容刚布局好时 `Scroll` 处于 `y = 0`，框架会先触发一次 `onScroll` ——
+     * 那一次绝对偏移是 0，一旦上报就会把 `state.offset` 从"恢复出来的偏移"
+     * 覆盖成 0，并随即写进 `ProgressService`。
+     *
+     * 更糟的是 `reportScrollOffset` 有 200ms **节流**：紧接着我们
+     * `scrollTo` 到真实位置触发的那次上报会被节流丢掉 ——
+     * 于是内存与库里都停在 0，下次进来又回章首，修复等于没做。
+     *
+     * 判据：`scrollRestoreOffset >= 0` 表示"有一次恢复还没执行完"，
+     * 这期间的滚动事件都来自**恢复前的旧布局**，语义上不该被采信。
+     * 恢复落地（或放弃）后该值被清成 -1，上报自然恢复。
+     *
+     * ⚠️ 但要**限时**：若恢复因任何原因始终没能落地（例如内容高度一直为 0），
+     * 无期限地挡住上报会让"滚动时进度永不更新" —— 那是比"位置没恢复"
+     * 更严重的退化。超过时限就放弃恢复、放行上报（见 `isScrollRestoreBlocking`）。
+     */
+    if (this.isScrollRestoreBlocking()) {
+      return;
+    }
+    // 绝对偏移：与章末判断同源，唯一可信来源
+    const absoluteY: number = this.scroller.currentOffset().yOffset;
     // 用滚动量估算当前字符偏移：行高与每行字数都由字号推出
     const lineHeight: number = Math.max(1,
       this.state.settings.fontSize * this.state.settings.lineHeight);
-    const charsPerLine: number = Math.max(1,
-      Math.floor(this.contentWidth / Math.max(1, this.state.settings.fontSize)));
-    const lines: number = Math.floor(scrollOffset / lineHeight);
+    // ⚠️ 每行字数走 charsPerLineEstimate()：恢复滚动位置用的是同一个算法，
+    // 两处各写一份的话"存进去的偏移"和"滚出来的位置"会悄悄错开
+    const charsPerLine: number = this.charsPerLineEstimate();
+    const lines: number = Math.floor(absoluteY / lineHeight);
     this.vm.reportScrollOffset(lines * charsPerLine);
 
     if (this.shouldContinueToNextChapter()) {
@@ -1456,6 +1722,23 @@ struct ReaderPage {
       // 尺寸变化（旋转屏幕/改字号）需要重新分页
       this.tryPaginate();
     }
+    /**
+     * ⚠️ **这里必须补一次"恢复滚动位置"的尝试**（滚动模式续读回不到原处的根因）。
+     *
+     * `applyPendingScrollRestore()` 要求 `contentWidth > 0`（宽度未知时
+     * "每行几个字"会退化成 1，算出的 `y` 是个天文数字，会被框架夹到章末 ——
+     * 与"恢复位置"正好相反）。而 `contentWidth` **正是这里**赋值的。
+     *
+     * 它的另外两个触发点（`Scroll` 的内容高度、视口高度两个 `onAreaChange`）
+     * 与这里的**触发顺序没有承诺**：实测两者都可能先于本回调到达，
+     * 于是它们各自因 `contentWidth <= 0` 提前返回 —— 而且**不会消费**
+     * `scrollRestoreOffset`，只是白白错过。此后若没有第三个触发点，
+     * 恢复动作就**永远不执行**，表现正是"滚动模式退出再进仍在章首"。
+     *
+     * 所以在这里（宽度就绪的那一刻）再试一次。方法本身幂等
+     * （取走即清空），多一个触发点没有副作用。
+     */
+    this.applyPendingScrollRestore();
   }
 
   /** scroll 模式：正文内容总高度变化（含章节标题） */
@@ -1464,6 +1747,227 @@ struct ReaderPage {
     if (height > 0) {
       this.scrollContentHeight = height;
     }
+    /**
+     * 内容布局完成后，尝试把待恢复的位置滚过去。
+     *
+     * ⚠️ 这是**两条触发路径之一**（另一条是 `scheduleScrollRestore` 的延迟重试），
+     * 两条都不完备，所以都留：
+     *  - 本回调只在**高度真的变了**才触发 —— "同一章内跳到书签"时章节与内容
+     *    都没变、高度自然也不变，它**不会触发**；
+     *  - 延迟重试是定时器，理论上可能早于布局完成。
+     * 由 `scrollRestoreOffset`"取走即清空"保证实际只滚一次，谁先到谁生效。
+     *
+     * 另：`Scroll` 里是"标题 + 整章正文"，首帧报出的高度可能只是标题那一截，
+     * 所以这里每次高度变化都试一次（幂等，代价可忽略）。
+     */
+    this.applyPendingScrollRestore();
+  }
+
+  /**
+   * 滚动模式：换章后把滚动位置对齐到新内容。
+   *
+   * ⚠️ 为什么必须有它（本项目实测的进度写坏路径）：
+   * 滚动模式下正文是**整章一个 `Text`**，换章后 `Scroll` 的偏移**不会自动归零** ——
+   * 内容换了，滚动位置还停在上一章的 `y` 处。此时框架会触发 `onScroll`，
+   * 而 `onReaderScroll` 会把那个残留的 `y` 按**新章的排版**换算成章内偏移上报，
+   * 于是：
+   *   - 视图上"跳到新章却停在中间/末尾"；
+   *   - 进度被写成一个凭空的、偏大的偏移（`ProgressService` 随即落库）。
+   *
+   * 所以换章后必须显式回顶，**不能指望滚动容器自己回顶**。
+   * （章末自动衔接之所以没这个问题，是因为 `continueToNextChapter` 里
+   * 显式做了 `scrollEdge(Edge.Top)` —— 但那一步只在自动衔接时发生。）
+   *
+   * ⚠️ **一律回顶**，不再有"回到底部"的分支：换章的目标现在统一是章首
+   * （「上一章」也改成落到章首了，见 `ReaderViewModel.prevChapter`）。
+   * 这同时去掉了一个隐患 —— `scrollEdge(Edge.Bottom)` 会让位置贴近章末，
+   * 被 `shouldContinueToNextChapter()` 判成"读完了"而自动跳下一章。
+   *
+   * ⚠️ 同时清掉 `scrollRestoreOffset`：它可能还挂着打开时那次恢复的目标，
+   * 不清就会在这次换章之后又被滚一次（用户会看到"跳过去又被拽走"）。
+   */
+  private resetScrollAfterChapterChange(): void {
+    if (this.state.settings.pageMode !== 'scroll') {
+      return;
+    }
+    this.scrollRestoreOffset = -1;
+    this.scrollRestoreRequestedAt = 0;
+    /**
+     * ⚠️ 先上冷却锁再滚：程序化滚动同样会触发 `onScroll`，
+     * 而"滚到顶部"虽然离章末很远，但**上一章的残留位置**可能恰好接近新内容的
+     * 章末（内容换了、偏移没换），那一下仍可能被误判成"读完了"。
+     * 上锁的代价可忽略，却能杜绝"换章后莫名跳到再下一章"。
+     */
+    this.armAutoContinueCooldown();
+    this.scroller.scrollEdge(Edge.Top);
+  }
+
+  /**
+   * 给"章末自动衔接"上冷却锁。
+   *
+   * ⚠️ 凡是**我们主动改变滚动位置**的地方都要先上锁：
+   * 滚动位置的改变会触发 `onScroll`，而 `shouldContinueToNextChapter()`
+   * 只看"当前滚动位置 + 内容高度" —— 它分不清"用户自己滑到底"与
+   * "我们程序化滚到底"。不上锁，程序化滚到章末就会被当成"读完了"而跳章。
+   */
+  private armAutoContinueCooldown(): void {
+    this.autoContinueBlockedUntil = Date.now() + AppConstants.AUTO_CONTINUE_COOLDOWN_MS;
+  }
+
+  /**
+   * 登记一次"待恢复的滚动位置"。
+   *
+   * ⚠️ 所有登记点都必须走这里，不要各写一行 `this.scrollRestoreOffset = ...`：
+   * 本方法顺带记下**登记时刻**，那是"挡住滚动上报"这道闸的限时依据
+   * （见 `isScrollRestoreBlocking`）。漏记时刻会让闸门永不超时。
+   */
+  private requestScrollRestore(offset: number): void {
+    this.scrollRestoreOffset = Math.max(0, offset);
+    this.scrollRestoreRequestedAt = Date.now();
+  }
+
+  /**
+   * 当前是否有"待恢复的滚动位置"**且它还没超时**。
+   *
+   * ⚠️ 超时判断不能省：恢复依赖若干布局条件（宽度、视口高度、内容高度）
+   * 同时就绪，任一条件始终不满足，恢复就永远不会落地。
+   * 若这时仍无期限地挡住滚动上报，用户滚动时进度**永不更新** ——
+   * 比"位置没恢复"更严重的退化。超时后主动放弃，让上报恢复工作。
+   */
+  private isScrollRestoreBlocking(): boolean {
+    if (this.scrollRestoreOffset < 0) {
+      return false;
+    }
+    const waited: number = Date.now() - this.scrollRestoreRequestedAt;
+    if (waited > AppConstants.SCROLL_RESTORE_GIVEUP_MS) {
+      Logger.warn(LogTag.READ,
+        `滚动位置恢复超时（等待 ${waited}ms），放弃并恢复进度上报`);
+      this.scrollRestoreOffset = -1;
+      this.scrollRestoreRequestedAt = 0;
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 滚动模式：按**当前进度偏移**重新对齐滚动位置（不改变阅读位置）。
+   *
+   * 用于"内容重排但位置应保持"的场景：顶栏刷新、改字号/行距/边距、切到滚动模式。
+   * 与 `resetScrollAfterChapterChange()` 的区别就在"目标从哪来"：
+   *  - 本方法 → `state.offset`（进度偏移，重排前后语义不变）；
+   *  - 那个方法 → 章首（换章的语义）。
+   * 两者不要互相替代，否则要么刷新后跳章首、要么换章后停在旧位置。
+   */
+  private restoreScrollToCurrentOffset(): void {
+    if (this.state.settings.pageMode !== 'scroll') {
+      return;
+    }
+    this.requestScrollRestore(this.state.offset);
+    this.scheduleScrollRestore();
+  }
+
+  /**
+   * 滚动模式：把"待恢复的章内偏移"安排到内容布局完成之后生效。
+   *
+   * ⚠️ 为什么必须延迟，而不是登记后立刻滚：
+   * 调用点（换章、跳书签、刷新）返回时新正文只是写进了 `state`，
+   * **布局还没发生** —— 此刻 `scrollTo` 会按**上一章的旧内容**做边界裁剪，
+   * 滚到一个错误位置；紧接着 `onScroll` 又把它当成新章的章内偏移上报，
+   * 把进度一并改坏（比"没恢复"更糟）。
+   *
+   * 两条触发路径都留（`onAreaChange` + 这里的延迟重试），因为二者都不完备：
+   *  - `onAreaChange` 只在**高度真的变了**才触发，"同章内跳书签"它不触发；
+   *  - 延迟重试是定时器，理论上可能早于布局。
+   * 由 `scrollRestoreOffset`"取走即清空"保证**实际只滚一次**，
+   * 谁先到就谁生效，不需要判断顺序。
+   */
+  private scheduleScrollRestore(): void {
+    if (this.scrollRestoreOffset < 0) {
+      return;
+    }
+    setTimeout(() => {
+      this.applyPendingScrollRestore();
+    }, AppConstants.READER_SCROLL_RESTORE_DELAY_MS);
+  }
+
+  /**
+   * 把"待恢复的滚动位置"滚到视口里（幂等，只做一次）。
+   *
+   * 换算方式与 `onReaderScroll` 的**上报**方向严格对称，否则存进去的偏移
+   * 和取出来要滚的位置会对不上（同一个换算两处实现必然走偏，设计文档第 28 条）：
+   * ```
+   * 上报：lines = floor(yOffset / lineHeight)   →  offset = lines × charsPerLine
+   * 恢复：lines = round(offset / charsPerLine)  →  y      = lines × lineHeight
+   * ```
+   * ⚠️ 这里只能用**估算**：正文是一个 `Text`，没有"第 N 段对应第几像素"的映射，
+   * 精确到行需要逐段测量。滚动模式的章内偏移本来就是估算口径
+   * （见 `onReaderScroll` 的注释），所以恢复也按同一口径即可 ——
+   * 关键是**和上报同源**，而不是各自"更精确"。
+   *
+   * ⚠️ **只等"布局发生过"，不等"高度是新的"，也不自己夹取**：
+   *  - 目标 `y` 是"章内偏移 → 像素"，只由**排版参数**决定，与这一章多高无关；
+   *  - `scrollContentHeight` 在换章/刷新后的瞬间报的还是**上一章**的旧值 ——
+   *    拿它做边界裁剪会算出错误位置（本项目"估算值跨内容复用"那一类坑）；
+   *  - 但它 `> 0` 这一点仍然有意义：它表示**内容至少完成过一次布局**，
+   *    否则 `Scroll` 里可能还是空的，此时滚任何位置都无意义。
+   *
+   * 越界交由框架夹到新内容的合法范围：目标偏大时自然落到末尾，
+   * 短章（本来就没得滚）会停在顶部 —— 两种情况都符合直觉。
+   *
+   * `viewportHeight` 与 `scrollContentHeight` 都可以放心等：
+   * 前者是容器自身高度、换章不变；后者一旦有过内容就不会再回到 0。
+   *
+   * ⚠️ `contentWidth > 0` 这个前提**不能省**：`charsPerLineEstimate()` 在宽度未知时
+   * 会退化成"每行 1 字"，于是 `y` 被算成一个天文数字，框架会把它夹到**章末** ——
+   * 与"恢复阅读位置"正好相反（用户会看到"一打开就停在最后"）。
+   * 宽度由 `setContentSize`（`tryPaginate`）写入，所以首帧之前必须等。
+   */
+  private applyPendingScrollRestore(): void {
+    if (this.scrollRestoreOffset < 0
+      || this.state.settings.pageMode !== 'scroll'
+      || this.state.loading
+      || this.contentWidth <= 0
+      || this.viewportHeight <= 0
+      || this.scrollContentHeight <= 0) {
+      return;
+    }
+    const offset: number = this.scrollRestoreOffset;
+    // 取走即清空：滚动是"一次性"动作，不清就会在每次高度变化时把用户拽回去
+    this.scrollRestoreOffset = -1;
+    this.scrollRestoreRequestedAt = 0;
+
+    const lineHeight: number = Math.max(1,
+      this.state.settings.fontSize * this.state.settings.lineHeight);
+    const charsPerLine: number = this.charsPerLineEstimate();
+    const lines: number = Math.round(offset / charsPerLine);
+    if (lines <= 0) {
+      // 章首：本来就在顶部，不需要滚（也避免触发一次无意义的滚动回调）
+      return;
+    }
+    const targetY: number = lines * lineHeight;
+    /**
+     * ⚠️ 先上冷却锁再滚：程序化滚动会触发 `onScroll`，而"恢复到一个靠近章末的
+     * 位置"（续读恰好读到章尾、或点了一个靠后的书签）与"用户自己滑到底"
+     * 在 `shouldContinueToNextChapter()` 眼里毫无区别 ⇒ 会被判成"读完了"
+     * 而自动跳到下一章。用户看到的是"一进来就翻章了"。
+     *
+     * 锁在**滚动之前**上：`onScroll` 是滚动动作的回调，可能同步或异步到达，
+     * 先上锁才能确保两种情况都被挡住。
+     */
+    this.armAutoContinueCooldown();
+    this.scroller.scrollTo({ xOffset: 0, yOffset: targetY });
+    Logger.info(LogTag.READ,
+      `滚动恢复位置: 偏移=${offset} → 行=${lines} → y=${targetY.toFixed(1)}`);
+  }
+
+  /**
+   * 滚动模式估算"每行多少字"。
+   *
+   * ⚠️ 与 `onReaderScroll` 的上报**共用同一算法**：两处各写一份的话，
+   * 存进去和滚出来的口径会悄悄错开（本项目已在"测量与渲染不同源"上踩过同类坑）。
+   */
+  private charsPerLineEstimate(): number {
+    return Math.max(1, Math.floor(this.contentWidth / Math.max(1, this.state.settings.fontSize)));
   }
 
   private goBack(): void {

@@ -4,6 +4,7 @@
     "pages/Index",
     "pages/ReaderPage",
     "pages/ReaderCatalogPage",
+    "pages/ImportConfirmPage",
     "pages/SelfCheckPage"
   ]
 }

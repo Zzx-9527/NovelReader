@@ -52,7 +52,7 @@ struct ReaderCatalogPage {
   @StorageProp('appDarkMode') appDarkMode: boolean = false;
 
   @State chapters: Chapter[] = [];
-  @State bookmarks: Annotation[] = [];
+  @State annotations: Annotation[] = [];
   @State currentIndex: number = -1;
   @State activeTab: number = TAB_CATALOG;
   @State loading: boolean = true;
@@ -114,23 +114,63 @@ struct ReaderCatalogPage {
       this.error = '目录加载失败';
       Logger.error(LogTag.READ, `目录加载失败: ${Logger.errText(e as Object)}`);
     }
-    await this.reloadBookmarks();
+    await this.reloadAnnotations();
     this.loading = false;
   }
 
   /**
-   * 只重载书签。
+   * 只重载标注。
    *
-   * 与章节分开是因为**删除书签后只需要刷新这一半**，
+   * 与章节分开是因为**删除一条标注后只需要刷新这一半**，
    * 没必要把 1000+ 章的列表再查一遍。
+   *
+   * ⚠️ 查**全部类型**（`ANNOTATION_ALL`）而不是只要书签：
+   * 本 Tab 已从"书签"扩展为"标注"，划线/笔记也必须能看到 ——
+   * 只查书签的话，用户划了线、写了笔记，在这一页什么都找不到，
+   * 会以为数据没保存（本项目踩过同类"功能做了但没入口"的问题）。
    */
-  private async reloadBookmarks(): Promise<void> {
+  private async reloadAnnotations(): Promise<void> {
     try {
-      this.bookmarks = await AnnotationRepository.listByBook(
-        this.bookId, AppConstants.ANNOTATION_BOOKMARK);
+      this.annotations = await AnnotationRepository.listByBook(
+        this.bookId, AppConstants.ANNOTATION_ALL);
     } catch (e) {
-      Logger.error(LogTag.READ, `书签加载失败: ${Logger.errText(e as Object)}`);
+      Logger.error(LogTag.READ, `标注加载失败: ${Logger.errText(e as Object)}`);
     }
+  }
+
+  /**
+   * 标注类型的展示名。
+   *
+   * ⚠️ 三种类型混在同一个列表里，**必须逐条标出类型** ——
+   * 否则用户看到一行文字无法判断"这是我加的书签还是写的笔记"。
+   */
+  private typeLabelOf(item: Annotation): string {
+    if (item.isBookmark()) {
+      return '书签';
+    }
+    if (item.isHighlight()) {
+      return '划线';
+    }
+    return '笔记';
+  }
+
+  /**
+   * 列表第二行的说明文字。
+   *
+   * 优先级：备注内容 > 选中的原文 > 位置。
+   * 理由是"哪个信息最能帮用户认出这一条"：
+   *  - 有备注 → 备注是用户自己写的，最好认；
+   *  - 只有选文 → 摘一段原文；
+   *  - 都没有（书签）→ 退回字符位置，与旧版行为一致。
+   */
+  private summaryOf(item: Annotation): string {
+    if (item.hasNoteContent()) {
+      return item.noteContent;
+    }
+    if (item.selectedText.length > 0) {
+      return item.selectedText;
+    }
+    return item.startOffset === null ? '章首' : `第 ${item.startOffset} 字处`;
   }
 
   /** 章标题（与阅读页底栏同口径：标题为空时退回"第 N 章"） */
@@ -153,9 +193,10 @@ struct ReaderCatalogPage {
     this.getUIContext().getRouter().back();
   }
 
-  private removeBookmark(annotationId: number): void {
+  /** 删除一条标注（书签/划线/笔记共用） */
+  private removeAnnotation(annotationId: number): void {
     AnnotationRepository.softDelete(annotationId).then(() => {
-      return this.reloadBookmarks();
+      return this.reloadAnnotations();
     }).catch((e: Object) => {
       Logger.error(LogTag.READ, `删除书签失败: ${Logger.errText(e)}`);
     });
@@ -190,7 +231,7 @@ struct ReaderCatalogPage {
       } else if (this.activeTab === TAB_CATALOG) {
         this.buildChapterList()
       } else {
-        this.buildBookmarkList()
+        this.buildAnnotationList()
       }
     }
     .width('100%')
@@ -229,7 +270,12 @@ struct ReaderCatalogPage {
             this.activeTab = TAB_CATALOG;
           })
 
-        Text(this.bookmarks.length > 0 ? `书签 ${this.bookmarks.length}` : '书签')
+        /**
+         * ⚠️ 文案从"书签"改成"标注"：本 Tab 现在同时列书签/划线/笔记
+         * （见 `reloadAnnotations`）。仍叫"书签"会让用户以为划线和笔记
+         * 不在这个列表里，从而根本不去点它。
+         */
+        Text(this.annotations.length > 0 ? `标注 ${this.annotations.length}` : '标注')
           .fontSize(AppTheme.FONT_SUBTITLE)
           .fontWeight(this.activeTab === TAB_BOOKMARK ? FontWeight.Medium : FontWeight.Normal)
           .fontColor(this.activeTab === TAB_BOOKMARK ? this.theme().text : this.theme().secondary)
@@ -298,34 +344,59 @@ struct ReaderCatalogPage {
   }
 
   @Builder
-  buildBookmarkList() {
+  buildAnnotationList() {
     /**
      * ⚠️ 外面套一层 `Column` 并给它 `layoutWeight(1)`：
      * `EmptyView` 自己带 `height('100%')`，直接放在本页的 Column 里
      * 会按"整页高度"算、把头部顶出去。套一层有界容器就正常了。
      */
     Column() {
-      if (this.bookmarks.length === 0) {
+      if (this.annotations.length === 0) {
         // 复用通用空状态组件，文案指明**怎么加**，而不是只说"没有"
         EmptyView({
-          title: '还没有书签',
-          hint: '阅读时点右上角「书签」即可添加'
+          title: '还没有标注',
+          hint: '阅读时长按选中正文，在弹出菜单里选「书签 / 划线 / 笔记」'
         })
       } else {
         List() {
-          ForEach(this.bookmarks, (item: Annotation) => {
+          ForEach(this.annotations, (item: Annotation) => {
             ListItem() {
               Row() {
                 Column({ space: 4 }) {
-                  Text(this.titleOf(item.chapterIndex))
-                    .fontSize(AppTheme.FONT_BODY)
-                    .fontColor(this.theme().text)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .width('100%')
-                  Text(item.startOffset === null ? '章首' : `第 ${item.startOffset} 字处`)
+                  /**
+                   * 第一行：**类型标签 + 章节名**。
+                   *
+                   * ⚠️ 类型必须显示：三种标注混在一个列表里，
+                   * 不标类型用户没法判断"这条是我加的书签还是写的笔记"。
+                   * 类型用小面积点缀色（与"当前章高亮"同一套用法）。
+                   */
+                  Row({ space: AppTheme.GAP_S }) {
+                    Text(this.typeLabelOf(item))
+                      .fontSize(10)
+                      .fontColor(AppColor.accent)
+                      .borderRadius(4)
+                      .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+                      .backgroundColor(this.theme().barBg)
+
+                    Text(this.titleOf(item.chapterIndex))
+                      .fontSize(AppTheme.FONT_BODY)
+                      .fontColor(this.theme().text)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .layoutWeight(1)
+                  }
+                  .width('100%')
+
+                  /**
+                   * 第二行：备注 > 选文 > 位置（见 `summaryOf`）。
+                   *
+                   * ⚠️ 最多两行并截断：备注可能很长，不截断会把列表撑得很难扫。
+                   */
+                  Text(this.summaryOf(item))
                     .fontSize(AppTheme.FONT_CAPTION)
                     .fontColor(this.theme().secondary)
+                    .maxLines(2)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .width('100%')
                 }
                 .layoutWeight(1)
@@ -336,14 +407,14 @@ struct ReaderCatalogPage {
                   .fontColor(AppColor.danger)
                   .padding({ left: 12, top: 8, bottom: 8 })
                   .onClick(() => {
-                    this.removeBookmark(item.id);
+                    this.removeAnnotation(item.id);
                   })
               }
               .width('100%')
               .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: 12, bottom: 12 })
               .onClick(() => {
                 /**
-                 * 书签可能只记了章首（`startOffset` 为 null），此时落到章首即可。
+                 * 标注可能只记了章首（`startOffset` 为 null），此时落到章首即可。
                  *
                  * ⚠️ 先赋给局部变量再判断：`startOffset` 的类型是 `number | null`，
                  * 直接在**属性访问**上做三元判断，ArkTS 的类型收窄不一定生效

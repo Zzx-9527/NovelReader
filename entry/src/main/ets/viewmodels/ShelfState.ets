@@ -61,23 +61,3 @@ export class BookDetailState {
   annotationCount: number = 0;
 }
 
-/**
- * 导入确认页状态对象。
- */
-@Observed
-export class ImportState {
-  preparation: ImportPreparation | null = null;
-  /** 用户当前选中的编码 */
-  encoding: string = '';
-  /** 编码候选，供用户切换 */
-  encodingOptions: string[] = [];
-  /** 解析预览（前几章标题） */
-  previewTitles: string[] = [];
-  chapterCount: number = 0;
-  wordCount: number = 0;
-  /** 编码置信度低时提示用户手动确认 */
-  lowConfidence: boolean = false;
-  fallback: boolean = false;
-  parsing: boolean = false;
-  error: string = '';
-}

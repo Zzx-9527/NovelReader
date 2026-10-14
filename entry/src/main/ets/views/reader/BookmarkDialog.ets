@@ -48,6 +48,20 @@ export struct BookmarkDialog {
    * 弹窗开着时切"夜间"，它会保持旧配色（与顶栏/底栏同一个坑）。
    */
   @Prop theme: ReaderTheme = new ReaderTheme();
+  /**
+   * 弹窗用途：'bookmark'（加书签）或 'note'（写笔记）。
+   *
+   * ⚠️ 用同一个组件承载两种用途，而不是复制一个 `NoteDialog`：
+   * 两者要展示与收集的东西**完全一样**（章节名 + 选文 + 备注输入框），
+   * 差别只在标题、按钮文案、以及"备注是否必填"。
+   * 复制一份的话，以后改布局（比如选文区加个"展开"）必然只改一处。
+   *
+   * 差异由本字段驱动：
+   *  - 标题：加书签 / 写笔记；
+   *  - 备注框提示语：书签是"可选"，笔记是"必填"；
+   *  - 保存按钮可用性：笔记要求备注非空（空笔记在列表里什么都看不到）。
+   */
+  @Prop mode: string = 'bookmark';
   /** 点"保存"：回传用户填好的备注 */
   onSave?: (note: string) => void;
   /** 点"取消"或遮罩 */
@@ -70,6 +84,25 @@ export struct BookmarkDialog {
   /** 每次草稿换新（= 又选了一段文字）就把输入框重置成该草稿的备注 */
   onDraftChanged(): void {
     this.note = this.draft.note;
+  }
+
+  /** 是否"写笔记"用途（决定标题、提示语与必填规则） */
+  private isNoteMode(): boolean {
+    return this.mode === 'note';
+  }
+
+  private titleText(): string {
+    return this.isNoteMode() ? '写笔记' : '加书签';
+  }
+
+  /**
+   * 保存按钮是否可用。
+   *
+   * 书签：备注可选（只标位置也是有效操作）→ 恒可保存；
+   * 笔记：备注必填 → 去空白后要有内容。
+   */
+  private canSave(): boolean {
+    return this.isNoteMode() ? this.note.trim().length > 0 : true;
   }
 
   build() {
@@ -95,7 +128,7 @@ export struct BookmarkDialog {
 
       // 卡片本体：居中，左右留边，宽度自适应但不超过屏宽
       Column({ space: AppTheme.GAP_M }) {
-        Text('加书签')
+        Text(this.titleText())
           .fontSize(AppTheme.FONT_SUBTITLE)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.theme.text)
@@ -143,11 +176,15 @@ export struct BookmarkDialog {
 
         // ③ 备注：可输入
         Column({ space: 4 }) {
-          Text('备注')
+          Text(this.isNoteMode() ? '笔记内容' : '备注')
             .fontSize(AppTheme.FONT_CAPTION)
             .fontColor(this.theme.secondary)
             .width('100%')
-          TextArea({ text: this.note, placeholder: '写点备注…' })
+          TextArea({
+            text: this.note,
+            // 笔记是必填项，提示语要说清"必须写"；书签的备注才是可选的
+            placeholder: this.isNoteMode() ? '写下你的想法…' : '写点备注（可留空）…'
+          })
             .fontSize(AppTheme.FONT_BODY)
             .fontColor(this.theme.text)
             .placeholderColor(this.theme.secondary)
@@ -180,8 +217,21 @@ export struct BookmarkDialog {
             .fontSize(AppTheme.FONT_BODY)
             .fontWeight(FontWeight.Medium)
             .fontColor(this.theme.text)
+            /**
+             * ⚠️ 笔记模式下备注为空时置灰**且不可提交**。
+             *
+             * 空笔记在笔记列表里是一行"什么都看不到"的记录，属于垃圾数据；
+             * 而"想只标个位置"的需求由书签/划线承担，不必用空笔记表达。
+             *
+             * 置灰只是视觉，点击处理里**还要再判一次** ——
+             * 规则层自己保证，不靠 UI 状态（设计文档第 29 条）。
+             */
+            .opacity(this.canSave() ? 1 : 0.4)
             .padding({ left: 12, right: 12, top: 8, bottom: 8 })
             .onClick(() => {
+              if (!this.canSave()) {
+                return;
+              }
               if (this.onSave !== undefined) {
                 this.onSave(this.note);
               }

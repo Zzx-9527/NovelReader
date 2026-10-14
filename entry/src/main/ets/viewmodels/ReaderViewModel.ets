@@ -113,22 +113,64 @@ export class ReaderViewModel {
     }
   }
 
-  /** 按进度恢复：定位章节 → 取分页断点 → 算出页码 */
+  /**
+   * 按进度恢复：定位章节 → 取分页断点 → 算出页码。
+   *
+   * ⚠️ **章内偏移必须交给 `restoreToOffset` 通道，不能在 `loadChapter` 之后再
+   * 补一次 `renderAt()`** —— 这正是"续读总是回到本章第一页"的根因（本项目实测）。
+   *
+   * 旧实现长这样：
+   * ```
+   * this.restoreToOffset = pos.offset;
+   * await this.loadChapter(chapterIndex);   // 内部已正确 renderAt(pos.offset)
+   * if (chapterIndex > 0) {
+   *   this.renderAt(0);                     // ← 把刚恢复好的位置又推回章首
+   *   return;
+   * }
+   * this.renderAt(pos.offset);              // 只有第 0 章走这条正确路径
+   * ```
+   * 于是**除第 0 章以外**的续读全部退回本章第一页。更糟的是 `renderAt` 会把
+   * `state.offset` 改写成页起始偏移，而 `loadChapter` 紧接着把它写进
+   * `ProgressService` ⇒ 进度不只是"没恢复"，而是被**回退落库**。
+   *
+   * 判据：`loadChapter` 已经承担"按 `restoreToOffset` 定位"的职责，
+   * 调用方**不要**再补一次 `renderAt` —— 同一件事两处实现，后一次必然覆盖前一次
+   * （设计文档第 28 条）。
+   *
+   * ⚠️ 首次打开时正文区尺寸还是 0，`buildPagination` 会提前返回（无断点），
+   * 此时 `renderAt` 只把 `state.offset` 记成恢复偏移；真正的分页与定位
+   * 发生在尺寸到位后的 `repaginateCurrentChapter()` —— 它会把偏移重新登记回
+   * `restoreToOffset`，所以这里不必做任何"预定位"。
+   */
   private async restorePosition(book: Book): Promise<void> {
     const pos: ReadingPosition = book.currentPosition();
     const chapterIndex: number = pos.chapterIndex < 0 ? 0 : pos.chapterIndex;
-    // 记下要恢复到的位置：拿到正文区尺寸后还会重新分页并重载本章，
-    // 届时 loadChapter 会归零 offset，需要靠这个字段把位置找回来。
-    this.restoreToOffset = book.hasNoProgress() ? 0 : pos.offset;
+    this.restoreToOffset = book.hasNoProgress() ? 0 : Math.max(0, pos.offset);
     await this.loadChapter(chapterIndex);
     this.state.percent = pos.percent;
-    if (chapterIndex > 0 || book.hasNoProgress()) {
-      // 章节位置已恢复；章内偏移为 0 或由后续重新分页时统一处理
-      this.renderAt(0);
-      this.state.percent = pos.percent;
+  }
+
+  /**
+   * 正文区尺寸到位（或变化）后重排当前章，并**保住当前阅读位置**。
+   *
+   * 为什么必须有这个方法，而不是页面直接调 `loadChapter`：
+   * 首次打开时 `setContentSize` 还没被调用，分页算不出来（无断点），
+   * 恢复出来的章内偏移只是记在 `state.offset` 上。页面量到尺寸后必须再排一次，
+   * 而 `loadChapter` 会**消费掉** `restoreToOffset`（用完置 -1）——
+   * 直接调它就会 `renderAt(0)`，把刚恢复的位置推回章首。
+   *
+   * 所以这里在重排前把 `state.offset` 重新登记回 `restoreToOffset`，
+   * 复用既有通道定位（与改字号/刷新页同一条路径），不另写一套定位逻辑。
+   *
+   * 旋转屏幕、改字号引起的尺寸变化也走这里 —— 于是"转屏后回到第一页"
+   * 这个同类问题一并修掉。
+   */
+  async repaginateCurrentChapter(): Promise<void> {
+    if (this.readService === null || this.state.chapterIndex < 0) {
       return;
     }
-    this.renderAt(pos.offset);
+    this.restoreToOffset = Math.max(0, this.state.offset);
+    await this.loadChapter(this.state.chapterIndex);
   }
 
   /** 进入阅读页时由页面提供正文区尺寸 */
@@ -547,12 +589,26 @@ export class ReaderViewModel {
     return true;
   }
 
+  /**
+   * 上一章。
+   *
+   * ⚠️ 定位目标是**章首**（= 上一章的标题行），**不是章末**。
+   *
+   * 早期实现传 `-1`（= 章末），理由是"往回翻的直觉是落在上一章最后"。
+   * 用户实测反馈这不符合预期：按「上一章」是想**从上一章开头重读/回看**，
+   * 落在末尾等于"倒着读"，还得自己再滚到顶。
+   *
+   * ⚠️ 顺带解决了滚动模式的一个连带问题：章末定位要靠
+   * `scrollEdge(Edge.Bottom)`，而它离章末极近，会被
+   * `shouldContinueToNextChapter()` 判成"读到章末" ⇒ **自动衔接回下一章**，
+   * 表现就是"按上一章刚回去、立刻被弹回来"。回到章首就没有这个风险。
+   */
   async prevChapter(): Promise<void> {
     if (!this.state.hasPrev) {
       return;
     }
-    // 回到上一章的最后一页更符合直觉
-    await this.switchChapter(this.state.chapterIndex - 1, -1);
+    // 0 = 章首，与"下一章"（也是 0）对称：换章一律从这一章的开头开始
+    await this.switchChapter(this.state.chapterIndex - 1, 0);
   }
 
   /** 切换章节；toOffset 为 -1 表示定位到末尾；silent 见 loadChapter */
@@ -799,6 +855,74 @@ export class ReaderViewModel {
     const start: number = Math.max(0, Math.min(startOriginal, text.length));
     const end: number = Math.max(start, Math.min(endOriginal, text.length));
     return text.substring(start, end);
+  }
+
+  // ------------------------------------------------------------ 划线 / 笔记
+
+  /**
+   * 保存一条划线（长按选中 → 菜单「划线」）。
+   *
+   * ⚠️ 入参是**原文偏移**（页面侧先用 `toOriginalOffset` 换算）：
+   * 划线的区间将来要用来在正文里找位置，必须与进度/书签同一套坐标。
+   *
+   * @returns 新增的标注 id；<=0 表示失败
+   */
+  async addHighlight(startOriginal: number, endOriginal: number): Promise<number> {
+    if (this.bookId <= 0 || this.state.chapterIndex < 0) {
+      return 0;
+    }
+    const text: string = this.originalTextBetween(startOriginal, endOriginal);
+    // 没有实际选中内容就不写：空划线在列表里是一行无法理解的空记录
+    if (text.length === 0) {
+      return 0;
+    }
+    try {
+      return await AnnotationRepository.addHighlight(
+        this.bookId, this.state.chapterIndex, startOriginal, endOriginal,
+        text, AppConstants.HIGHLIGHT_DEFAULT_COLOR);
+    } catch (e) {
+      Logger.error(LogTag.READ, `保存划线失败: ${Logger.errText(e as Object)}`);
+      return 0;
+    }
+  }
+
+  /**
+   * 保存一条笔记（长按选中 → 菜单「笔记」→ 填内容）。
+   *
+   * ⚠️ **笔记内容要求非空**（与划线、书签都不同）：
+   * 一条没有内容的"笔记"在笔记列表里什么都看不到，等于产生垃圾数据；
+   * 用户真想只标位置，应该用书签或划线。
+   *
+   * @returns 新增的标注 id；<=0 表示失败
+   */
+  async addNote(startOriginal: number, endOriginal: number, noteContent: string): Promise<number> {
+    if (this.bookId <= 0 || this.state.chapterIndex < 0) {
+      return 0;
+    }
+    const trimmed: string = noteContent.trim();
+    if (trimmed.length === 0) {
+      return 0;
+    }
+    const text: string = this.originalTextBetween(startOriginal, endOriginal);
+    try {
+      return await AnnotationRepository.addNote(
+        this.bookId, this.state.chapterIndex, startOriginal, endOriginal,
+        text, trimmed, AppConstants.HIGHLIGHT_DEFAULT_COLOR);
+    } catch (e) {
+      Logger.error(LogTag.READ, `保存笔记失败: ${Logger.errText(e as Object)}`);
+      return 0;
+    }
+  }
+
+  /**
+   * 组装"划线/笔记"弹窗所需的草稿（复用书签那套）。
+   *
+   * ⚠️ 与 `buildBookmarkDraft` 共用 `BookmarkDraft` 而不是另建一个类：
+   * 三者需要展示的东西完全一样（章节名 + 选文 + 备注），
+   * 多一个类就多一份要同步维护的字段。
+   */
+  buildAnnotationDraft(startOriginal: number, endOriginal: number): BookmarkDraft {
+    return this.buildBookmarkDraft(startOriginal, endOriginal);
   }
 
   /**

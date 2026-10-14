@@ -10,6 +10,7 @@ import { ImportService, ImportOutcome, ImportPreparation, ImportResult } from '.
 import { SettingsService } from '../data/service/SettingsService';
 import { SettingsKeys } from '../common/constants/SettingsKeys';
 import { Logger } from '../common/utils/Logger';
+import { PathUtil } from '../common/utils/PathUtil';
 import { LogTag } from '../common/constants/AppConstants';
 
 /**
@@ -175,11 +176,22 @@ export class BookShelfViewModel {
         (progress) => {
           this.state.importMessage = progress.message;
         });
-      this.clearPendingImport();
       if (result.outcome !== ImportOutcome.SUCCESS) {
+        /**
+         * ⚠️ **失败时不能清空 `pendingImport`**（这里曾经无条件清空）。
+         *
+         * 清掉的后果有两个，都很糟：
+         *  1. 确认页拿不到待确认数据，用户**无法重试**（只能回书架重新选文件）；
+         *  2. 那次 `prepare()` 已经复制进沙箱的文件**再也没人清理** ——
+         *     `discardPendingImport()` 依赖 `pendingImport` 非空，
+         *     清空后它什么都不做，孤儿文件永久留下。
+         * 保留它，用户可以直接再点"导入"，取消时也仍能正常清理。
+         */
         this.state.error = result.error;
         return 0;
       }
+      // 只有真正入库成功才消费掉这份待确认数据
+      this.clearPendingImport();
       await this.refresh();
       return result.bookId;
     } catch (e) {
@@ -197,6 +209,84 @@ export class BookShelfViewModel {
       ImportService.discard(preparation);
     }
     this.clearPendingImport();
+  }
+
+  /**
+   * 用户在确认页换了编码：**重新分章**并刷新预览（不入库）。
+   *
+   * ⚠️ `ImportService.parseInto` 是**同步且 CPU 密集**的（整文件解码 + 行级正则）。
+   * 这里用 async 包一层只是为了统一错误处理，**不能**因此以为 UI 不会卡 ——
+   * 大文件下这一步仍会阻塞若干秒。彻底的解法是 taskpool（见设计文档风险表），
+   * 当前由确认页的"正在重新解析…"文案告知用户，避免被误认为卡死。
+   *
+   * ⚠️ 重新分章会**覆盖** `preparation.chapters`，所以调用方必须在成功后
+   * 重新读取预览（本方法不返回章节，由页面从 state 取）。
+   *
+   * @returns 是否成功（失败原因写进 `state.error`）
+   */
+  async reparsePendingImport(encoding: string): Promise<boolean> {
+    const preparation = this.state.pendingImport;
+    if (preparation === null) {
+      return false;
+    }
+    this.state.importing = true;
+    try {
+      const result: ImportResult = ImportService.parseInto(preparation, encoding);
+      if (result.outcome !== ImportOutcome.SUCCESS) {
+        this.state.error = result.error;
+        return false;
+      }
+      this.state.error = '';
+      return true;
+    } catch (e) {
+      this.state.error = `重新解析失败：${Logger.errText(e as BusinessError)}`;
+      return false;
+    } finally {
+      this.state.importing = false;
+    }
+  }
+
+  /**
+   * 确认页要显示的**前几个章节标题**。
+   *
+   * ⚠️ 只返回标题字符串，**不把 `preparation` 整个交给 UI**：
+   * 1000+ 章的数组一旦经 `@Prop` 传进组件就会被**深拷贝**，
+   * 每次重绘都复制上千个对象。只传展示需要的那几个字符串，代价可忽略。
+   *
+   * @param limit 最多取几条（默认 8：够看出分章质量，又不会把页面撑长）
+   */
+  pendingImportPreview(limit: number = 8): string[] {
+    const preparation = this.state.pendingImport;
+    if (preparation === null) {
+      return [];
+    }
+    const titles: string[] = [];
+    const count: number = Math.min(limit, preparation.chapters.length);
+    for (let i = 0; i < count; i++) {
+      const chapter = preparation.chapters[i];
+      titles.push(chapter.title.length > 0 ? chapter.title : `第 ${i + 1} 章`);
+    }
+    return titles;
+  }
+
+  /**
+   * 确认页的默认书名（取自文件名，去扩展名）。
+   *
+   * 与 `ImportService.commit` 在 `bookTitle` 为空时的兜底**同源**，
+   * 但这里显式取出来放进输入框，用户能看见并直接改 —— 而不是"看不见却生效"。
+   */
+  pendingImportDefaultTitle(): string {
+    const preparation = this.state.pendingImport;
+    if (preparation === null) {
+      return '';
+    }
+    return PathUtil.fileNameWithoutExt(preparation.uri);
+  }
+
+  /** 当前待确认导入的编码（确认页高亮用） */
+  pendingImportEncoding(): string {
+    const preparation = this.state.pendingImport;
+    return preparation === null ? '' : preparation.encoding;
   }
 
   private clearPendingImport(): void {
@@ -271,9 +361,15 @@ export class BookShelfViewModel {
     return ChapterRepository.countAnnotationsImpacted(bookId);
   }
 
+  /**
+   * 新建分组。
+   *
+   * @returns 新分组 id；0 表示失败（名称为空或重名，原因已写进 `state.error`）
+   */
   async createGroup(name: string): Promise<number> {
     const trimmed: string = name.trim();
     if (trimmed.length === 0) {
+      // 空名字不写 error：调用方（输入弹窗）自己会拦，写进去反而会盖掉别的提示
       return 0;
     }
     if (await GroupRepository.existsByName(trimmed, 0)) {
@@ -284,6 +380,66 @@ export class BookShelfViewModel {
     const groupId: number = await GroupRepository.insert(trimmed, sortOrder);
     await this.refresh();
     return groupId;
+  }
+
+  /**
+   * 重命名分组。
+   *
+   * ⚠️ `existsByName` 要传 `excludeId`：不排除自己的话，
+   * "把 A 改名为 A"（用户只是想确认一下、或改了大小写又改回来）会被判成重名。
+   *
+   * @returns 是否成功
+   */
+  async renameGroup(groupId: number, name: string): Promise<boolean> {
+    const trimmed: string = name.trim();
+    if (trimmed.length === 0) {
+      return false;
+    }
+    try {
+      if (await GroupRepository.existsByName(trimmed, groupId)) {
+        this.state.error = `分组「${trimmed}」已存在`;
+        return false;
+      }
+      await GroupRepository.rename(groupId, trimmed);
+      await this.refresh();
+      return true;
+    } catch (e) {
+      this.state.error = `重命名失败：${Logger.errText(e as BusinessError)}`;
+      return false;
+    }
+  }
+
+  /**
+   * 删除分组。
+   *
+   * ⚠️ **只删分组、不删书**：仓储内部先把成员 `group_id` 置空再软删分组
+   * （软删除不触发外键 `ON DELETE SET NULL`，不解绑的话这些书会因为
+   * 指向已删分组而从书架消失）。返回值是解绑的书籍数，供页面提示用。
+   *
+   * @returns 被移出该分组的书籍数量；-1 表示失败
+   */
+  async deleteGroup(groupId: number): Promise<number> {
+    try {
+      const moved: number = await GroupRepository.softDeleteWithMembers(groupId);
+      /**
+       * ⚠️ 删掉的若是**当前选中**的分组，必须把选择退回"全部"。
+       * 否则 `selectedGroupId` 指向一个已不存在的分组，书架会显示成空列表
+       * ——用户看到的是"删了个分组，我的书全没了"。
+       */
+      if (this.state.selectedGroupId === groupId) {
+        this.state.selectedGroupId = -1;
+      }
+      await this.refresh();
+      return moved;
+    } catch (e) {
+      this.state.error = `删除分组失败：${Logger.errText(e as BusinessError)}`;
+      return -1;
+    }
+  }
+
+  /** 某分组下的书籍数量（删除前提示用） */
+  async countInGroup(groupId: number): Promise<number> {
+    return BookRepository.countInGroup(groupId);
   }
 
   clearError(): void {

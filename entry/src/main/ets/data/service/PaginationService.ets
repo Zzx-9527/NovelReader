@@ -58,11 +58,17 @@ export class PaginationService {
     // ⚠️ 凡是**参与 `computeBreaks` 计算**的排版参数都必须进 key，
     // 否则改了它却命中旧缓存 ⇒ "改了没反应"。
     // `pm`（页边距）是后补的：它决定可用宽度、直接影响每行字数。
+    //
+    // ⚠️ 字体进 key 用**解析后**的名字（`resolveFontFamily`），不用原始值：
+    // `'system'`、`''` 与 `'HarmonyOS Sans'` 指的是**同一个字体**，
+    // 用原始值会算出三个不同的 key、把同一份断点缓存三遍
+    // （切字体时白算两次，还多占缓存）。
+    const fontFamily: string = ReaderSettings.resolveFontFamily(settings.fontFamily);
     return `v${PaginationService.ALGO_VERSION}_w${w}_h${h}_hx${hx}`
       + `_fs${settings.fontSize}_lh${settings.lineHeight}_`
       + `ps${settings.paragraphSpacing}_ls${settings.letterSpacing}_`
       + `pm${settings.pageMargin}_`
-      + `fi${settings.firstLineIndent}_ff${settings.fontFamily}`;
+      + `fi${settings.firstLineIndent}_ff${fontFamily}`;
   }
 
   /**
