@@ -55,6 +55,14 @@ export class ReaderState {
    */
   settingsVisible: boolean = false;
 
+  /**
+   * 加书签弹窗是否显示。
+   *
+   * 与 `settingsVisible` 同理各管各的：书签弹窗由长按选中触发，
+   * 与菜单/设置面板的显隐互不相干。
+   */
+  bookmarkVisible: boolean = false;
+
   loading: boolean = true;
   error: string = '';
   /** 分页未命中缓存时提示正在重算 */
@@ -91,36 +99,54 @@ export class ReaderState {
 }
 
 /**
- * 书签切换结果。
+ * 书签保存结果。
  *
- * ⚠️ 为什么要 `ok` 和 `added` 两个字段，而不是直接返回一个 boolean：
- * "操作失败"与"成功取消了书签"都对应"当前没有书签"，
- * 用一个 boolean 表示会让页面在**失败时也提示"已取消书签"** —— 那是错的反馈。
- * 拆成两个字段，页面才能给出准确文案。
+ * ⚠️ 为什么不是简单返回 `boolean`：这里有两个**都算成功**但用户需要区分的结局
+ * —— "新建了一条"与"覆盖了同位置已有的那条"。用 boolean 只能表达成功/失败，
+ * 弹窗就没法给出准确反馈（用户会疑惑"我刚才是加了一条还是改了一条"）。
+ *
+ * ⚠️ 与"失败"必须分开：失败若和某个成功态共用返回值，
+ * 页面就会在失败时提示成功（本项目踩过，见设计文档 pitfall 63）。
  */
-export class BookmarkToggleResult {
-  /** 操作本身是否成功（查库/写库没抛错） */
+export class BookmarkSaveResult {
+  /** 是否保存成功 */
   ok: boolean = false;
-  /** 成功时：是否处于"已加书签"状态 */
-  added: boolean = false;
+  /** 成功时：true = 覆盖了同位置旧书签；false = 新建 */
+  updated: boolean = false;
 
-  static addedNow(): BookmarkToggleResult {
-    const r = new BookmarkToggleResult();
+  static saved(updated: boolean): BookmarkSaveResult {
+    const r = new BookmarkSaveResult();
     r.ok = true;
-    r.added = true;
+    r.updated = updated;
     return r;
   }
 
-  static removed(): BookmarkToggleResult {
-    const r = new BookmarkToggleResult();
-    r.ok = true;
-    r.added = false;
-    return r;
+  static failed(): BookmarkSaveResult {
+    return new BookmarkSaveResult();
   }
+}
 
-  static failed(): BookmarkToggleResult {
-    return new BookmarkToggleResult();
-  }
+/**
+ * 书签编辑草稿（长按选中 → 弹窗里要展示/编辑的三块内容）。
+ *
+ * ⚠️ 为什么不直接传 `Annotation`：弹窗里"章节名"是**展示用**的（由
+ * `ReaderViewModel` 按当前章查出来），并不是 `Annotation` 的字段
+ * （`Annotation` 只存 `chapterIndex`）。混用会让人以为数据库里有这一列。
+ */
+export class BookmarkDraft {
+  /** 第几章：直接给可读文案，弹窗不做二次拼装 */
+  chapterLabel: string = '';
+  /** 选中的正文内容（原文，未装饰） */
+  selectedText: string = '';
+  /** 用户填的备注，可为空 */
+  note: string = '';
+  /** 章内 UTF-16 偏移（**原文**坐标） */
+  startOffset: number = 0;
+  /** 选文结束偏移；未选中具体区间时为 -1 */
+  endOffset: number = -1;
+
+  /** 是否已有同位置书签（决定弹窗是"新增"还是"覆盖"语气） */
+  existing: boolean = false;
 }
 
 /**

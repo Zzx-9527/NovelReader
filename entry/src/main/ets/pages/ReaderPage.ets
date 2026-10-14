@@ -1,5 +1,5 @@
-import { BusinessError } from '@kit.BasicServicesKit';
-import { ReaderState, BookmarkToggleResult } from '../viewmodels/ReaderState';
+import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
+import { ReaderState, BookmarkSaveResult, BookmarkDraft } from '../viewmodels/ReaderState';
 import { ReaderViewModel } from '../viewmodels/ReaderViewModel';
 import { ReaderJump, ReaderJumpRegistry } from '../viewmodels/ReaderJumpRegistry';
 import { RouteName, RouteParam } from '../model/RouteParam';
@@ -11,6 +11,7 @@ import { ErrorView } from '../views/common/ErrorView';
 import { ReaderTopBar } from '../views/reader/ReaderTopBar';
 import { ReaderBottomBar } from '../views/reader/ReaderBottomBar';
 import { SettingsPanel } from '../views/reader/SettingsPanel';
+import { BookmarkDialog } from '../views/reader/BookmarkDialog';
 import { ReaderSettings } from '../model/ReaderSettings';
 
 /**
@@ -65,6 +66,76 @@ struct ReaderPage {
   private viewportHeight: number = 0;
   /** 自动衔接的冷却截止时间戳，见 `AppConstants.AUTO_CONTINUE_COOLDOWN_MS` */
   private autoContinueBlockedUntil: number = 0;
+  /**
+   * 正文 `Text` 的控制器。
+   *
+   * ⚠️ 用来**主动关闭系统的选择菜单**（`closeSelectionMenu()`）：
+   * 用户点了菜单里的任一项（复制/书签/搜索）后，菜单不会自己消失，
+   * 必须我们显式关掉 —— 否则它一直悬在正文上挡住阅读。
+   *
+   * 分页模式与滚动模式各有一个 `Text`，但**同一时刻只会渲染其中一个**，
+   * 所以共用一个 controller 是安全的（不会有两个实例同时挂上）。
+   */
+  private textController: TextController = new TextController();
+  /**
+   * 正文当前是否有选中的文字。
+   *
+   * ⚠️ **必须是普通成员，绝不能用 `@State`**（本项目实测踩过）。
+   *
+   * 它只用在**事件回调**里做判断（点击/滑动时决定"这次点击是取消选择还是翻页"），
+   * **从不出现在 `build()` 里** —— 也就是说 UI 不依赖它，本来就不需要响应式。
+   *
+   * 而一旦标成 `@State`，`onTextSelectionChange` 每次触发都会改它
+   * ⇒ 触发页面重新渲染 ⇒ **系统把选择菜单关掉**：
+   * 表现就是"选中了文字、高亮和手柄都在，但菜单根本不显示"。
+   *
+   * **判据：字段只被事件回调读写、不参与 `build()` 时，一律用普通成员。**
+   * `@State` 不是"能变就该加"，它买的是"变化要驱动 UI 重绘"，
+   * 而重绘会打断系统组件的瞬时状态（菜单/弹窗/输入法）。
+   */
+  private hasSelection: boolean = false;
+  /**
+   * 当前选区的端点，用于 `Text.selection(start, end)`。
+   *
+   * ⚠️ 为什么需要它：`TextController` 只有 `closeSelectionMenu()`，
+   * **没有**"清除选中高亮"的方法（SDK 里也没有 `TextSelectionManager`）。
+   * 实测 `closeSelectionMenu()` 只关菜单，**高亮和手柄留在原地** ——
+   * 用户反馈"菜单消失了但选中的没消失"。
+   *
+   * 解法：`Text.selection(start, end)`，文档明确"`start >= end` 时
+   * 不选中任何文字"，所以设成 `(0, 0)` 就等于**程序化取消选中**。
+   *
+   * ⚠️ 关键设计：这两个值**始终如实反映当前选区**（由
+   * `onTextSelectionChange` 同步），而不是只在取消时置零。
+   * 因为 `selection` 是**构建期属性**，每次重绘都会重新施加 ——
+   * 若平时传 `(-1, -1)` 或不传，重绘就会与用户的手势选择打架
+   * （表现为"选不中"或"选区乱跳"）。如实回填则重绘无副作用：
+   * 用户选到哪，属性就是哪。
+   *
+   * ⚠️ 必须是 `@State`：它参与 `build()`，改它才会重绘、`selection` 才生效。
+   * 这与上面 `hasSelection`（普通成员、**不能**是 `@State`）正好相反，
+   * 两者职责不同，别合并。
+   */
+  @State private selStart: number = 0;
+  @State private selEnd: number = 0;
+  /**
+   * 本次触摸按下的时刻（`Date.now()`），用于区分"点击"与"长按"。
+   *
+   * ⚠️ 为什么必须区分：滚动模式的单击挂在 `parallelGesture(TapGesture)` 上，
+   * 它的语义是"**可与子节点手势同时触发**" —— 长按选中正文后松手时，
+   * 这个 Tap 也会触发，于是 `handleReaderTap` 看到有选中就去关菜单，
+   * 表现是**选择菜单一闪就消失**（用户实测反馈：长按时菜单显示、一松手就没了）。
+   *
+   * 由 `onTouch` 在 `TouchType.Down` 时记录，在 `handleReaderTap` 里比对时长。
+   */
+  private touchDownAt: number = 0;
+  /**
+   * 加书签弹窗的草稿（章节名 / 选文 / 备注）。
+   *
+   * 放在**页面**而不是 ViewModel 的 state 里：它是"一次交互的临时数据"，
+   * 不需要参与 `@Observed` 变更通知（弹窗靠 `bookmarkVisible` 开关重建）。
+   */
+  private bookmarkDraft: BookmarkDraft = new BookmarkDraft();
 
   aboutToAppear(): void {
     this.state = this.vm.state;
@@ -184,22 +255,6 @@ struct ReaderPage {
       params: param
     }).catch((e: BusinessError) => {
       Logger.error(LogTag.READ, `打开目录页失败: ${e.message}`);
-    });
-  }
-
-  /** 在当前位置切换书签，并给出明确反馈 */
-  private addBookmarkHere(): void {
-    this.vm.toggleBookmark().then((result: BookmarkToggleResult) => {
-      if (!result.ok) {
-        // ⚠️ 失败必须单独提示：否则会和"成功取消"一样显示"已取消书签"，属于错误反馈
-        this.getUIContext().getPromptAction().showToast({ message: '书签操作失败' });
-        return;
-      }
-      this.getUIContext().getPromptAction().showToast({
-        message: result.added ? '已添加书签' : '已取消书签'
-      });
-    }).catch((e: BusinessError) => {
-      Logger.error(LogTag.READ, `切换书签失败: ${e.message}`);
     });
   }
 
@@ -343,9 +398,6 @@ struct ReaderPage {
             onBack: () => {
               this.goBack();
             },
-            onBookmark: () => {
-              this.addBookmarkHere();
-            },
             onMenu: () => {
               // 目录已是**独立页面**（不再是浮层），所以这里不用先收设置面板 ——
               // 页面跳转会把整个阅读页盖住，没有"两层浮层叠着"的问题了。
@@ -482,6 +534,28 @@ struct ReaderPage {
          * 顶部留出安全区，是为了让上面的关闭热区不被状态栏干扰。
          */
         .padding({ top: this.safeAreaTop })
+      }
+
+      // 第 5 层：加书签弹窗（最顶，压在设置面板之上）
+      //
+      // ⚠️ 放在**最后一层**：它由长按选中触发，可能发生在菜单已弹出时，
+      // 必须保证它盖在最上面，否则会被设置面板/菜单挡住。
+      //
+      // ⚠️ **不给这层加 padding**：弹窗内部自带全屏遮罩
+      // （`Stack` 铺满 + `AppColor.mask`），加了顶部让位反而会让遮罩
+      // 盖不住状态栏、在最上面留出一条没被遮住的缝。
+      // 卡片本身是**居中**的，本来也不与状态栏/手势条重叠。
+      if (this.state.bookmarkVisible && this.state.error.length === 0) {
+        BookmarkDialog({
+          draft: this.bookmarkDraft,
+          theme: this.theme(),
+          onSave: (note: string) => {
+            this.saveBookmark(note);
+          },
+          onCancel: () => {
+            this.vm.setBookmarkVisible(false);
+          }
+        })
       }
     }
     .width('100%')
@@ -620,25 +694,47 @@ struct ReaderPage {
         .width('33%')
         .height('100%')
         .onClick(() => {
-          this.vm.prevPage();
+          this.handleReaderTap('prev');
         })
 
       Column()
         .width('34%')
         .height('100%')
         .onClick(() => {
-          this.vm.toggleMenu();
+          this.handleReaderTap('menu');
         })
 
       Column()
         .width('33%')
         .height('100%')
         .onClick(() => {
-          this.vm.nextPage();
+          this.handleReaderTap('next');
         })
     }
     .width('100%')
     .height('100%')
+    /**
+     * ⚠️ 放行触摸（`HitTestMode.Transparent`），否则**长按选中正文不生效**。
+     *
+     * 本层铺满全屏且绑了 `onClick`，而 ArkUI 默认的 `HitTestMode.Default` 是
+     * "自身响应 + **阻塞被它遮住的兄弟节点**" —— 下层正文 `Text` 收不到触摸，
+     * 长按选不出文字、选择菜单也就永远不出现。
+     * （与"阅读页划不动"是同一类坑：上层手势层把下层需要的触摸吃掉了。）
+     *
+     * `Transparent` 的语义正是"自身与子节点照常响应，**同时允许**被遮住的节点也参与命中"：
+     * 三个分区的点击翻页照旧，正文也能收到长按。
+     *
+     * ⚠️ "选中后点别处会顺带翻页"这个问题，已由 `handleReaderTap` 解决
+     * （有选中时第一次点击只取消选择），**不需要**再动这里的 hit test。
+     */
+    .hitTestBehavior(HitTestMode.Transparent)
+    // 记录按下时刻：`handleReaderTap` 靠它区分"点击"与"长按"
+    // （长按选中正文后松手时，三个分区的 onClick 也会触发）
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.touchDownAt = Date.now();
+      }
+    })
     // 手势挂在**整层**而不是三个分区上：一次滑动可能跨过两个分区，
     // 挂在父节点才能拿到完整位移。
     //
@@ -648,6 +744,16 @@ struct ReaderPage {
     .gesture(
       PanGesture({ direction: PanDirection.Horizontal })
         .onActionEnd((event: GestureEvent) => {
+          /**
+           * ⚠️ 有选中文字时**不翻页**。
+           *
+           * 拖动选择手柄本身也是一次水平拖动，位移很容易超过翻页阈值 ——
+           * 不拦的话，用户想扩大选区，结果翻了一页（与"点外面就翻页"同源）。
+           * 这里直接让路：选择状态下滑动不翻页。
+           */
+          if (this.hasSelection) {
+            return;
+          }
           const dx: number = event.offsetX;
           if (dx <= -AppConstants.PAGE_SWIPE_MIN_DISTANCE) {
             this.vm.nextPage();
@@ -659,6 +765,237 @@ struct ReaderPage {
   }
 
   // ------------------------------------------------------------ 正文
+
+  /**
+   * 长按选中正文后的自定义菜单：在系统默认项（复制等）旁边加上**书签**。
+   *
+   * ⚠️ 书签入口为什么放在这里，而不是顶栏按钮：
+   * 用户的心智是"选中一段 → 对这段做点什么（复制 / 书签）"，
+   * 与系统复制同一个入口最自然；顶栏那个按钮已按反馈移除。
+   *
+   * ⚠️ 关键正确性：`range` 给的是**渲染文本（`renderedText`）的下标**，
+   * 而书签必须存**原文偏移**（见 `ReaderViewModel.toOriginalOffset`）。
+   * 两者差着"剥页首换行 + 段首缩进"这两步装饰，不换算就会存错位置。
+   *
+   * ⚠️ 这里返回的是普通对象，不是 `@Builder` —— `editMenuOptions` 要的是
+   * `EditMenuOptions` 数据，不是 UI 构建器，别写成 `@Builder`。
+   */
+  private buildTextEditMenu(): EditMenuOptions {
+    const bookmarkId: TextMenuItemId = TextMenuItemId.of('reader_bookmark');
+    /**
+     * ⚠️ 先声明成**带类型的局部变量**再返回，不直接 `return { ... }`：
+     * ArkTS 的 `arkts-no-untyped-obj-literals` 要求对象字面量有明确的目标类型，
+     * 写成带注解的局部变量是最无歧义的形式。
+     */
+    const options: EditMenuOptions = {
+      onCreateMenu: (menuItems: Array<TextMenuItem>): Array<TextMenuItem> => {
+        const bookmark: TextMenuItem = {
+          content: '书签',
+          id: bookmarkId
+        };
+        /**
+         * ⚠️ 书签放在**最前面**，不是追加到末尾。
+         *
+         * 系统菜单项较多，追加到末尾会被折进那个 `∨` 展开箭头里 ——
+         * 用户实测反馈"看不到书签"。放到首位就始终可见。
+         *
+         * 代价是「复制」被挤到第二位。可接受：本 App 里"加书签"是这个
+         * 菜单的**主要**用途（见 §5.5.2），复制是系统附带的通用能力。
+         */
+        const mine: Array<TextMenuItem> = [bookmark];
+
+        /**
+         * ⚠️ 过滤掉不需要的系统项，但**保留搜索**。
+         *
+         * 系统默认会给一堆项，其中翻译 / 分享 / AI 写作等要么跳到别的应用、
+         * 要么弹系统面板，在阅读器里纯属干扰（用户明确要求**去掉翻译**）。
+         * 而**搜索是用户要保留的** —— 它由系统提供（本项目没有自己的搜索页），
+         * 用来查选中的词，是很实用的能力。
+         *
+         * 用"白名单保留"而不是"黑名单删除"：
+         * 系统后续新增的项默认不会冒出来，行为更可控。
+         *
+         * ⚠️ 曾经漏掉 SEARCH 导致"搜索功能丢了"（用户实测反馈）——
+         * 加白名单时务必逐项确认，别把要留的一起过滤掉。
+         */
+        const kept: Array<TextMenuItem> = [];
+        for (const item of menuItems) {
+          if (item.id.equals(TextMenuItemId.COPY)
+            || item.id.equals(TextMenuItemId.SELECT_ALL)
+            || item.id.equals(TextMenuItemId.SEARCH)) {
+            kept.push(item);
+          }
+        }
+        return mine.concat(kept);
+      },
+      onMenuItemClick: (menuItem: TextMenuItem, range: TextRange): boolean => {
+        const start: number = range.start ?? 0;
+        const end: number = range.end ?? start;
+
+        /**
+         * ⚠️ **点任何一项，第一件事就是彻底清掉选择状态**。
+         *
+         * 这是"系统菜单挡住书签弹窗"的**真正根因**（此前误判为时序问题）：
+         * 正文 `Text` 上绑着 `.selection(this.selStart, this.selEnd)`，
+         * 而这里原本只关菜单、把 `hasSelection` 置假，**没有清这两个端点**。
+         * 于是弹窗打开触发重绘时，`selection()` 又把选区**重新施加回去**，
+         * 系统菜单跟着重新出现 —— 加多少延迟都没用。
+         *
+         * `clearSelection()` 会把端点压成 `(0, 0)`
+         * （文档：`start >= end` 即不选中任何文字），从根上断掉重绘复活选区的可能。
+         */
+        this.clearSelection();
+
+        const id: TextMenuItemId = menuItem.id;
+        const isBookmark: boolean = id.equals(bookmarkId);
+        const isCopy: boolean = id.equals(TextMenuItemId.COPY);
+        /**
+         * 仍然保留一点延迟：系统菜单是在自己的后续帧里收起的，
+         * 立刻弹窗会与它的收起动画抢时序。等 `READER_MENU_DISMISS_MS`
+         * 让菜单收干净，弹窗再出现，层级与观感都正确。
+         */
+        setTimeout(() => {
+          if (isBookmark) {
+            this.openBookmarkDialog(start, end);
+          } else if (isCopy) {
+            this.copySelection(start, end);
+          }
+        }, AppConstants.READER_MENU_DISMISS_MS);
+
+        /**
+         * 返回值只决定"要不要让系统继续执行它的默认行为"：
+         *  - 书签/复制是我们自己实现的 → `true` 消费掉；
+         *  - 其余（全选等）交回系统 → `false`。
+         */
+        return isBookmark || isCopy;
+      }
+    };
+    return options;
+  }
+
+  /**
+   * 清掉当前选择：关闭系统菜单 + 清除选中高亮。
+   *
+   * ⚠️ 两步都要做，缺一不可：
+   *  - `closeSelectionMenu()` 只关**菜单**，高亮与手柄会留在原地
+   *    （用户实测"菜单消失了但选中的没消失"）；
+   *  - 真正清除高亮要靠把 `Text.selection` 设成 `(0, 0)`
+   *    （文档：`start >= end` 即不选中任何文字），
+   *    而 `selection` 是构建期属性，所以用 `selectionEpoch` 自增触发一次重绘。
+   */
+  private clearSelection(): void {
+    this.textController.closeSelectionMenu();
+    this.hasSelection = false;
+    // 把选区端点压成 (0, 0)：文档明确 start >= end 时"不选中任何文字"，
+    // 配合 @State 触发的那次重绘，高亮与手柄才会真正消失
+    this.selStart = 0;
+    this.selEnd = 0;
+  }
+
+  /**
+   * 阅读区点击的统一入口：**有选中文字时，第一次点击只用来取消选择**。
+   *
+   * ⚠️ 为什么需要它（用户实测反馈）：选中文字后点空白处，本意是"取消选择"，
+   * 但点击会直接执行翻页/切菜单 —— 选择状态还留着，非常别扭。
+   *
+   * 为什么不用"透明蒙层"那种做法：蒙层铺满全屏后，
+   *  - 用默认 `HitTestMode.Default` → 连**选择手柄的拖动**一起挡掉，
+   *    用户没法调整选区；
+   *  - 用 `Transparent` → 点击照样传到下层，等于没拦。
+   * 所以改为在这里判断：**同样是"点外面就关掉"的效果，但不碰触摸层级**，
+   * 手柄照常可用。
+   *
+   * @param action 无选中时该点击原本要做的动作
+   */
+  private handleReaderTap(action: string): void {
+    /**
+     * ⚠️ 先排除"长按"：长按选中正文后松手时，滚动模式的
+     * `parallelGesture(TapGesture)` 也会触发（它的语义就是"可与子节点手势同时触发"），
+     * 于是这一下会被误当成"点击空白处"，把刚弹出的选择菜单关掉 ——
+     * 用户看到的就是"菜单一闪就消失"。
+     *
+     * 判据用按住时长：超过 `READER_TAP_MAX_MS` 就算长按，直接放行不处理。
+     */
+    const heldMs: number = Date.now() - this.touchDownAt;
+    if (this.touchDownAt > 0 && heldMs > AppConstants.READER_TAP_MAX_MS) {
+      return;
+    }
+
+    if (this.hasSelection) {
+      this.clearSelection();
+      return;
+    }
+    if (action === 'prev') {
+      this.vm.prevPage();
+    } else if (action === 'next') {
+      this.vm.nextPage();
+    } else {
+      this.vm.toggleMenu();
+    }
+  }
+
+  /**
+   * 复制选中内容到系统剪贴板。
+   *
+   * ⚠️ 为什么要**自己写剪贴板**，而不是让系统菜单的"复制"自己干活：
+   * 实测发现走系统默认行为时内容**没有真正进入剪贴板**
+   * （用户反馈"复制了之后没有到剪切板中"）。
+   * 既然我们已经拦下这次点击（返回 `true`），就顺手把剪贴板写对 ——
+   * 这也是唯一能保证"所见即所复制"的做法。
+   *
+   * ⚠️ 复制的是**原文**内容（先换算成原文偏移再截取）：
+   * 直接从 `renderedText` 截会带上装饰插入的全角缩进空格。
+   */
+  private copySelection(renderedStart: number, renderedEnd: number): void {
+    const startOriginal: number = this.vm.toOriginalOffset(renderedStart);
+    const endOriginal: number = this.vm.toOriginalOffset(renderedEnd);
+    const text: string = this.vm.originalTextBetween(startOriginal, endOriginal);
+    if (text.length === 0) {
+      return;
+    }
+    try {
+      const data: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      pasteboard.getSystemPasteboard().setDataSync(data);
+      this.getUIContext().getPromptAction().showToast({ message: '已复制' });
+    } catch (e) {
+      Logger.error(LogTag.READ, `复制失败: ${Logger.errText(e as Object)}`);
+      this.getUIContext().getPromptAction().showToast({ message: '复制失败' });
+    }
+  }
+
+  /**
+   * 打开加书签弹窗（长按选中 → 菜单「书签」）。
+   *
+   * ⚠️ 两个下标都是**渲染文本**坐标，必须各自换算成原文偏移：
+   * 只换起点会得到一段"起点对、终点偏"的选文（终点越大偏得越多）。
+   */
+  private openBookmarkDialog(renderedStart: number, renderedEnd: number): void {
+    const startOriginal: number = this.vm.toOriginalOffset(renderedStart);
+    const endOriginal: number = this.vm.toOriginalOffset(renderedEnd);
+    this.bookmarkDraft = this.vm.buildBookmarkDraft(startOriginal, endOriginal);
+    this.vm.setBookmarkVisible(true);
+  }
+
+  /** 保存书签（弹窗点"保存"） */
+  private saveBookmark(note: string): void {
+    // 把用户填的备注并进草稿（草稿是深拷贝，这里改的是页面自己那份）
+    this.bookmarkDraft.note = note;
+    this.vm.saveBookmark(this.bookmarkDraft).then((result: BookmarkSaveResult) => {
+      this.vm.setBookmarkVisible(false);
+      if (!result.ok) {
+        // ⚠️ 失败必须单独提示，否则用户以为存上了
+        this.getUIContext().getPromptAction().showToast({ message: '书签保存失败' });
+        return;
+      }
+      // 区分"新建"与"覆盖"：用户刚在同位置存过时，明确告诉他旧的那条被替换了
+      this.getUIContext().getPromptAction().showToast({
+        message: result.updated ? '已更新该书签' : '已添加书签'
+      });
+    }).catch((e: BusinessError) => {
+      Logger.error(LogTag.READ, `保存书签失败: ${e.message}`);
+    });
+  }
 
   /**
    * 页眉文案 = 当前章节标题。
@@ -743,7 +1080,7 @@ struct ReaderPage {
       Scroll(this.scroller) {
         Column() {
           this.buildChapterHeading()
-          Text(this.state.renderedText)
+          Text(this.state.renderedText, { controller: this.textController })
             .fontSize(this.state.settings.fontSize)
             .fontColor(this.theme().text)
             .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
@@ -753,6 +1090,19 @@ struct ReaderPage {
             // scroll 分支里也会走 `indentParagraphHeads`。
             .textIndent(0)
             .width('100%')
+            // 与分页模式一致：允许长按选中，并在系统菜单里加"书签"
+            .copyOption(CopyOptions.InApp)
+            .editMenuOptions(this.buildTextEditMenu())
+            // 选区端点：如实回填当前选区，取消时压成 (0,0)（见字段说明）
+            .selection(this.selStart, this.selEnd)
+            // 跟踪"是否有选中"：有选中时第一次点击只取消选择（见 handleReaderTap）
+            .onTextSelectionChange((start: number, end: number) => {
+              this.hasSelection = end > start;
+              // ⚠️ 只在真正有选中时回填：`(0,0)` 是我们主动取消时设的，
+              // 系统随后的回调若也报 (0,0) 再回填一次是无害的幂等操作
+              this.selStart = start;
+              this.selEnd = end;
+            })
         }
         .width('100%')
         // ⚠️ 左右页边距必须**真的**加在渲染上，否则与分页算的宽度对不上：
@@ -775,12 +1125,26 @@ struct ReaderPage {
       .onAreaChange((oldArea: Area, newArea: Area) => {
         this.viewportHeight = Number(newArea.height);
       })
-      // 单击切菜单挂在 Scroll 上而不是 Text 上，两个原因：
-      //  1. Scroll 铺满整屏，短章节时正文下方的空白区也能点；
-      //  2. 父子同时绑 onClick 会变成两个 TapGesture 竞争，
-      //     万一都触发就是"切换两次 = 菜单根本没开"。
-      .onClick(() => {
-        this.vm.toggleMenu();
+      // 单击切菜单。
+      //
+      // ⚠️ 必须用 `parallelGesture(TapGesture)` 而**不是** `onClick`：
+      // 正文 `Text` 设了 `copyOption`（可长按选中）后，它自己会参与触摸竞争，
+      // 挂在父节点 `Scroll` 上的 `onClick` 会**收不到单击** ——
+      // 表现就是"点中间打不开状态栏"（本项目实测踩过）。
+      // `parallelGesture` 的语义是"与子节点手势**并行**识别"，
+      // 因此正文照旧能长按选中，父节点也能收到单击。
+      .parallelGesture(
+        TapGesture()
+          .onAction(() => {
+            // 与分页模式一致：有选中时这一下只用来取消选择，不切菜单
+            this.handleReaderTap('menu');
+          })
+      )
+      // 记录按下时刻：`handleReaderTap` 靠它区分"点击"与"长按"
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.touchDownAt = Date.now();
+        }
       })
       .onScroll((scrollOffset: number) => {
         this.onReaderScroll(scrollOffset);
@@ -793,7 +1157,7 @@ struct ReaderPage {
         this.buildChapterHeading()
       }
       // 翻页与呼出菜单由上层 buildPageControls 处理
-      Text(this.state.renderedText)
+      Text(this.state.renderedText, { controller: this.textController })
         .fontSize(this.state.settings.fontSize)
         .fontColor(this.theme().text)
         .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
@@ -805,6 +1169,18 @@ struct ReaderPage {
         // 交给它就会同时出现"续行被误缩进"和"缩进叠成 4 格"两个 bug。
         .textIndent(0)
         .width('100%')
+        // 允许长按选中并复制（配合下面的自定义菜单加"书签"）
+        .copyOption(CopyOptions.InApp)
+        // 长按选中后的菜单：在系统"复制"旁边加上"书签"
+        .editMenuOptions(this.buildTextEditMenu())
+        // 选区端点：如实回填当前选区，取消时压成 (0,0)（见字段说明）
+        .selection(this.selStart, this.selEnd)
+        // 跟踪"是否有选中"：有选中时第一次点击只取消选择（见 handleReaderTap）
+        .onTextSelectionChange((start: number, end: number) => {
+          this.hasSelection = end > start;
+          this.selStart = start;
+          this.selEnd = end;
+        })
         // 左右页边距：与分页里减掉的 `pageMargin * 2` 对应，两边必须同一个值
         .padding({ left: this.state.settings.pageMargin, right: this.state.settings.pageMargin })
         .align(Alignment.TopStart)

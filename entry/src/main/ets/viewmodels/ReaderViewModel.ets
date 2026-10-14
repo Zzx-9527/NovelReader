@@ -5,7 +5,7 @@ import { Annotation } from '../model/Annotation';
 import { ReadingPosition } from '../model/ReadingPosition';
 import { ReaderSettings } from '../model/ReaderSettings';
 import { PageCache } from '../model/PageCache';
-import { ReaderState, BookmarkToggleResult } from './ReaderState';
+import { ReaderState, BookmarkSaveResult, BookmarkDraft } from './ReaderState';
 import { AppState } from '../model/AppState';
 import { BookRepository } from '../data/repository/BookRepository';
 import { ChapterRepository } from '../data/repository/ChapterRepository';
@@ -640,43 +640,163 @@ export class ReaderViewModel {
     this.state.settingsVisible = visible;
   }
 
+  setBookmarkVisible(visible: boolean): void {
+    this.state.bookmarkVisible = visible;
+  }
+
   // ------------------------------------------------------------ 书签
 
   /**
-   * 在**当前位置**切换书签。
+   * 组装书签弹窗所需的草稿（长按选中后调用）。
    *
-   * 位置 = 当前章序号 + 当前页起始偏移（`state.offset`）。
-   * 若该位置已有书签则删除（软删），否则新增 —— 这样连点两下就是"加了又取消"，
-   * 不会攒出重复书签。
+   * @param startOriginal 选区起点（**原文**偏移，页面须先用 `toOriginalOffset` 换算）
+   * @param endOriginal 选区终点（**原文**偏移）；与起点相同表示只记一个点
    *
-   * ⚠️ 为什么放在 ViewModel 而不是页面：`bookId` 与 `state.offset` 都在这里，
-   * 页面拿不到 `bookId`（它只从路由参数读一次就丢了）。
-   *
-   * ⚠️ 返回 `BookmarkToggleResult` 而不是 boolean：见该类型的说明 ——
-   * "失败"和"成功取消"都会表现为"当前没书签"，用一个 boolean 会让页面提示错。
+   * ⚠️ 选文必须从**原文**里截取，不能从 `renderedText` 里截 ——
+   * 后者含装饰插入的缩进空格，存进去的"选中内容"会凭空多出全角空格。
+   * 这也是为什么这里要接收原文偏移而不是渲染下标。
    */
-  async toggleBookmark(): Promise<BookmarkToggleResult> {
+  buildBookmarkDraft(startOriginal: number, endOriginal: number): BookmarkDraft {
+    const draft = new BookmarkDraft();
+    const text: string = this.state.getFullText();
+    const maxIndex: number = Math.max(0, text.length - 1);
+    const start: number = Math.max(0, Math.min(startOriginal, maxIndex));
+    const end: number = Math.max(start, Math.min(endOriginal, text.length));
+    draft.startOffset = start;
+    draft.endOffset = end > start ? end : -1;
+    // 从原文截取选中的内容（端点是开区间，substring 正好符合）
+    draft.selectedText = text.substring(start, end);
+    draft.chapterLabel = this.state.chapterTitle.length > 0
+      ? this.state.chapterTitle
+      : `第 ${this.state.chapterIndex + 1} 章`;
+    return draft;
+  }
+
+  /**
+   * 保存书签（弹窗点"保存"时调用）。
+   *
+   * ⚠️ 与旧版"点一下即切换"的区别：这条路径会带上**选文**与**备注**，
+   * 且同一位置已有书签时做**覆盖**（软删旧的再新增），
+   * 保证库里存的就是用户在弹窗里确认的那一份。
+   */
+  async saveBookmark(draft: BookmarkDraft): Promise<BookmarkSaveResult> {
     if (this.bookId <= 0 || this.state.chapterIndex < 0) {
-      return BookmarkToggleResult.failed();
+      return BookmarkSaveResult.failed();
     }
     const chapterIndex: number = this.state.chapterIndex;
-    const offset: number = this.state.offset;
     try {
-      const existing: Annotation | null = await this.findBookmarkAt(chapterIndex, offset);
+      const existing: Annotation | null = await this.findBookmarkAt(chapterIndex, draft.startOffset);
       if (existing !== null) {
+        /**
+         * ⚠️ 同位置已有书签时，**先软删再新增**，而不是只 `updateNote`。
+         *
+         * 只更新备注会漏掉"选文变了"的情况（用户在同一起点重新选了另一段），
+         * 库里就会留着旧的 `selected_text` —— 与用户在弹窗里确认的内容不一致。
+         * 软删 + 新增保证存下来的**就是**用户刚确认的那一份，
+         * 且因为旧行已标记删除，列表里不会出现两条。
+         */
         await AnnotationRepository.softDelete(existing.id);
-        return BookmarkToggleResult.removed();
       }
-      const id: number = await AnnotationRepository.addBookmark(this.bookId, chapterIndex, offset);
+      const id: number = await AnnotationRepository.add(
+        this.bookId, chapterIndex, AppConstants.ANNOTATION_BOOKMARK,
+        draft.startOffset,
+        draft.endOffset >= 0 ? draft.endOffset : null,
+        draft.selectedText, draft.note, '');
       if (id <= 0) {
-        // 章节行不存在时会返回 0（见 addBookmark 的说明），此时没有书签可谈
-        return BookmarkToggleResult.failed();
+        return BookmarkSaveResult.failed();
       }
-      return BookmarkToggleResult.addedNow();
+      return BookmarkSaveResult.saved(existing !== null);
     } catch (e) {
-      Logger.error(LogTag.READ, `切换书签失败: ${Logger.errText(e as Object)}`);
-      return BookmarkToggleResult.failed();
+      Logger.error(LogTag.READ, `保存书签失败: ${Logger.errText(e as Object)}`);
+      return BookmarkSaveResult.failed();
     }
+  }
+
+  /**
+   * 取**原文**中 `[start, end)` 区间的文字（供复制/书签使用）。
+   *
+   * ⚠️ 必须从原文取，不能从 `renderedText` 取：后者含装饰插入的全角缩进空格，
+   * 复制出去的内容会凭空多出空格。两个入参都应是**原文偏移**
+   * （页面侧先用 `toOriginalOffset` 换算）。
+   */
+  originalTextBetween(startOriginal: number, endOriginal: number): string {
+    const text: string = this.state.getFullText();
+    const start: number = Math.max(0, Math.min(startOriginal, text.length));
+    const end: number = Math.max(start, Math.min(endOriginal, text.length));
+    return text.substring(start, end);
+  }
+
+  /**
+   * 把**渲染文本（`renderedText`）的下标**换算成**原文偏移**。
+   *
+   * ⚠️ 为什么必须换算：长按选中回调给的 `TextRange` 下标是相对
+   * **渲染出来的那段文字**的，而渲染前做过两步装饰（见 `renderAt`）：
+   *   1. 剥掉页首换行；
+   *   2. 给段首补了 `firstLineIndent` 个全角空格。
+   * 书签与进度一律以**原文偏移**为准（设计文档铁律 5.1）。
+   * 直接把渲染下标存进去，书签就会落到错误位置 —— 缩进越多偏得越远。
+   *
+   * ⚠️ 为什么用"双游标对齐"而不是重建一遍缩进逻辑：
+   * 重建就等于把 `indentParagraphHeads` 的判断抄第二份，
+   * 将来改了一处忘了另一处，偏移就会**静默**错位（本项目已在
+   * "测量与渲染不同源"上踩过同类坑，见 pitfall 57/59）。
+   * 而 `state.renderedText` 本身就是装饰后的**唯一真相**，
+   * 拿它跟原文片段直接对齐，天然与装饰实现同步。
+   *
+   * 原理：装饰只**插入**字符（缩进），从不删除或改写原文，
+   * 所以两个游标错位时，一定是渲染侧多了一个插入字符 —— 只推渲染游标即可。
+   * 插入位置必然是行首，而"行首已带空白就不插"这条规则保证：
+   * 插入的空白字符**不会**与原文该位置的字符相同，因此不会误判。
+   */
+  toOriginalOffset(renderedIndex: number): number {
+    const text: string = this.state.getFullText();
+    const rendered: string = this.state.renderedText;
+    if (rendered.length === 0 || renderedIndex <= 0) {
+      return this.pageRawStart();
+    }
+
+    // 取本页**原文片段**：起点算法与 renderAt 完全一致（含剥页首换行）
+    const head: number = this.pageRawStart();
+    let end: number = text.length;
+    if (this.state.settings.pageMode !== 'scroll' && this.state.breaks.length > 0) {
+      const pageIndex: number = this.state.pageIndex;
+      end = pageIndex + 1 < this.state.breaks.length
+        ? this.state.breaks[pageIndex + 1]
+        : text.length;
+    }
+    const raw: string = text.substring(head, end);
+
+    let i: number = 0;
+    let j: number = 0;
+    const limit: number = Math.min(renderedIndex, rendered.length);
+    while (i < limit && j < raw.length) {
+      if (rendered.charAt(i) === raw.charAt(j)) {
+        i++;
+        j++;
+      } else {
+        // 渲染侧多出来的那个字符 = 装饰插入的缩进，原文里没有对应物
+        i++;
+      }
+    }
+    return head + j;
+  }
+
+  /** 本页渲染文本在**原文**里的起始偏移（含"剥页首换行"，与 renderAt 同源） */
+  private pageRawStart(): number {
+    if (this.state.settings.pageMode === 'scroll' || this.state.breaks.length === 0) {
+      return 0;
+    }
+    const text: string = this.state.getFullText();
+    const pageIndex: number = this.state.pageIndex;
+    const start: number = this.state.breaks[pageIndex];
+    const end: number = pageIndex + 1 < this.state.breaks.length
+      ? this.state.breaks[pageIndex + 1]
+      : text.length;
+    let head: number = start;
+    while (head < end && text.charAt(head) === '\n') {
+      head++;
+    }
+    return head;
   }
 
   /** 找当前章、当前偏移处是否已有书签；没有返回 null */
