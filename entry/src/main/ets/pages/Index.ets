@@ -55,7 +55,27 @@ struct Index {
    */
   @State shelfState: ShelfState = new ShelfState();
   private shelfVm: BookShelfViewModel = new BookShelfViewModel();
+  /**
+   * 当前选中页签。
+   *
+   * ⚠️ 它必须由**点击瞬间**就更新，不能只靠 `Tabs.onChange` —— 见 `tabBuilder` 的说明。
+   */
   @State activeTab: number = 0;
+  /**
+   * 正在被按下的页签下标；-1 表示没有。
+   *
+   * ⚠️ 用来做**按压反馈**：自定义 `@Builder` tabBar 不像系统默认 tabBar
+   * 自带按压效果，得自己维护这个状态。
+   */
+  @State pressedTab: number = -1;
+  /**
+   * 页签控制器。
+   *
+   * ⚠️ 为什么需要它：`Tabs` 的 `index` 只是**初始值**，改 `activeTab`
+   * 并不会让 Tabs 真的翻页（它不是双向绑定）。想在点击瞬间就切换，
+   * 必须显式调 `changeIndex()`。
+   */
+  private tabsController: TabsController = new TabsController();
 
   /**
    * 安全区高度（vp），由 `EntryAbility` 测好后放进 `AppStorage`。
@@ -89,7 +109,7 @@ struct Index {
      * 视觉上导航栏就自然延伸到了屏幕最底边。
      */
     Column() {
-      Tabs({ index: this.activeTab }) {
+      Tabs({ index: this.activeTab, controller: this.tabsController }) {
         TabContent() {
           BookShelfPage({ state: this.shelfState, vm: this.shelfVm })
         }
@@ -110,7 +130,20 @@ struct Index {
       .barBackgroundColor(AppColor.bgCard)
       .scrollable(false)
       .onChange((index: number) => {
-        this.activeTab = index;
+        /**
+         * ⚠️ 这里**只**做数据刷新，不再负责更新高亮。
+         *
+         * `onChange` 的触发时机是"页签切换**完成**后"（含切换动画），
+         * 若高亮态等它来改，就会出现用户反馈的"图标颜色慢了一拍"——
+         * 手指已经点下去了，颜色还停在旧页签上。
+         *
+         * 高亮现在由 `switchTab()` 在**点击瞬间**同步改掉，本回调只兜底：
+         * 手势滑动等**不经过 tabBuilder 点击**的路径也可能改变页签，
+         * 那时仍需把 `activeTab` 对齐（否则高亮会与实际页面不一致）。
+         */
+        if (this.activeTab !== index) {
+          this.activeTab = index;
+        }
         if (index === 0) {
           // 切回书架：重新取数据，保证进度、导入结果都是最新的
           ShelfRefreshRegistry.refresh();
@@ -148,7 +181,29 @@ struct Index {
   }
 
   /**
-   * 底部 Tab：图标 + 文字，选中态用品牌色。
+   * 点击页签：**立刻**切换高亮与页面，不等 `Tabs.onChange`。
+   *
+   * ⚠️ 两条路径都要走（缺一不可）：
+   *  1. 改 `activeTab` → 高亮色**同步**变（这是"慢一拍"的修复点）；
+   *  2. 调 `changeIndex()` → 让 `Tabs` 真的翻页。
+   * 只改 `activeTab` 不会翻页（`index` 不是双向绑定），
+   * 只调 `changeIndex()` 则高亮要等 `onChange` 回来才变 —— 又慢一拍。
+   */
+  private switchTab(index: number): void {
+    if (this.activeTab === index) {
+      return;
+    }
+    this.activeTab = index;
+    this.tabsController.changeIndex(index);
+    /**
+     * ⚠️ 这里**不**再调 `ShelfRefreshRegistry.refresh()`：
+     * 页签真的切过去之后 `onChange` 必然触发，刷新由它统一负责。
+     * 两处都调会让书架 `reloadData()` 跑两遍（闪一下、白做一次查询）。
+     */
+  }
+
+  /**
+   * 底部 Tab：图标 + 文字，选中态用**点缀色**。
    *
    * ⚠️ **只接收一个 `index`**，文案与图标都从顶部数组查 ——
    * 带参 `@Builder` 在同一处 `build()` 里调多次会串位（设计文档第 15/41 条），
@@ -159,6 +214,9 @@ struct Index {
    * 另两个带写死的 `fill`（如 `#303133`），但**都不影响染色** ——
    * 官方文档明确 `fillColor` 会"替换 svg 图片中所有可绘制元素"的填充色。
    * 所以换图标时不必检查 `fill` 属性。
+   *
+   * ⚠️ 本 `@Builder` 承担了系统默认 tabBar 的两件事：**按压反馈**与
+   * **点击瞬间的高亮**。自定义 tabBar 不会自动获得这两者，见下方实现处注释。
    */
   @Builder
   tabBuilder(index: number) {
@@ -173,15 +231,53 @@ struct Index {
         .height(TAB_ICON_SIZE)
         .fillColor(this.activeTab === index ? AppColor.accent : AppColor.textHint)
         .objectFit(ImageFit.Contain)
+        /**
+         * ⚠️ 颜色变化加一段**短过渡**：用 `.animation()` 属性式动画，
+         * 它作用于**它上方**的属性，所以颜色一改就自动补间，不需要手写 `animateTo`。
+         *
+         * 直接硬切会显得"闪"一下；这里 120ms 足够快、察觉不到延迟，
+         * 又让图标与文字的颜色变化是"融"过去的。时长刻意远小于页签
+         * 切换动画，避免重新引入"慢一拍"的观感。
+         */
+        .animation({ duration: 120, curve: Curve.EaseOut })
 
       Text(TAB_LABELS[index])
         .fontSize(AppTheme.FONT_CAPTION)
         .fontColor(this.activeTab === index ? AppColor.accent : AppColor.textHint)
         .fontWeight(this.activeTab === index ? FontWeight.Medium : FontWeight.Normal)
+        .animation({ duration: 120, curve: Curve.EaseOut })
     }
     .width('100%')
     .height(AppTheme.TAB_BAR_HEIGHT)
     .justifyContent(FlexAlign.Center)
+    /**
+     * ⚠️ **按压反馈**：自定义 `@Builder` tabBar 不像系统默认 tabBar
+     * 自带按压效果，必须自己实现 —— 否则用户点了"没有反应"，
+     * 会怀疑是不是没点中（这正是本次反馈的问题之一）。
+     *
+     * 用 `pressedTab` 而不是每个 Tab 各存一个 `@State`：
+     * tabBuilder 是**同一个** @Builder 被调三次，各自的状态无法区分，
+     * 只能靠"当前按下的是哪一个下标"这个共享状态来表达。
+     *
+     * 反馈手段是**整块轻微缩放 + 变淡**：
+     *  - 缩放用 0.92，肉眼可辨但不夸张；
+     *  - 不透明度 0.6，保证未选中态（本来就是浅灰）也能看出被按下。
+     * 之所以不换颜色：选中/未选中的颜色语义已经被"当前在哪一页"占用了，
+     * 按压再用颜色会两者混淆。
+     */
+    .scale({ x: this.pressedTab === index ? 0.92 : 1, y: this.pressedTab === index ? 0.92 : 1 })
+    .opacity(this.pressedTab === index ? 0.6 : 1)
+    .animation({ duration: 90, curve: Curve.EaseOut })
+    .onClick(() => {
+      this.switchTab(index);
+    })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.pressedTab = index;
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.pressedTab = -1;
+      }
+    })
   }
 
   @Builder
