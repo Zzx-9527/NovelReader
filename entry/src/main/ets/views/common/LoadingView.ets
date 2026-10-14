@@ -10,7 +10,8 @@ export struct LoadingView {
       LoadingProgress()
         .width(36)
         .height(36)
-        .color(AppColor.brand)
+        // 转圈是**小面积点缀**，保留主题色
+        .color(AppColor.accent)
       Text(this.message)
         .fontSize(AppTheme.FONT_CAPTION)
         .fontColor(AppColor.textHint)

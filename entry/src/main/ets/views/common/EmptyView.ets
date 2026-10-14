@@ -21,9 +21,11 @@ export struct EmptyView {
           .padding({ left: 32, right: 32 })
       }
       if (this.actionText.length > 0) {
+        // 中性填充按钮；字色必须显式设，否则深色模式下是"白底白字"
         Button(this.actionText)
           .fontSize(AppTheme.FONT_BODY)
-          .backgroundColor(AppColor.brand)
+          .backgroundColor(AppColor.primary)
+          .fontColor(AppColor.onPrimary)
           .onClick(() => {
             if (this.onAction !== undefined) {
               this.onAction();

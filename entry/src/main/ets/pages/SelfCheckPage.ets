@@ -122,7 +122,9 @@ struct SelfCheckPage {
           .width('100%')
         Text(this.summary)
           .fontSize(13)
-          .fontColor('#666666')
+          // 原本写死 '#666666'：深色模式下是一块白板上的深灰字，几乎看不清。
+          // 走令牌后自动跟随深浅模式（见设计文档"绝不写 hex 字面量"）。
+          .fontColor(AppColor.textSecondary)
           .width('100%')
       }
       .width('100%')
@@ -135,7 +137,8 @@ struct SelfCheckPage {
                 Text(item.ok ? '✓' : '✗')
                   .fontSize(16)
                   .fontWeight(FontWeight.Bold)
-                  .fontColor(item.ok ? '#1B9C4B' : '#D33A2C')
+                  // 成功/失败用令牌：原来写死的 '#1B9C4B'/'#D33A2C' 在深色下偏暗、对比不足
+                  .fontColor(item.ok ? AppColor.success : AppColor.danger)
                 Text(item.name)
                   .fontSize(15)
                   .fontWeight(FontWeight.Medium)
@@ -145,13 +148,14 @@ struct SelfCheckPage {
 
               Text(item.detail)
                 .fontSize(12)
-                .fontColor('#888888')
+                .fontColor(AppColor.textHint)
                 .width('100%')
             }
             .alignItems(HorizontalAlign.Start)
             .width('100%')
             .padding(10)
-            .backgroundColor('#F5F5F5')
+            // 原来写死 '#F5F5F5'：深色模式下整块卡片是亮的，与页面底色割裂
+            .backgroundColor(AppColor.bgCard)
             .borderRadius(8)
           }
         }, (item: CheckItem) => item.name)

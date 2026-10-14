@@ -196,7 +196,8 @@ struct SplashPage {
         LoadingProgress()
           .width(28)
           .height(28)
-          .color(AppColor.brand)
+          // 转圈是**小面积点缀**，保留主题色
+          .color(AppColor.accent)
           .margin({ bottom: 56 })
       }
     }

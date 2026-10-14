@@ -163,15 +163,20 @@ struct Index {
   @Builder
   tabBuilder(index: number) {
     Column({ space: 2 }) {
+      /**
+       * ⚠️ 选中态用**点缀色**（`accent`）—— 这是主题色最主要的去处：
+       * 面积小、位置固定（底部一栏），既能一眼看出在哪一页，又不会喧宾夺主。
+       * 不要为了"更醒目"把它换成大色块（如给整个 Tab 加底色）。
+       */
       Image(TAB_ICONS[index])
         .width(TAB_ICON_SIZE)
         .height(TAB_ICON_SIZE)
-        .fillColor(this.activeTab === index ? AppColor.brand : AppColor.textHint)
+        .fillColor(this.activeTab === index ? AppColor.accent : AppColor.textHint)
         .objectFit(ImageFit.Contain)
 
       Text(TAB_LABELS[index])
         .fontSize(AppTheme.FONT_CAPTION)
-        .fontColor(this.activeTab === index ? AppColor.brand : AppColor.textHint)
+        .fontColor(this.activeTab === index ? AppColor.accent : AppColor.textHint)
         .fontWeight(this.activeTab === index ? FontWeight.Medium : FontWeight.Normal)
     }
     .width('100%')

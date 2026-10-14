@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>静读 · 主题方案（中性底 + 点缀色）</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 34px 38px 72px;
+    background: #E9E9E7; color: #1F1F1F;
+    font-family: "PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  }
+  h1 { font-size: 24px; margin: 0 0 10px; letter-spacing: .4px; }
+  .lead { font-size: 13.5px; color: #4F4F4F; line-height: 1.9; max-width: 940px; margin: 0 0 8px; }
+  .lead code { background:#DEDEDA; padding:1px 5px; border-radius:4px; font-size:12px; font-family:ui-monospace,Consolas,monospace; }
+  .lead b { color:#1F1F1F; }
+  .rule { height:1px; background:#D6D6D2; margin: 28px 0 0; }
+  .scheme { margin-top: 38px; }
+  .shead { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .shead h2 { font-size:18.5px; margin:0; }
+  .badge { font-size:11.5px; padding:3px 11px; border-radius:999px; background:#DCDCD8; color:#45454A; }
+  .badge.rec { background:#1F1F1F; color:#fff; }
+  .sdesc { font-size:13px; color:#4F4F4F; line-height:1.85; max-width:900px; margin:9px 0 18px; }
+  .sdesc b { color:#1F1F1F; }
+
+  .phones { display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start; }
+
+  /* ---------------- phone ---------------- */
+  .phone {
+    width:246px; height:512px; border-radius:22px; overflow:hidden;
+    position:relative; display:flex; flex-direction:column; flex:0 0 auto;
+    box-shadow:0 6px 20px rgba(0,0,0,.14), 0 0 0 1px rgba(0,0,0,.06);
+  }
+  .plabel {
+    position:absolute; top:8px; right:9px; z-index:9; font-size:10px;
+    padding:2px 8px; border-radius:999px; background:rgba(0,0,0,.42); color:#fff; letter-spacing:.3px;
+  }
+  .screen { flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0; }
+  .statusbar { height:18px; flex:0 0 auto; }
+
+  .shelf-head { padding:5px 12px 0; display:flex; flex-direction:column; gap:8px; }
+  .title-row { display:flex; align-items:center; gap:5px; }
+  .shelf-title { font-size:17px; font-weight:700; flex:1; letter-spacing:.4px; }
+  .head-link { font-size:10.5px; padding:3px 3px; }
+  .btn-import {
+    font-size:10.5px; height:24px; padding:0 11px; border-radius:7px;
+    display:flex; align-items:center; font-weight:500;
+  }
+
+  .cont-card { display:flex; align-items:center; gap:10px; padding:10px; border-radius:11px; }
+  .cont-cover {
+    width:46px; height:61px; border-radius:7px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700;
+  }
+  .cont-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .cont-title { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cont-sub { font-size:10.5px; }
+  .cont-prog { display:flex; align-items:center; gap:6px; }
+  .cont-track { flex:1; height:4px; border-radius:2px; overflow:hidden; }
+  .cont-fill { height:100%; border-radius:2px; }
+  .cont-pct, .cont-time { font-size:9.5px; }
+  .btn-cont {
+    font-size:10.5px; height:25px; padding:0 10px; border-radius:7px;
+    display:flex; align-items:center; flex:0 0 auto; font-weight:500;
+  }
+
+  .chips { display:flex; gap:6px; padding:0 12px; overflow:hidden; }
+  .chip { font-size:10.5px; padding:4px 11px; border-radius:13px; white-space:nowrap; }
+
+  .grid {
+    display:grid; grid-template-columns:repeat(3,1fr); gap:10px;
+    padding:11px 12px 6px; flex:1; align-content:start; min-height:0;
+  }
+  .gitem { display:flex; flex-direction:column; gap:4px; min-width:0; }
+  .gcover {
+    width:100%; aspect-ratio:3/4; border-radius:7px; position:relative;
+    display:flex; align-items:center; justify-content:center;
+    font-size:15px; font-weight:700; letter-spacing:.5px;
+  }
+  .gbadge {
+    position:absolute; right:3px; bottom:3px; font-size:8.5px;
+    padding:1px 3px; border-radius:3px; font-weight:400;
+  }
+  .gtitle { font-size:10.5px; line-height:1.3; overflow:hidden; }
+
+  .tabbar { flex:0 0 auto; display:flex; align-items:center; height:46px; }
+  .tab { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; font-size:10.5px; }
+  .tab svg { display:block; }
+
+  /* reader */
+  .rtop { flex:0 0 auto; height:44px; display:flex; align-items:center; padding:0 4px; position:relative; }
+  .rtop .rback { font-size:14px; padding:6px 9px; }
+  .rtitle {
+    position:absolute; left:0; right:0; text-align:center; font-size:14px;
+    padding:0 58px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .rrefresh { margin-left:auto; font-size:19px; padding:5px 9px; }
+  .rbody { flex:1; padding:5px 18px; font-size:13.5px; line-height:1.92; min-height:0; overflow:hidden; }
+  .rchap { font-size:15px; font-weight:600; margin-bottom:11px; }
+  .rbody p { margin:0 0 10px; text-indent:2em; }
+  .rfoot {
+    flex:0 0 auto; height:28px; display:flex; align-items:center;
+    justify-content:space-between; padding:0 12px; font-size:10.5px;
+  }
+
+  /* swatches */
+  .swatches { display:flex; gap:9px; flex-wrap:wrap; margin-top:14px; }
+  .sw { width:78px; }
+  .swchip { height:32px; border-radius:7px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.09); }
+  .swname { font-size:9px; color:#5F5F63; margin-top:5px; font-family:ui-monospace,Consolas,monospace; }
+  .swhex { font-size:9px; color:#8E8E92; font-family:ui-monospace,Consolas,monospace; }
+
+  .note { font-size:12.5px; color:#4F4F4F; line-height:1.85; max-width:920px; margin-top:16px; }
+  .note b { color:#1F1F1F; }
+
+  /* spec table */
+  table.spec { border-collapse:collapse; margin-top:14px; font-size:12.5px; background:#F7F7F5; border-radius:10px; overflow:hidden; }
+  table.spec th, table.spec td { text-align:left; padding:9px 14px; border-bottom:1px solid #E3E3DF; }
+  table.spec th { background:#EDEDEA; font-weight:600; font-size:12px; }
+  table.spec tr:last-child td { border-bottom:none; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; vertical-align:middle; }
+
+  /* compare */
+  .cmp { display:flex; gap:16px; flex-wrap:wrap; margin-top:16px; }
+  .cmpcard { width:210px; border-radius:11px; overflow:hidden; box-shadow:0 0 0 1px rgba(0,0,0,.08); }
+  .cmpbar { height:74px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600; }
+  .cmpmeta { font-size:10.5px; color:#4F4F4F; padding:8px 11px; background:#F7F7F5; line-height:1.6; }
+  .cmpmeta b { display:block; font-size:11.5px; color:#1F1F1F; margin-bottom:2px; }
+  .verdict { font-size:11px; margin-top:3px; }
+</style>
+</head>
+<body>
+
+<h1>静读 · 主题方案（白色底 + 点缀色）</h1>
+<p class="lead">
+  <b>主色是白色</b>，中性白 —— 不掺暖调、不掺灰调。页面底 <code>#FAFAFA</code>、卡片 <code>#FFFFFF</code>，
+  两者都是 R=G=B 的中性白，只差一档明度用来分层。深色是中性近黑。
+  主题色<b>只出现在图标和一点点小点缀上</b>，不铺到按钮、卡片、底板上。
+</p>
+<p class="lead">
+  这一版还把"主题色"的<b>用法</b>一起改了：现在"导入 / 继续"按钮、选中的分组标签
+  都是品牌色大色块，太抢眼 —— 改成<b>中性色填充</b>（浅色下是近黑、深色下是近白），
+  主题色让位给<b>底部 Tab 选中图标、进度条、角标</b>这些小地方。
+</p>
+<div class="rule"></div>
+
+<div id="root"></div>
+
+<script>
+/* ============================================================
+   ① 中性底色 —— 所有方案共用
+   ============================================================ */
+const BASE = {
+  light: {
+    bg_page:'#FAFAFA', bg_card:'#FFFFFF',
+    text_primary:'#1F1F1F', text_secondary:'#555555', text_hint:'#767676',
+    divider:'#EAEAEA', mask:'#66000000',
+    danger:'#B4432F', success:'#3D7A4E',
+    primary:'#1F1F1F', on_primary:'#FFFFFF',
+    cover_bg:'#F0F0F0', cover_text:'#6B6B6B'
+  },
+  dark: {
+    bg_page:'#1A1A1A', bg_card:'#242424',
+    text_primary:'#E8E8E8', text_secondary:'#AAAAAA', text_hint:'#949494',
+    divider:'#303030', mask:'#99000000',
+    danger:'#E08A76', success:'#6FA97A',
+    primary:'#E8E8E8', on_primary:'#1A1A1A',
+    cover_bg:'#2E2E2E', cover_text:'#9C9C9C'
+  }
+};
+
+/* ============================================================
+   ② 点缀色候选 —— 只用在图标 / 进度条 / 角标
+   ============================================================ */
+const ACCENTS = [
+  { key:'石墨', light:'#3A3A3A', dark:'#C8C8C6',
+    desc:'<b>完全单色</b>，最克制。除了图标本身，几乎看不出有主题色 —— 整屏就是干净的黑白灰。想要"高级、不喧哗"选它。' },
+  { key:'黛蓝', light:'#35597F', dark:'#8FB0D4',
+    desc:'一点点冷蓝，像钢笔水。<b>安静、耐看</b>，和"读书"这件事的气质最合，也是四套里最不容易看腻的。' },
+  { key:'赭石', light:'#8A5A2E', dark:'#D8AC7C',
+    desc:'暖棕点缀。配暖白底很舒服，<b>书卷气最重</b>；冬天和夜间看尤其顺眼。' },
+  { key:'松绿', light:'#35604F', dark:'#86BCA4',
+    desc:'低饱和墨绿。<b>长阅读最不累眼</b>，和阅读页已有的"护眼"主题同源，全局与正文不会打架。' },
+  { key:'绛紫', light:'#5C3A56', dark:'#C09CBC',
+    desc:'低调的紫，偏文艺。<b>比蓝色更有个性</b>一点，又不至于跳。' }
+];
+
+const ICON = {
+  shelf:'<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="7" width="4" height="14" rx="1"/><rect x="10" y="3" width="4" height="18" rx="1"/><rect x="17" y="10" width="4" height="11" rx="1"/></svg>',
+  stats:'<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/></svg>',
+  mine:'<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7.2 8-7.2s8 2.8 8 7.2z"/></svg>'
+};
+
+const BOOKS = [
+  ['剑来',12], ['凡人修仙传',0], ['诡秘之主',46],
+  ['雪中悍刀行',78], ['沧元图',5], ['赘婿',33]
+];
+
+/* ============================================================
+   书架页
+   ============================================================ */
+function shelfHTML(t, accent) {
+  const grid = BOOKS.map(function (b) {
+    const badge = b[1] > 0
+      ? '<span class="gbadge" style="color:' + t.on_primary + ';background:' + t.mask + '">' + b[1] + '%</span>'
+      : '';
+    return '<div class="gitem">' +
+      '<div class="gcover" style="background:' + t.cover_bg + ';color:' + t.cover_text + '">' +
+        b[0].slice(0,2) + badge +
+      '</div>' +
+      '<div class="gtitle" style="color:' + t.text_primary + '">' + b[0] + '</div>' +
+    '</div>';
+  }).join('');
+
+  // 选中的分组标签：中性填充（不是主题色）
+  const chips = ['全部','玄幻','都市','收藏'].map(function (c, i) {
+    const on = i === 0;
+    return '<div class="chip" style="background:' + (on ? t.primary : t.bg_card) +
+      ';color:' + (on ? t.on_primary : t.text_secondary) + '">' + c + '</div>';
+  }).join('');
+
+  // Tab：选中图标 = 点缀色（这是主题色的主要去处）
+  const tabs = [['书架',true,ICON.shelf],['统计',false,ICON.stats],['我的',false,ICON.mine]]
+    .map(function (x) {
+      const col = x[1] ? accent : t.text_hint;
+      return '<div class="tab" style="color:' + col + '">' + x[2] +
+        '<div style="font-weight:' + (x[1] ? 500 : 400) + '">' + x[0] + '</div></div>';
+    }).join('');
+
+  return '<div class="statusbar"></div>' +
+  '<div class="shelf-head">' +
+    '<div class="title-row">' +
+      '<div class="shelf-title" style="color:' + t.text_primary + '">书架</div>' +
+      '<div class="head-link" style="color:' + t.text_secondary + '">列表</div>' +
+      '<div class="head-link" style="color:' + t.text_secondary + '">排序</div>' +
+      // 导入按钮：中性填充
+      '<div class="btn-import" style="background:' + t.primary + ';color:' + t.on_primary + '">导入</div>' +
+    '</div>' +
+    '<div class="cont-card" style="background:' + t.bg_card + '">' +
+      '<div class="cont-cover" style="background:' + t.cover_bg + ';color:' + t.cover_text + '">剑</div>' +
+      '<div class="cont-main">' +
+        '<div class="cont-title" style="color:' + t.text_primary + '">剑来</div>' +
+        '<div class="cont-sub" style="color:' + t.text_secondary + '">读到第 3 章 / 共 128 章</div>' +
+        // 进度条：点缀色（小面积）
+        '<div class="cont-prog">' +
+          '<div class="cont-track" style="background:' + t.divider + '">' +
+            '<div class="cont-fill" style="width:12%;background:' + accent + '"></div>' +
+          '</div>' +
+          '<div class="cont-pct" style="color:' + t.text_hint + '">12%</div>' +
+        '</div>' +
+        '<div class="cont-time" style="color:' + t.text_hint + '">3 小时前</div>' +
+      '</div>' +
+      '<div class="btn-cont" style="background:' + t.primary + ';color:' + t.on_primary + '">继续</div>' +
+    '</div>' +
+  '</div>' +
+  '<div class="chips" style="margin-top:9px">' + chips + '</div>' +
+  '<div class="grid">' + grid + '</div>' +
+  '<div class="tabbar" style="background:' + t.bg_card + '">' + tabs + '</div>';
+}
+
+/* ============================================================
+   阅读页
+   ============================================================ */
+function readerHTML(r) {
+  return '<div class="statusbar"></div>' +
+  '<div class="rtop" style="background:' + r.bg + ';color:' + r.text + '">' +
+    '<div class="rtitle">剑来</div>' +
+    '<div class="rback">‹ 返回</div>' +
+    '<div class="rrefresh">↻</div>' +
+  '</div>' +
+  '<div class="rbody" style="background:' + r.bg + ';color:' + r.text + '">' +
+    '<div class="rchap">第三章 遇见</div>' +
+    '<p>陈平安蹲在泥瓶巷的墙根下，把那只缺了口的瓷碗又摆正了一分。</p>' +
+    '<p>天还没亮透，巷子里的雾气贴着地面慢慢淌，像谁家打翻了一碗米汤。</p>' +
+    '<p>他抬头看了看屋檐上滴下来的水珠，忽然想起师父说过的那句话——</p>' +
+    '<p>人这一辈子，总要为点什么，站得比昨天更直一些。</p>' +
+  '</div>' +
+  '<div class="rfoot" style="background:' + r.bg + ';border-top:1px solid ' + r.secondary + '">' +
+    '<span style="color:' + r.secondary + '">第三章 遇见</span>' +
+    '<span style="color:' + r.secondary + '">5/16 · 12.4%</span>' +
+  '</div>';
+}
+
+function phone(bg, label, body) {
+  return '<div class="phone" style="background:' + bg + '">' +
+    '<div class="plabel">' + label + '</div>' +
+    '<div class="screen">' + body + '</div>' +
+  '</div>';
+}
+
+function swatches(t, accent) {
+  const items = [
+    ['bg_page', t.bg_page], ['bg_card', t.bg_card],
+    ['text_primary', t.text_primary], ['divider', t.divider],
+    ['primary(按钮)', t.primary], ['点缀色', accent]
+  ];
+  return '<div class="swatches">' + items.map(function (x) {
+    return '<div class="sw">' +
+      '<div class="swchip" style="background:' + x[1] + '"></div>' +
+      '<div class="swname">' + x[0] + '</div>' +
+      '<div class="swhex">' + x[1].toUpperCase() + '</div>' +
+    '</div>';
+  }).join('') + '</div>';
+}
+
+/* ============================================================
+   渲染
+   ============================================================ */
+let html = '';
+
+/* ---------- ① 底色：白就是白，不加暖调 ---------- */
+html += '<div class="scheme">' +
+  '<div class="shead"><h2>第一步 · 白色底</h2>' +
+  '<span class="badge">所有方案共用</span>' +
+  '<span class="badge rec">主色 = 白</span></div>' +
+  '<p class="sdesc"><b>主色就是白色</b>，不掺暖调、不掺灰调。' +
+  '页面底 <code>#FAFAFA</code>、卡片 <code>#FFFFFF</code> —— 两者都是<b>中性白</b>（R=G=B），' +
+  '只差一点点明度用来分层。' +
+  '深色同理：页面 <code>#1A1A1A</code>、卡片 <code>#242424</code>，都是中性近黑。</p>' +
+  '<div class="cmp">' +
+    '<div class="cmpcard"><div class="cmpbar" style="background:#F6F2EB;color:#1F1F1F">米黄（已废弃）</div>' +
+      '<div class="cmpmeta"><b>页面底 · 错</b>#F6F2EB' +
+      '<div class="verdict" style="color:#B4432F">把主色改成了暖色，偏黄</div></div></div>' +
+    '<div class="cmpcard"><div class="cmpbar" style="background:#FAFAFA;color:#1F1F1F">中性白（现在）</div>' +
+      '<div class="cmpmeta"><b>页面底 · 新</b>#FAFAFA' +
+      '<div class="verdict" style="color:#3D7A4E">就是白，只是不刺眼</div></div></div>' +
+    '<div class="cmpcard"><div class="cmpbar" style="background:#FFFFFF;color:#1F1F1F">纯白卡片</div>' +
+      '<div class="cmpmeta"><b>卡片底 · 新</b>#FFFFFF' +
+      '<div class="verdict" style="color:#3D7A4E">比页面底亮一档，自然分层</div></div></div>' +
+    '<div class="cmpcard"><div class="cmpbar" style="background:#1A1A1A;color:#E8E8E8">中性近黑</div>' +
+      '<div class="cmpmeta"><b>深色 · 新</b>页面 #1A1A1A / 卡片 #242424' +
+      '<div class="verdict" style="color:#3D7A4E">不刺眼，同样不掺暖调</div></div></div>' +
+  '</div>' +
+  '<div class="note"><b>浅色令牌：</b></div>' + swatches(BASE.light, BASE.light.primary) +
+  '<div class="note" style="margin-top:14px"><b>深色令牌：</b></div>' + swatches(BASE.dark, BASE.dark.primary) +
+'</div><div class="rule"></div>';
+
+/* ---------- ② 点缀色候选 ---------- */
+ACCENTS.forEach(function (a, i) {
+  html += '<div class="scheme">' +
+    '<div class="shead"><h2>方案 ' + (i+1) + ' · 点缀色「' + a.key + '」</h2>' +
+    '<span class="badge">' + a.light + '</span>' +
+    (a.key === '石墨' ? '<span class="badge rec">最克制</span>' : '') +
+    (a.key === '黛蓝' ? '<span class="badge rec">推荐</span>' : '') +
+    '</div>' +
+    '<p class="sdesc">' + a.desc + '</p>' +
+    '<div class="phones">' +
+      phone(BASE.light.bg_page, '浅色 · ' + a.key, shelfHTML(BASE.light, a.light)) +
+      phone(BASE.dark.bg_page,  '深色 · ' + a.key, shelfHTML(BASE.dark, a.dark)) +
+    '</div>' +
+    '<div class="note"><b>点缀色：</b>浅色 ' + a.light.toUpperCase() +
+      ' &nbsp;/&nbsp; 深色 ' + a.dark.toUpperCase() + '</div>' +
+    '<div class="swatches">' +
+      '<div class="sw"><div class="swchip" style="background:' + a.light + '"></div>' +
+        '<div class="swname">浅色点缀</div><div class="swhex">' + a.light.toUpperCase() + '</div></div>' +
+      '<div class="sw"><div class="swchip" style="background:' + a.dark + '"></div>' +
+        '<div class="swname">深色点缀</div><div class="swhex">' + a.dark.toUpperCase() + '</div></div>' +
+    '</div>' +
+  '</div>' + (i < ACCENTS.length - 1 ? '<div class="rule"></div>' : '');
+});
+
+/* ---------- ③ 用法规范 ---------- */
+html += '<div class="rule" style="margin-top:38px"></div>' +
+  '<div class="scheme">' +
+  '<div class="shead"><h2>主题色用在哪 · 一次说清</h2>' +
+  '<span class="badge">这版真正的改动</span></div>' +
+  '<p class="sdesc">上一版的问题不是颜色不好看，而是<b>主题色铺得太开</b>：' +
+  '按钮、选中标签、封面全是它，整屏都在喊。下面这张表是新的分工 —— ' +
+  '主题色只剩右下角那几处小面积。</p>' +
+  '<table class="spec">' +
+    '<tr><th>元素</th><th>用什么色</th><th>说明</th></tr>' +
+    '<tr><td>页面底 / 卡片底</td><td><span class="dot" style="background:#FAFAFA;box-shadow:inset 0 0 0 1px #ccc"></span>白</td><td><b>主色</b>：中性白 / 中性近黑，深浅两套</td></tr>' +
+    '<tr><td>正文 / 标题</td><td><span class="dot" style="background:#1F1F1F"></span>中性</td><td>近黑，不用纯黑</td></tr>' +
+    '<tr><td><b>导入 / 继续 / 重试按钮</b></td><td><span class="dot" style="background:#1F1F1F"></span><b>中性填充</b></td><td><b>改动</b>：原来是品牌色大色块 → 近黑底 + 白字</td></tr>' +
+    '<tr><td><b>选中的分组标签</b></td><td><span class="dot" style="background:#1F1F1F"></span><b>中性填充</b></td><td><b>改动</b>：同上，不再用品牌色</td></tr>' +
+    '<tr><td>封面占位块</td><td><span class="dot" style="background:#F0F0F0;box-shadow:inset 0 0 0 1px #ccc"></span>中性</td><td><b>改动</b>：一屏 6~9 个封面，用主题色会变成花屏</td></tr>' +
+    '<tr><td>分隔线 / 次要文字</td><td><span class="dot" style="background:#AAAAAA"></span>中性</td><td>中性灰阶，不掺主题色</td></tr>' +
+    '<tr><td><b>底部 Tab 选中图标</b></td><td><span class="dot" style="background:#35597F"></span><b>点缀色</b></td><td>主题色最主要的去处</td></tr>' +
+    '<tr><td><b>进度条 / 角标 / 小圆点</b></td><td><span class="dot" style="background:#35597F"></span><b>点缀色</b></td><td>细、小，只做"一点点"</td></tr>' +
+    '<tr><td>删除 / 危险操作</td><td><span class="dot" style="background:#B4432F"></span>danger</td><td>单独一套红，不跟点缀色混</td></tr>' +
+  '</table>' +
+  '</div>';
+
+/* ---------- ④ 阅读页 ---------- */
+/* ⚠️ 这四套**本次未改动**（按你选的范围：只改应用级底色 + 点缀色用法）。
+   下面列的是代码里的真实现值，供对照 —— 它们仍是原样。 */
+const READER = [
+  ['浅色',      { bg:'#FFFFFF', text:'#1A1A1A', secondary:'#888888' }, '未改动（纯白）'],
+  ['羊皮纸',    { bg:'#F5EDE0', text:'#3E3226', secondary:'#8A7A66' }, '未改动'],
+  ['护眼',      { bg:'#CCE8CF', text:'#2B3A2E', secondary:'#5F7563' }, '未改动'],
+  ['夜间',      { bg:'#111111', text:'#C8C8C8', secondary:'#777777' }, '未改动（纯黑）']
+];
+
+html += '<div class="rule" style="margin-top:38px"></div>' +
+  '<div class="scheme">' +
+  '<div class="shead"><h2>附 · 阅读页四套配色</h2>' +
+  '<span class="badge">用户自选 · 不跟随系统深浅</span></div>' +
+  '<p class="sdesc">这四套是<b>正文背景</b>的配色，由用户在设置面板里选，和上面的应用主题是两回事。' +
+  '<b>本次按你选的范围没有改动</b>（只改了应用级底色与点缀色用法），下面列的是代码里的真实现值。' +
+  '注意「浅色」仍是纯白 <code>#FFFFFF</code>、「夜间」仍是纯黑 <code>#111111</code> —— ' +
+  '从暖白的书架点进阅读页会有一点色温跳变，<b>要不要一起调暖，你说一声即可</b>。</p>' +
+  '<div class="phones">' +
+    READER.map(function (x) { return phone(x[1].bg, x[0], readerHTML(x[1])); }).join('') +
+  '</div>' +
+  '<div class="note">' + READER.map(function (x) { return '<b>' + x[0] + '</b>：' + x[2]; }).join(' &nbsp;·&nbsp; ') + '</div>' +
+  '</div>';
+
+document.getElementById('root').innerHTML = html;
+</script>
+
+</body>
+</html>

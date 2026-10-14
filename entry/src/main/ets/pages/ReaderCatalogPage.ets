@@ -263,8 +263,9 @@ struct ReaderCatalogPage {
           Row() {
             Text(chapter.title.length > 0 ? chapter.title : `第 ${chapter.displayNumber()} 章`)
               .fontSize(AppTheme.FONT_BODY)
+              // 当前章高亮：**小面积点缀**（一行文字），保留主题色
               .fontColor(chapter.chapterIndex === this.currentIndex
-                ? AppColor.brand
+                ? AppColor.accent
                 : this.theme().text)
               .fontWeight(chapter.chapterIndex === this.currentIndex
                 ? FontWeight.Medium

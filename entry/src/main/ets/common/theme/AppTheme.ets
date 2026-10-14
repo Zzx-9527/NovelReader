@@ -13,18 +13,60 @@
  *    类型是 `string` 就等于绕过了资源系统，深色模式会失效。
  */
 export class AppColor {
-  // ---------------------------------------------------------------- 品牌
-  /** 主色：按钮、选中态、进度条 */
-  static readonly brand: Resource = $r('app.color.brand');
-  /** 主色浅底：封面占位块、chip 选中底 */
-  static readonly brandContainer: Resource = $r('app.color.brand_container');
-  /** 主色之上的文字 */
-  static readonly onBrand: Resource = $r('app.color.on_brand');
+  // ------------------------------------------------- 点缀色（主题色，**小面积**）
+  /**
+   * 点缀色：**只用于图标、进度条、角标、当前项高亮**这类小面积元素。
+   *
+   * ⚠️ 它**不是**"品牌主色"，不要拿它铺按钮底色或大色块。
+   *
+   * 为什么要有这条纪律（本项目实测的设计决策）：
+   * 早先版本把品牌色铺在「导入 / 继续 / 重试」按钮、选中的分组标签、
+   * 以及**每一个封面占位块**上 —— 结果整屏都在喊，一屏 6~9 个封面
+   * 全被染成同一个蓝，看起来像花屏，主题色反而失去了"点睛"的作用。
+   *
+   * 现在改成分工：**大色块一律中性（`primary`），颜色只留给小面积（本令牌）**。
+   * 需要"强调一个按钮"时用 `primary`（近黑/近白），不要用 `accent`。
+   */
+  static readonly accent: Resource = $r('app.color.accent');
+
+  // ------------------------------------------- 中性填充（按钮 / 选中标签）
+  /**
+   * 中性填充色：**按钮底、选中标签底**这类需要"实心强调"的大色块。
+   *
+   * ⚠️ 它是"近黑"（浅色模式）与"近白"（深色模式），不是纯黑纯白 ——
+   * 纯黑在 OLED 上过硬、纯白在整屏时发晃，各退一步观感更稳。
+   *
+   * ⚠️ 用它做底时**必须**同时把前景设成 `onPrimary`：
+   * `Button` 的默认字色是白色，深色模式下 `primary` 本身接近白色，
+   * 不显式设字色就会出现"白底白字"直接看不见。
+   */
+  static readonly primary: Resource = $r('app.color.primary');
+  /** `primary` 之上的文字/图标（浅色下近白、深色下近黑） */
+  static readonly onPrimary: Resource = $r('app.color.on_primary');
+
+  // ------------------------------------------------------------ 封面占位
+  /**
+   * 封面占位块底色 / 首字色。
+   *
+   * ⚠️ 刻意**中性**、不用点缀色：一屏要同时出现 6~9 个封面，
+   * 若都染成主题色，整片网格会糊成一块同色，反而看不出书名。
+   * 接入真实 EPUB 封面后这两项只作为"图未就绪"的兜底。
+   */
+  static readonly coverBg: Resource = $r('app.color.cover_bg');
+  static readonly coverText: Resource = $r('app.color.cover_text');
 
   // ---------------------------------------------------------------- 背景
   static readonly bgPage: Resource = $r('app.color.bg_page');
   static readonly bgCard: Resource = $r('app.color.bg_card');
   static readonly mask: Resource = $r('app.color.mask');
+  /**
+   * 压在**深色遮罩之上**的文字/图标色。
+   *
+   * ⚠️ 不能复用 `textPrimary`：遮罩（`mask`）在**两种模式下都是黑的**，
+   * 而 `textPrimary` 在深色模式下是近白、浅色模式下是近黑 ——
+   * 浅色模式下用它就变成"黑底黑字"。遮罩上的字必须**恒定浅色**。
+   */
+  static readonly onScrim: Resource = $r('app.color.on_scrim');
 
   // ---------------------------------------------------------------- 文字
   static readonly textPrimary: Resource = $r('app.color.text_primary');
@@ -60,9 +102,17 @@ export class AppColor {
  * 判据：**只要某个 API 声明要求 `string`，就走这里；否则一律用 `AppColor`。**
  */
 export class AppColorLiteral {
-  static readonly textPrimary: string = '#1D1D1F';
-  static readonly brand: string = '#2F5D8C';
-  static readonly danger: string = '#C7463A';
+  /** 与 `app.color.text_primary` 的浅色档一致（ActionMenu 只收 string） */
+  static readonly textPrimary: string = '#1F1F1F';
+  /**
+   * 点缀色的字面量形式（值与 `app.color.accent` 的浅色档一致）。
+   *
+   * ⚠️ 改 `base/element/color.json` 的 `accent` 时，**这里要一起改** ——
+   * 两处不同步的话，ActionMenu 里的"开始阅读"会和界面上的点缀色对不上。
+   * 之所以无法避免这份重复：`Button.color` 只收 `string`，资源引用塞不进去。
+   */
+  static readonly accent: string = '#35597F';
+  static readonly danger: string = '#B4432F';
 }
 
 /**

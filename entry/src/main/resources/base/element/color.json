@@ -9,48 +9,60 @@
       "value": "#FFFFFF"
     },
     {
-      "name": "brand",
-      "value": "#2F5D8C"
+      "name": "accent",
+      "value": "#35597F"
     },
     {
-      "name": "brand_container",
-      "value": "#E7EEF6"
+      "name": "primary",
+      "value": "#1F1F1F"
     },
     {
-      "name": "on_brand",
+      "name": "on_primary",
       "value": "#FFFFFF"
     },
     {
       "name": "bg_page",
-      "value": "#F5F5F3"
+      "value": "#FAFAFA"
     },
     {
       "name": "bg_card",
       "value": "#FFFFFF"
     },
     {
+      "name": "cover_bg",
+      "value": "#F0F0F0"
+    },
+    {
+      "name": "cover_text",
+      "value": "#6B6B6B"
+    },
+    {
+      "name": "on_scrim",
+      "value": "#FFFFFF"
+    },
+    {
       "name": "text_primary",
-      "value": "#1D1D1F"
+      "value": "#1F1F1F"
     },
     {
       "name": "text_secondary",
-      "value": "#6B6B6F"
+      "value": "#555555"
     },
     {
       "name": "text_hint",
-      "value": "#9A9A9E"
+      "value": "#767676"
     },
     {
       "name": "divider",
-      "value": "#EAEAE8"
+      "value": "#EAEAEA"
     },
     {
       "name": "danger",
-      "value": "#C7463A"
+      "value": "#B4432F"
     },
     {
       "name": "success",
-      "value": "#3D8B57"
+      "value": "#3D7A4E"
     },
     {
       "name": "mask",

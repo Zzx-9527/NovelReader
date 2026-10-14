@@ -26,17 +26,17 @@ export struct BookListItem {
 
   build() {
     Row({ space: AppTheme.GAP_M }) {
-      // 占位封面
+      // 占位封面：中性底色（理由同 BookGridItem —— 不用点缀色）
       Column() {
         Text(this.book.title.length > 0 ? this.book.title.substring(0, 1) : '书')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
-          .fontColor(AppColor.brand)
+          .fontColor(AppColor.coverText)
       }
       .width(48)
       .height(64)
       .borderRadius(AppTheme.ITEM_RADIUS)
-      .backgroundColor(AppColor.brandContainer)
+      .backgroundColor(AppColor.coverBg)
       .justifyContent(FlexAlign.Center)
 
       Column({ space: 4 }) {
@@ -54,8 +54,9 @@ export struct BookListItem {
           .width('100%')
 
         Row({ space: AppTheme.GAP_S }) {
+          // 进度条属于**小面积点缀**，保留主题色
           Progress({ value: this.book.progressPercent * 100, total: 100 })
-            .color(AppColor.brand)
+            .color(AppColor.accent)
             .layoutWeight(1)
             .height(4)
           Text(FileUtil.humanPercent(this.book.progressPercent))

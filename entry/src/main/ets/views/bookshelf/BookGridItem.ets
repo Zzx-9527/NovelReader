@@ -28,7 +28,10 @@ export struct BookGridItem {
   build() {
     Column({ space: 6 }) {
       Stack() {
-        // 封面占位：书名首字 + 浅色底。
+        // 封面占位：书名首字 + **中性**底色（不用点缀色）。
+        //
+        // ⚠️ 一屏同时有 6~9 个封面，用主题色会把整片网格染成一块同色，
+        // 书名反而看不清 —— 主题色只留给小面积元素（见 AppColor.accent 的说明）。
         //
         // TODO(EPUB/封面)：接入真实封面时用 `Image(absolutePath)` ——
         // ArkUI 的 Image 支持沙箱文件路径，但**不支持空字符串**（会抛错），
@@ -37,19 +40,22 @@ export struct BookGridItem {
           Text(this.coverLabel())
             .fontSize(22)
             .fontWeight(FontWeight.Bold)
-            .fontColor(AppColor.brand)
+            .fontColor(AppColor.coverText)
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Center)
-        .backgroundColor(AppColor.brandContainer)
+        .backgroundColor(AppColor.coverBg)
 
-        // 阅读进度角标
+        // 阅读进度角标。
+        //
+        // ⚠️ 底色是 `mask`（两种模式下都是黑），所以字色必须用 `onScrim`
+        // 而不是 `textPrimary` —— 后者在浅色模式下是近黑，会变成"黑底黑字"。
         if (this.book.progressPercent > 0) {
           Text(FileUtil.humanPercent(this.book.progressPercent))
             .fontSize(10)
-            .fontColor(AppColor.onBrand)
+            .fontColor(AppColor.onScrim)
             .backgroundColor(AppColor.mask)
             .borderRadius(4)
             .padding({ left: 4, right: 4, top: 1, bottom: 1 })

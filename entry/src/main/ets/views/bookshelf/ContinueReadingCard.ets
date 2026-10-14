@@ -29,16 +29,17 @@ export struct ContinueReadingCard {
 
   build() {
     Row({ space: AppTheme.GAP_M }) {
+      // 封面占位：中性底色（不用点缀色，理由见 BookGridItem）
       Column() {
         Text(this.book.title.length > 0 ? this.book.title.substring(0, 1) : '书')
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
-          .fontColor(AppColor.brand)
+          .fontColor(AppColor.coverText)
       }
       .width(56)
       .height(72)
       .borderRadius(AppTheme.ITEM_RADIUS)
-      .backgroundColor(AppColor.brandContainer)
+      .backgroundColor(AppColor.coverBg)
       .justifyContent(FlexAlign.Center)
 
       Column({ space: 6 }) {
@@ -56,8 +57,9 @@ export struct ContinueReadingCard {
           .width('100%')
 
         Row({ space: AppTheme.GAP_S }) {
+          // 进度条：小面积点缀，保留主题色
           Progress({ value: this.book.progressPercent * 100, total: 100 })
-            .color(AppColor.brand)
+            .color(AppColor.accent)
             .layoutWeight(1)
             .height(4)
           Text(FileUtil.humanPercent(this.book.progressPercent))
@@ -74,10 +76,17 @@ export struct ContinueReadingCard {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
+      /**
+       * 「继续」按钮：**中性填充**（近黑/近白），不是点缀色。
+       *
+       * ⚠️ `fontColor` 必须显式设成 `onPrimary`：`Button` 的默认字色是白色，
+       * 而深色模式下 `primary` 本身接近白色 —— 不设就是"白底白字"，完全看不见。
+       */
       Button('继续')
         .fontSize(AppTheme.FONT_CAPTION)
         .height(32)
-        .backgroundColor(AppColor.brand)
+        .backgroundColor(AppColor.primary)
+        .fontColor(AppColor.onPrimary)
         .onClick(() => {
           if (this.onContinue !== undefined) {
             this.onContinue(this.book);

@@ -120,9 +120,10 @@ export struct BookShelfPage {
           .fontColor(AppColor.textPrimary)
           .layoutWeight(1)
 
+        // 两个文字操作：属于**小面积点缀**，保留主题色
         Text(this.state.gridMode ? '列表' : '网格')
           .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.brand)
+          .fontColor(AppColor.accent)
           .padding(8)
           .onClick(() => {
             this.vm.toggleGridMode();
@@ -130,16 +131,23 @@ export struct BookShelfPage {
 
         Text('排序')
           .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.brand)
+          .fontColor(AppColor.accent)
           .padding(8)
           .onClick(() => {
             this.showSortMenu();
           })
 
+        /**
+         * 「导入」按钮：**中性填充**，不是点缀色。
+         *
+         * ⚠️ `fontColor` 必须显式设成 `onPrimary`：`Button` 默认字色是白色，
+         * 深色模式下 `primary` 接近白色，不设就"白底白字"看不见。
+         */
         Button('导入')
           .fontSize(AppTheme.FONT_CAPTION)
           .height(32)
-          .backgroundColor(AppColor.brand)
+          .backgroundColor(AppColor.primary)
+          .fontColor(AppColor.onPrimary)
           .enabled(!this.state.importing)
           .onClick(() => {
             this.doImport();
@@ -157,7 +165,7 @@ export struct BookShelfPage {
       if (this.state.reparseMessage.length > 0) {
         Text(this.state.reparseMessage)
           .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.brand)
+          .fontColor(AppColor.accent)
           .width('100%')
       }
 
@@ -194,13 +202,20 @@ export struct BookShelfPage {
 
   @Builder
   groupChip(label: string, groupId: number) {
+    /**
+     * 选中的分组标签用**中性填充**（`primary` / `onPrimary`），不用点缀色。
+     *
+     * ⚠️ 它是**实心大色块**：一行里同时有多个标签，若选中那个用主题色，
+     * 整条标签栏的视觉重量会全压到它身上，而分组只是个筛选条件、
+     * 不值得抢走主视线。中性填充同样能表达"选中"，且不破坏黑白灰的基调。
+     */
     Text(label)
       .fontSize(AppTheme.FONT_CAPTION)
       .fontColor(this.state.selectedGroupId === groupId
-        ? AppColor.onBrand
+        ? AppColor.onPrimary
         : AppColor.textSecondary)
       .backgroundColor(this.state.selectedGroupId === groupId
-        ? AppColor.brand
+        ? AppColor.primary
         : AppColor.bgCard)
       .borderRadius(AppTheme.CHIP_RADIUS)
       .padding({ left: 12, right: 12, top: 6, bottom: 6 })
@@ -318,7 +333,7 @@ export struct BookShelfPage {
     this.getUIContext().getPromptAction().showActionMenu({
       title: book.title,
       buttons: [
-        { text: '开始阅读', color: AppColorLiteral.brand },
+        { text: '开始阅读', color: AppColorLiteral.accent },
         { text: '换编码（正文乱码时用）', color: AppColorLiteral.textPrimary },
         { text: '从书架移除', color: AppColorLiteral.danger }
       ]
