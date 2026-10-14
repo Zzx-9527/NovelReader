@@ -6,6 +6,29 @@ import { BookShelfPage } from './BookShelfPage';
 import { ProfilePage } from './ProfilePage';
 
 /**
+ * 底部 Tab 的图标与文案，**下标与 Tabs 的 index 严格对应**。
+ *
+ * ⚠️ 抽成数组而不是给 `@Builder` 多传几个参数：设计文档第 15/41 条
+ * —— 带参 `@Builder` 在同一处 `build()` 里被调多次时**参数会串位**。
+ * 这里三个 Tab 各调一次，正是那个坑的高发场景；
+ * 让 `tabBuilder` 只收**一个** index、其余从数组查，串位就无从发生。
+ */
+const TAB_LABELS: string[] = ['书架', '统计', '我的'];
+const TAB_ICONS: Resource[] = [
+  $r('app.media.bookshelf'),
+  $r('app.media.stats'),
+  $r('app.media.mine')
+];
+
+/**
+ * 底部 Tab 图标边长（vp）。
+ *
+ * ⚠️ 与文字合计约 34vp，`TAB_BAR_HEIGHT`(48) 留出约 14vp 余量 ——
+ * 再加图标尺寸时要一并核对，否则会把 Tab 栏顶高、挤掉内容区。
+ */
+const TAB_ICON_SIZE: number = 20;
+
+/**
  * 应用根页面：底部 Tabs（书架 / 统计 / 我的）。
  *
  * 路由方案：`@Entry` 页面 + `UIContext.getRouter()`。
@@ -70,17 +93,17 @@ struct Index {
         TabContent() {
           BookShelfPage({ state: this.shelfState, vm: this.shelfVm })
         }
-        .tabBar(this.tabBuilder('书架', 0))
+        .tabBar(this.tabBuilder(0))
 
         TabContent() {
           this.buildPlaceholder('统计', '阅读时长、天数、连续打卡将在下一轮接入')
         }
-        .tabBar(this.tabBuilder('统计', 1))
+        .tabBar(this.tabBuilder(1))
 
         TabContent() {
           ProfilePage()
         }
-        .tabBar(this.tabBuilder('我的', 2))
+        .tabBar(this.tabBuilder(2))
       }
       .barPosition(BarPosition.End)
       .barMode(BarMode.Fixed)
@@ -124,16 +147,35 @@ struct Index {
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
+  /**
+   * 底部 Tab：图标 + 文字，选中态用品牌色。
+   *
+   * ⚠️ **只接收一个 `index`**，文案与图标都从顶部数组查 ——
+   * 带参 `@Builder` 在同一处 `build()` 里调多次会串位（设计文档第 15/41 条），
+   * 而这里恰好要调三次。把"每次不同的东西"收进数组按下标取，
+   * 参数就只有 index 一个，串位无从发生。
+   *
+   * ⚠️ 图标用 `fillColor` 染色跟随选中态。三个 SVG 里 `mine.svg` 不带 `fill`、
+   * 另两个带写死的 `fill`（如 `#303133`），但**都不影响染色** ——
+   * 官方文档明确 `fillColor` 会"替换 svg 图片中所有可绘制元素"的填充色。
+   * 所以换图标时不必检查 `fill` 属性。
+   */
   @Builder
-  tabBuilder(label: string, index: number) {
+  tabBuilder(index: number) {
     Column({ space: 2 }) {
-      Text(label)
+      Image(TAB_ICONS[index])
+        .width(TAB_ICON_SIZE)
+        .height(TAB_ICON_SIZE)
+        .fillColor(this.activeTab === index ? AppColor.brand : AppColor.textHint)
+        .objectFit(ImageFit.Contain)
+
+      Text(TAB_LABELS[index])
         .fontSize(AppTheme.FONT_CAPTION)
         .fontColor(this.activeTab === index ? AppColor.brand : AppColor.textHint)
         .fontWeight(this.activeTab === index ? FontWeight.Medium : FontWeight.Normal)
     }
     .width('100%')
-    .height(48)
+    .height(AppTheme.TAB_BAR_HEIGHT)
     .justifyContent(FlexAlign.Center)
   }
 

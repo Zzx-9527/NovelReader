@@ -88,6 +88,18 @@ export class AppTheme {
   static readonly FONT_BODY: number = 14;
   static readonly FONT_CAPTION: number = 12;
   static readonly FONT_SLOGAN: number = 13;
+  /**
+   * 阅读页**栏内操作文字**的统一字号（顶栏"‹ 返回"、菜单底栏"目录/夜间/设置"…）。
+   *
+   * ⚠️ 抽成常量的理由：用户要求"底部状态栏与顶部返回的字体对应"。
+   * 若两处各写一个 16，将来调其中一个，两栏就不对应了 ——
+   * 而"对应"这件事必须由**同一个来源**保证，不能靠两处巧合相等
+   * （设计文档第 28 条：同一逻辑两处实现，改一处必忘另一处）。
+   *
+   * ⚠️ 它**不跟随正文字号**：栏内操作文字是 UI 控件，不是阅读内容。
+   * 正文调大时栏内文字跟着涨会把菜单栏撑得很大（且底部栏还要盖住常驻栏）。
+   */
+  static readonly FONT_BAR_TEXT: number = 16;
 
   // ---------------------------------------------------------------- 布局
   /** 书架网格列数 */
@@ -153,20 +165,40 @@ export class ReaderTheme {
    */
   barBg: string = '#F2FFFFFF';
 
-  static of(theme: string): ReaderTheme {
+  /**
+   * 解析出最终生效的阅读页配色。
+   *
+   * ⚠️ `appDark` 是**应用级夜间模式**（`ThemeApplier`），它**优先于**
+   * `theme`（用户在"设置 → 背景"里选的阅读页配色）：
+   * 全局夜间打开时阅读页也必须变深色，否则会出现
+   * "书架是黑的、正文还是白的"这种割裂（用户明确要求全局一致）。
+   *
+   * 反过来，全局夜间关闭时阅读页完全跟随用户自己选的 `theme`
+   * （浅色/羊皮纸/护眼/夜间四选一 —— 那是**只影响阅读页**的独立设置）。
+   *
+   * ⚠️ 默认值 `false` 是**刻意**的：设置面板里那四个色块预览
+   * （`SettingsPanel.buildThemeRow`）调用的正是 `ReaderTheme.of(name)`，
+   * 它们必须显示各自主题的真实配色，不能被全局夜间改写。
+   *
+   * ⚠️ 这里是"全局夜间覆盖阅读页"的**唯一实现点**，别处不要再判一次 ——
+   * 否则以后加一个阅读页就会漏一处（设计文档第 28 条）。
+   */
+  static of(theme: string, appDark: boolean = false): ReaderTheme {
     const t = new ReaderTheme();
-    if (theme === 'dark') {
+    // 全局夜间优先
+    const effective: string = appDark ? 'dark' : theme;
+    if (effective === 'dark') {
       t.bg = '#111111';
       // 正文用 #C8C8C8 而不是纯白：纯白在暗背景上对比过强，长时间阅读刺眼
       t.text = '#C8C8C8';
       t.secondary = '#777777';
       t.barBg = '#F2202020';
-    } else if (theme === 'sepia') {
+    } else if (effective === 'sepia') {
       t.bg = '#F5EDE0';
       t.text = '#3E3226';
       t.secondary = '#8A7A66';
       t.barBg = '#F2F5EDE0';
-    } else if (theme === 'eye_care') {
+    } else if (effective === 'eye_care') {
       // 低饱和绿：饱和度高的绿反而更累眼
       t.bg = '#CCE8CF';
       t.text = '#2B3A2E';

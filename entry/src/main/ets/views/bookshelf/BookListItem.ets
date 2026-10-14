@@ -6,7 +6,11 @@ import { FileUtil } from '../../common/utils/FileUtil';
 /** 列表模式下的单个书籍项 */
 @Component
 export struct BookListItem {
-  book: Book = new Book();
+  /**
+   * ⚠️ 必须是 `@Prop`：理由同 `BookGridItem` —— `ForEach` 复用实例时，
+   * 普通成员不会拿到刷新后的 `Book`，进度条与"最近阅读"会停在旧值。
+   */
+  @Prop book: Book = new Book();
   onTap?: (book: Book) => void;
   onLongPress?: (book: Book) => void;
 

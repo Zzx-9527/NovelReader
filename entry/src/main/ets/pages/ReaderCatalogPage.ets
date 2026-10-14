@@ -43,6 +43,13 @@ struct ReaderCatalogPage {
   /** 安全区高度（vp），沉浸式全屏的配套让位，见 `EntryAbility.publishSafeArea` */
   @StorageProp('safeAreaTop') safeAreaTop: number = 0;
   @StorageProp('safeAreaBottom') safeAreaBottom: number = 0;
+  /**
+   * **应用级**夜间态，用于让本页跟随全局夜间。
+   *
+   * ⚠️ 本页是阅读流程的一部分，全局夜间打开时必须一起变深色 ——
+   * 否则从黑色正文点进目录会闪出一块白板（用户要求全局一致）。
+   */
+  @StorageProp('appDarkMode') appDarkMode: boolean = false;
 
   @State chapters: Chapter[] = [];
   @State bookmarks: Annotation[] = [];
@@ -52,11 +59,30 @@ struct ReaderCatalogPage {
   @State error: string = '';
 
   private bookId: number = 0;
-  private theme: ReaderTheme = new ReaderTheme();
+  /**
+   * 用户在"设置 → 背景"里选的**阅读页配色**（light/sepia/eye_care/dark）。
+   *
+   * ⚠️ 这里存的是"用户的选择"，不是"最终生效的配色"——
+   * 最终配色由 `theme()` 现算（全局夜间会覆盖它）。
+   * 若把 `ReaderTheme` 实例直接缓存成字段，全局夜间切换后
+   * 本页会继续用旧配色（字段只在 `aboutToAppear` 赋值一次）。
+   */
+  private readerThemeName: string = 'light';
   /** 目录列表的滚动控制器：打开时自动定位到当前章 */
   private listScroller: Scroller = new Scroller();
   /** 只自动定位一次，避免用户滚动后被反复拉回 */
   private scrolledToCurrent: boolean = false;
+
+  /**
+   * 本页最终生效的配色：用户选的阅读页配色 + **全局夜间覆盖**。
+   *
+   * ⚠️ 现算而不是缓存成字段：全局夜间是 `AppStorage` 里的响应式值，
+   * 缓存了就不会跟着变（本页在栈里时用户仍可能切夜间）。
+   * 覆盖规则本身收在 `ReaderTheme.of` 一处，这里只负责递参数。
+   */
+  private theme(): ReaderTheme {
+    return ReaderTheme.of(this.readerThemeName, this.appDarkMode);
+  }
 
   aboutToAppear(): void {
     const params = this.getUIContext().getRouter().getParams() as RouteParam | null;
@@ -64,8 +90,11 @@ struct ReaderCatalogPage {
       this.bookId = params.bookId;
       this.currentIndex = params.chapterIndex;
     }
-    // 与阅读页同主题：设置已在启动页预热，这里同步读取即可
-    this.theme = ReaderTheme.of(SettingsService.getInstance().loadReaderSettings().theme);
+    /**
+     * 只记下"用户选的阅读页配色"；最终配色由 `theme()` 现算 ——
+     * 它会把全局夜间态一并考虑进去。
+     */
+    this.readerThemeName = SettingsService.getInstance().loadReaderSettings().theme;
 
     if (this.bookId <= 0) {
       this.error = '缺少书籍参数，无法打开目录';
@@ -137,14 +166,14 @@ struct ReaderCatalogPage {
       this.buildHeader()
       // 分隔线用 `theme.secondary`：本页配色跟随阅读主题，
       // 用 `AppColor.divider` 会在羊皮纸/夜间主题下露出不搭的系统灰
-      Divider().color(this.theme.secondary)
+      Divider().color(this.theme().secondary)
 
       if (this.loading) {
         // 目录可能上千章，加载期间给个明确的等待态，而不是一片空白
         Column() {
           Text('正在加载…')
             .fontSize(AppTheme.FONT_BODY)
-            .fontColor(this.theme.secondary)
+            .fontColor(this.theme().secondary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -153,7 +182,7 @@ struct ReaderCatalogPage {
         Column() {
           Text(this.error)
             .fontSize(AppTheme.FONT_BODY)
-            .fontColor(this.theme.secondary)
+            .fontColor(this.theme().secondary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -171,7 +200,7 @@ struct ReaderCatalogPage {
      * 底部给手势条。背景色铺满全屏，所以让出的那两条仍是本页底色。
      */
     .padding({ top: this.safeAreaTop, bottom: this.safeAreaBottom })
-    .backgroundColor(this.theme.bg)
+    .backgroundColor(this.theme().bg)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
@@ -194,7 +223,7 @@ struct ReaderCatalogPage {
         Text('目录')
           .fontSize(AppTheme.FONT_SUBTITLE)
           .fontWeight(this.activeTab === TAB_CATALOG ? FontWeight.Medium : FontWeight.Normal)
-          .fontColor(this.activeTab === TAB_CATALOG ? this.theme.text : this.theme.secondary)
+          .fontColor(this.activeTab === TAB_CATALOG ? this.theme().text : this.theme().secondary)
           .padding({ top: 8, bottom: 8 })
           .onClick(() => {
             this.activeTab = TAB_CATALOG;
@@ -203,7 +232,7 @@ struct ReaderCatalogPage {
         Text(this.bookmarks.length > 0 ? `书签 ${this.bookmarks.length}` : '书签')
           .fontSize(AppTheme.FONT_SUBTITLE)
           .fontWeight(this.activeTab === TAB_BOOKMARK ? FontWeight.Medium : FontWeight.Normal)
-          .fontColor(this.activeTab === TAB_BOOKMARK ? this.theme.text : this.theme.secondary)
+          .fontColor(this.activeTab === TAB_BOOKMARK ? this.theme().text : this.theme().secondary)
           .padding({ top: 8, bottom: 8 })
           .onClick(() => {
             this.activeTab = TAB_BOOKMARK;
@@ -216,7 +245,7 @@ struct ReaderCatalogPage {
       // 返回按钮贴在左侧（在 Stack 上层，点击优先级更高）
       Text('‹ 返回')
         .fontSize(AppTheme.FONT_BODY)
-        .fontColor(this.theme.text)
+        .fontColor(this.theme().text)
         .padding({ left: 12, right: 12, top: 10, bottom: 10 })
         .onClick(() => {
           // 未选章就返回：不登记待办，阅读页停在原位
@@ -236,7 +265,7 @@ struct ReaderCatalogPage {
               .fontSize(AppTheme.FONT_BODY)
               .fontColor(chapter.chapterIndex === this.currentIndex
                 ? AppColor.brand
-                : this.theme.text)
+                : this.theme().text)
               .fontWeight(chapter.chapterIndex === this.currentIndex
                 ? FontWeight.Medium
                 : FontWeight.Normal)
@@ -289,13 +318,13 @@ struct ReaderCatalogPage {
                 Column({ space: 4 }) {
                   Text(this.titleOf(item.chapterIndex))
                     .fontSize(AppTheme.FONT_BODY)
-                    .fontColor(this.theme.text)
+                    .fontColor(this.theme().text)
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .width('100%')
                   Text(item.startOffset === null ? '章首' : `第 ${item.startOffset} 字处`)
                     .fontSize(AppTheme.FONT_CAPTION)
-                    .fontColor(this.theme.secondary)
+                    .fontColor(this.theme().secondary)
                     .width('100%')
                 }
                 .layoutWeight(1)

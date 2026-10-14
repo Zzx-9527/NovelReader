@@ -41,7 +41,13 @@ export struct BookmarkDialog {
    * 挂在 `note` 只会在用户打字时回调，起不到"草稿换了就重置输入框"的作用。
    */
   @Prop @Watch('onDraftChanged') draft: BookmarkDraft = new BookmarkDraft();
-  theme: ReaderTheme = new ReaderTheme();
+  /**
+   * 阅读页配色。
+   *
+   * ⚠️ **必须是 `@Prop`**：普通成员只在创建时快照 ——
+   * 弹窗开着时切"夜间"，它会保持旧配色（与顶栏/底栏同一个坑）。
+   */
+  @Prop theme: ReaderTheme = new ReaderTheme();
   /** 点"保存"：回传用户填好的备注 */
   onSave?: (note: string) => void;
   /** 点"取消"或遮罩 */

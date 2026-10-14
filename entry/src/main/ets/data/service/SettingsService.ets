@@ -6,6 +6,7 @@ import {
 import { AppConstants, LogTag } from '../../common/constants/AppConstants';
 import { Logger } from '../../common/utils/Logger';
 import { ReaderSettings } from '../../model/ReaderSettings';
+import { AppThemeMode } from '../../common/theme/ThemeApplier';
 
 /**
  * 设置服务：Preferences 读写 + 默认值 + 版本迁移 + 延迟落盘。
@@ -175,6 +176,29 @@ export class SettingsService {
 
   markFirstLaunchDone(): void {
     this.put(SettingsKeys.FIRST_LAUNCH_DONE, true);
+  }
+
+  // ---------------------------------------------------------------- 应用级主题
+
+  /**
+   * 读取**应用级**主题模式（0 跟随系统 / 1 浅色 / 2 夜间）。
+   *
+   * ⚠️ 与 `loadReaderSettings().theme`（阅读页正文背景）是两项独立设置，
+   * 详见 `SettingsKeys.THEME` 的注释。
+   */
+  getAppThemeMode(): number {
+    return this.getNumber(SettingsKeys.APP_THEME_MODE, AppThemeMode.FOLLOW_SYSTEM);
+  }
+
+  /**
+   * 保存应用级主题模式。
+   *
+   * ⚠️ 调用方必须**先** `ThemeApplier.applyMode()` 成功、**再**调这里落盘
+   * （设计文档 5.7.5 第 4 条）。反过来会出现"设置存了但没生效，
+   * 下次启动才变"—— 比直接失败更难理解。
+   */
+  putAppThemeMode(mode: number): void {
+    this.putNumber(SettingsKeys.APP_THEME_MODE, mode);
   }
 
   // ---------------------------------------------------------------- 落盘控制

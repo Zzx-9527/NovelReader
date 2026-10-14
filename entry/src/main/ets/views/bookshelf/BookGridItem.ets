@@ -10,7 +10,12 @@ import { FileUtil } from '../../common/utils/FileUtil';
  */
 @Component
 export struct BookGridItem {
-  book: Book = new Book();
+  /**
+   * ⚠️ 必须是 `@Prop`：`ForEach` 的键是 `book.id`，刷新后键不变 ⇒ ArkUI 会**复用**
+   * 组件实例。普通成员只在创建时快照，复用时就拿不到新的 `Book` ——
+   * 进度角标、阅读时间会一直停在上一次加载的值（同 `ContinueReadingCard`）。
+   */
+  @Prop book: Book = new Book();
   onTap?: (book: Book) => void;
   onLongPress?: (book: Book) => void;
 

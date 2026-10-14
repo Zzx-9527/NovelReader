@@ -20,6 +20,15 @@ export class AppStateKey {
   /** 全局阅读设置是否已加载完成 */
   static readonly SETTINGS_READY: string = 'settingsReady';
   /**
+   * **应用级**主题当前是否为夜间（boolean）。
+   *
+   * ⚠️ 与阅读页的 `ReaderTheme` 无关：本项是"整个 app 是否深色"，
+   * 由 `ThemeApplier` 在施加主题后写入，页面用 `@StorageProp` 订阅高亮态。
+   * 为什么放 `AppStorage`：判断"系统现在是不是深色"需要 `Context.config`，
+   * 而页面拿不到 Context —— 与 `safeAreaTop` 同一套共享范式。
+   */
+  static readonly APP_DARK_MODE: string = 'appDarkMode';
+  /**
    * 顶部安全区（状态栏）高度，单位 **vp**。
    *
    * 为什么放进 AppStorage：开启沉浸式全屏后，窗口内容会盖住状态栏/手势条，

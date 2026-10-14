@@ -43,7 +43,13 @@ function pageModeLabel(mode: string): string {
 export struct SettingsPanel {
   /** 当前设置快照（由阅读页持有并传进来） */
   @Prop settings: ReaderSettings = new ReaderSettings();
-  theme: ReaderTheme = new ReaderTheme();
+  /**
+   * 阅读页配色。
+   *
+   * ⚠️ **必须是 `@Prop`**：普通成员只在创建时快照，
+   * 面板打开期间切"夜间"（或改背景）不会同步 —— 与顶栏/底栏同一个坑。
+   */
+  @Prop theme: ReaderTheme = new ReaderTheme();
   /**
    * 底部安全区（手势条）高度，vp。
    *

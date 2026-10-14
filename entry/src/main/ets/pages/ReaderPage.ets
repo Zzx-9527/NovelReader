@@ -41,6 +41,16 @@ struct ReaderPage {
   /** 底部安全区（手势条）高度，vp。用途同上 */
   @StorageProp('safeAreaBottom') safeAreaBottom: number = 0;
   /**
+   * **应用级**主题当前是否为夜间。
+   *
+   * ⚠️ 与 `this.theme()`（阅读页正文背景）是两件事：
+   * 本值只用来给菜单底栏的"夜间"入口上高亮，
+   * 由 `ThemeApplier` 在施加主题后写入 `AppStorage`。
+   *
+   * ⚠️ 装饰器参数同样刻意写字面量（理由见 `safeAreaTop` 上方注释）。
+   */
+  @StorageProp('appDarkMode') appDarkMode: boolean = false;
+  /**
    * 阅读区高度（第 1 层那个 Column），分页用。
    *
    * ⚠️ 量的必须是这个**高度恒定**的容器，而不是正文 Text 本身：
@@ -258,6 +268,28 @@ struct ReaderPage {
     });
   }
 
+  /**
+   * 顶栏"↻"：刷新当前阅读页。
+   *
+   * ⚠️ 必须 `.catch`：`refreshCurrentChapter` 内部已经把异常写进
+   * `state.error`，但 Promise 本身若无人接住，异常会变成
+   * "未处理的 Promise 拒绝"告警（设计文档第 26 条：
+   * 不接 catch 的失败是完全静默的）。
+   */
+  private doRefresh(): void {
+    this.vm.refreshCurrentChapter().then(() => {
+      this.toast('已刷新');
+    }).catch((e: BusinessError) => {
+      Logger.error(LogTag.READ, `刷新阅读页失败: ${e.message}`);
+      this.toast('刷新失败');
+    });
+  }
+
+  /** 统一 toast 入口（避免各处重复写 UIContext 取法） */
+  private toast(message: string): void {
+    this.getUIContext().getPromptAction().showToast({ message: message, duration: 2000 });
+  }
+
   /** 拿到正文区尺寸后才可能算分页；尺寸变化（旋转屏幕）也要重算 */
   private tryPaginate(): void {
     if (this.pageAreaHeight <= 0 || this.contentWidth <= 0) {
@@ -287,7 +319,14 @@ struct ReaderPage {
   }
 
   private theme(): ReaderTheme {
-    return ReaderTheme.of(this.state.settings.theme);
+    /**
+     * ⚠️ 必须把**全局夜间态**一起传进去：
+     * 用户点菜单底栏的"夜间"是切整个 app，阅读页当然也要变深色 ——
+     * 否则会出现"书架黑了、正文还是白的"这种割裂（用户明确要求全局一致）。
+     *
+     * 覆盖规则收在 `ReaderTheme.of` 一处，这里只负责把当前态递进去。
+     */
+    return ReaderTheme.of(this.state.settings.theme, this.appDarkMode);
   }
 
   /**
@@ -393,15 +432,18 @@ struct ReaderPage {
       if (this.state.menuVisible && this.state.error.length === 0) {
         Column() {
           ReaderTopBar({
-            title: this.state.chapterTitle,
+            /**
+             * ⚠️ 顶栏中间显示**书名**，不是章节名（用户要求）。
+             * 章节名由下面的常驻底栏承担，这里不再重复。
+             * `state.book` 可能为 null（打开中），退回空串即可。
+             */
+            title: this.state.book !== null ? this.state.book.title : '',
             theme: this.theme(),
             onBack: () => {
               this.goBack();
             },
-            onMenu: () => {
-              // 目录已是**独立页面**（不再是浮层），所以这里不用先收设置面板 ——
-              // 页面跳转会把整个阅读页盖住，没有"两层浮层叠着"的问题了。
-              this.openCatalog();
+            onRefresh: () => {
+              this.doRefresh();
             }
           })
           /**
@@ -416,7 +458,7 @@ struct ReaderPage {
 
           // 菜单显示时，点中间空白处收回菜单。
           // 分页模式下翻页层此时**不存在**（两块区域互斥渲染），没有这个点击点，
-          // 用户就只能靠"返回/目录"关菜单 —— 这是"菜单弹出来收不回去"的另一半。
+          // 用户就只能靠"返回"关菜单 —— 这是"菜单弹出来收不回去"的另一半。
           // 用 hideMenu() 而不是 toggleMenu()：收起是幂等的，
           // 不存在"连点两下又打开了"的抖动。
           Blank()
@@ -426,13 +468,15 @@ struct ReaderPage {
 
           ReaderBottomBar({
             theme: this.theme(),
-            baseFontSize: this.state.settings.fontSize,
             percent: this.state.percent,
             hasPrev: this.state.hasPrev,
             hasNext: this.state.hasNext,
             // 底部安全区高度：菜单栏要自己把这段也涂上色，
             // 否则它下方会露出常驻底栏或页面底色
             safeAreaBottom: this.safeAreaBottom,
+            // 应用级夜间态：只影响"夜间"入口的高亮，
+            // 与正文背景（this.theme()）是两回事
+            appDarkMode: this.appDarkMode,
             onJump: (percent: number) => {
               this.vm.jumpToChapterByPercent(percent);
             },
@@ -443,6 +487,18 @@ struct ReaderPage {
             },
             onNextChapter: () => {
               this.vm.nextChapter();
+            },
+            onOpenCatalog: () => {
+              this.openCatalog();
+            },
+            onToggleNight: () => {
+              /**
+               * 切换**整个 app** 的深浅色 —— 不是阅读页正文背景
+               * （那是"设置"里的主题，两者互不相干）。
+               */
+              if (!this.vm.toggleAppTheme()) {
+                this.toast('切换夜间模式失败');
+              }
             },
             onOpenSettings: () => {
               this.vm.setSettingsVisible(true);
@@ -1051,8 +1107,12 @@ struct ReaderPage {
    * 否则和正文混在一起就不成其为标题。用相对量而非固定字号，
    * 是为了用户把正文调大时层级不会反过来。
    *
-   * 左右**不留内边距**：要和正文的左边距对齐，看起来才是"正文里的一行"，
-   * 而不是浮在正文之外的装饰。与正文的区别只有字号、字重和下面垫的那点空隙。
+   * ⚠️ 本 `@Builder` **自身不加左右内边距**，因为两处调用点的让位方式不同：
+   *  - 滚动模式：外层 `Column` 已带 `pageMargin`，标题在里面天然对齐；
+   *  - 分页模式：标题与正文 `Text` 是**兄弟节点**，所以由调用点套一层
+   *    带 `pageMargin` 的 `Column` 补上。
+   * 若把 padding 写在这里，滚动模式会**叠成两倍**。
+   * 与正文的区别只有字号、字重和下面垫的那点空隙。
    *
    * 单行省略：章节名偶尔很长（"第 3 章 他在雨里站了整整一夜"），
    * 换行会挤掉正文，截断更划算 —— 完整标题在目录里能看全。
@@ -1154,7 +1214,34 @@ struct ReaderPage {
       // 已通过 setContentSize(..., headingHeight()) 交给分页服务扣除，
       // 所以这里直接渲染不会把首页最后一行挤掉。
       if (this.state.pageIndex === 0) {
-        this.buildChapterHeading()
+        /**
+         * ⚠️ **必须给标题补上和正文一样的左右边距**，否则它会顶到屏幕最左边
+         * （用户反馈"顶格太丑"）。
+         *
+         * 原因：本模式下标题与正文 `Text` 是**并列的兄弟节点**，
+         * 而左右 `pageMargin` 是加在正文 `Text` 自己身上的
+         * （见下面 `.padding({ left: pageMargin, ... })`）——
+         * 标题不在那个 `Text` 里，自然一点边距都没有。
+         *
+         * ⚠️ 只在**分页模式**这里补：滚动模式的标题在带 `pageMargin`
+         * 的 `Column` 内部（见上面 scroll 分支），已经让过位了；
+         * 若把 padding 写进 `buildChapterHeading` 本身，滚动模式会**叠成两倍**。
+         *
+         * ⚠️ 用 `Column` 包一层而不是给 `@Builder` 加参数：
+         * 带参 `@Builder` 在同一处 `build()` 里被调多次会串位
+         * （设计文档第 15/41 条），而 `buildChapterHeading` 在本文件有两处调用。
+         *
+         * ⚠️ 这层 `Column` 只有单个子节点、自身无 padding，
+         * 高度与原来完全相同 —— 所以 `headingHeight()` 的算法不用改。
+         */
+        Column() {
+          this.buildChapterHeading()
+        }
+        .width('100%')
+        .padding({
+          left: this.state.settings.pageMargin,
+          right: this.state.settings.pageMargin
+        })
       }
       // 翻页与呼出菜单由上层 buildPageControls 处理
       Text(this.state.renderedText, { controller: this.textController })

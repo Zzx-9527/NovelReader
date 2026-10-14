@@ -1,4 +1,4 @@
-import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want, common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { StorageBootstrap } from '../common/StorageBootstrap';
@@ -7,24 +7,58 @@ import { Logger } from '../common/utils/Logger';
 import { LogTag } from '../common/constants/AppConstants';
 import { RouteName } from '../model/RouteParam';
 import { AppStateKey } from '../model/AppState';
+import { ThemeApplier } from '../common/theme/ThemeApplier';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    try {
-      this.context.getApplicationContext()
-        .setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
-    } catch (err) {
-      hilog.error(DOMAIN, TAG, 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
-    }
+    /**
+     * 应用级主题：**必须在首帧之前同步设好**。
+     *
+     * ⚠️ 三步顺序不能动：
+     *  1. 读一次系统当前深浅色（下面 `isSystemDark`），
+     *     因为 `FOLLOW_SYSTEM` 时要靠它判断"现在算不算夜间"；
+     *  2. `ThemeApplier.init` 注入 ApplicationContext；
+     *  3. **同步**读持久化模式并施加。
+     *
+     * ⚠️ 第 3 步必须同步：走异步的话系统会先按默认主题画一帧 ——
+     * 深色模式下就是"黑底应用先闪一下白屏"（设计文档 5.7.5 第 2 条）。
+     *
+     * ⚠️ 原实现在这里硬写 `COLOR_MODE_NOT_SET`，等于**每次启动都把主题
+     * 重置成跟随系统**，用户选了夜间也会被覆盖掉。现在改为读持久化值。
+     */
+    /**
+     * ⚠️ 显式标注类型，不靠推断：ArkTS 禁止隐式 `any`，
+     * 而"从有类型的返回值推断"虽然合法，写出来更能避免日后换 API 时静默退化成 any。
+     */
+    const appContext: common.ApplicationContext = this.context.getApplicationContext();
+    ThemeApplier.init(appContext, this.isSystemDark());
+    const savedMode: number = ThemeApplier.readPersistedModeSync(this.context);
+    ThemeApplier.applyMode(savedMode);
 
     // 存储底座：注入 Context 并开始初始化（不阻塞窗口创建）。
     // 页面在数据访问前会 await 各自的 ensureReady()，所以不存在"UI 抢跑"问题。
     StorageBootstrap.bootstrap(this.context);
 
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onCreate');
+  }
+
+  /**
+   * 系统当前是否为深色。
+   *
+   * ⚠️ 只在 `FOLLOW_SYSTEM` 时用来决定"夜间"按钮的高亮态。
+   * 取不到就按浅色处理：这只是个显示态，不值得为它中断启动。
+   */
+  private isSystemDark(): boolean {
+    try {
+      const config: Configuration = this.context.config;
+      return config !== undefined
+        && config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    } catch (err) {
+      return false;
+    }
   }
 
   onDestroy(): void {

@@ -6,7 +6,17 @@ import { FileUtil } from '../../common/utils/FileUtil';
 /** 继续阅读卡片：书架顶部，点击直接进入上次读到的位置 */
 @Component
 export struct ContinueReadingCard {
-  book: Book = new Book();
+  /**
+   * ⚠️ **必须是 `@Prop`，不能是普通成员** —— 这正是"顶部进度不跟着换书"的根因。
+   *
+   * 普通成员只在组件**创建时**取一次快照，之后父组件状态再怎么变都不会同步进来。
+   * 于是书架刷新后 `state.continueBook` 已经换成了另一本书，本卡片却仍渲染
+   * 上一次那本 —— 表现就是"我明明在读 B 书了，顶部还显示 A 书 + 旧的章号/百分比"。
+   * （与设计文档 §5.3 硬约束 1、坑 10「拖动进度条后数字弹回」同源。）
+   *
+   * `@Prop` 对普通 class 做深拷贝并在父组件状态变化时重新赋值，正是这里要的语义。
+   */
+  @Prop book: Book = new Book();
   onContinue?: (book: Book) => void;
 
   private chapterText(): string {

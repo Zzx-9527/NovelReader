@@ -19,6 +19,7 @@ import { StatsService } from '../data/service/StatsService';
 import { RawFileSource } from '../data/source/RawFileSource';
 import { PathUtil } from '../common/utils/PathUtil';
 import { ReaderTheme } from '../common/theme/AppTheme';
+import { ThemeApplier } from '../common/theme/ThemeApplier';
 import { AppConstants, LogTag } from '../common/constants/AppConstants';
 import { Logger } from '../common/utils/Logger';
 
@@ -63,7 +64,8 @@ export class ReaderViewModel {
   private restoreToOffset: number = -1;
 
   get readerTheme(): ReaderTheme {
-    return ReaderTheme.of(this.state.settings.theme);
+    // 全局夜间优先于用户自选的阅读页配色，规则收在 ReaderTheme.of 一处
+    return ReaderTheme.of(this.state.settings.theme, ThemeApplier.isDark());
   }
 
   // ------------------------------------------------------------ 打开
@@ -573,6 +575,50 @@ export class ReaderViewModel {
     await this.switchChapter(chapterIndex, 0);
   }
 
+  /**
+   * 刷新当前阅读页（顶栏"⟳"按钮）。
+   *
+   * 做什么：丢掉**本章的正文解码缓存**与**本书的全部分页缓存**，
+   * 重新从文件读取当前章、重新分页，并尽量停在原来的位置。
+   *
+   * 为什么需要它：正文来自原文件，分页结果来自 `page_cache`。
+   * 若文件在外部被改动过、或分页缓存与当前代码不一致
+   * （典型症状就是"排版看起来不对、但怎么调设置都没用"），
+   * 用户需要一个**不必退出阅读页**的自救入口 —— 这正是这个按钮。
+   *
+   * ⚠️ 保留 `state.offset` 而不是回到章首：刷新是"重排"，
+   * 不是"重新开始读"。把位置丢了用户会以为进度被清了。
+   * 复用 `restoreToOffset` 这条既有通道（与改字号/换翻页方式同一条路径），
+   * 不另写一套定位逻辑 —— 避免"同一件事两个实现"（设计文档第 28 条）。
+   *
+   * ⚠️ 分页缓存必须**整本**删而不是只删当前章：
+   * 重排后各章断点可能都变（尤其算法版本变了），
+   * 只删当前章会让翻到下一章时命中旧断点，出现"这章对、下章又不对"。
+   */
+  async refreshCurrentChapter(): Promise<void> {
+    if (this.readService === null || this.state.chapterIndex < 0) {
+      return;
+    }
+    const keepOffset: number = this.state.offset;
+    this.state.loading = true;
+    try {
+      // ① 正文解码缓存：不清就会把旧文件内容再读一遍
+      this.readService.clearCache();
+      // ② 分页缓存：整本清，理由见上
+      if (this.state.book !== null) {
+        await PageCacheRepository.deleteByBook(this.state.book.id);
+      }
+      // ③ 走既有恢复通道定位回原处，再重载本章
+      this.restoreToOffset = keepOffset;
+      await this.loadChapter(this.state.chapterIndex);
+      this.state.error = '';
+    } catch (e) {
+      this.state.error = `刷新失败：${Logger.errText(e as BusinessError)}`;
+    } finally {
+      this.state.loading = false;
+    }
+  }
+
   /** 拖动进度条跳章 */
   async jumpToChapterByPercent(percent: number): Promise<void> {
     const total: number = this.state.chapters.length;
@@ -629,6 +675,35 @@ export class ReaderViewModel {
 
   toggleMenu(): void {
     this.state.menuVisible = !this.state.menuVisible;
+  }
+
+  /**
+   * 切换**整个应用**的深浅色（菜单底栏"夜间"入口）。
+   *
+   * ⚠️ 这与 `updateSettings()` 改的**不是一回事**（用户明确指出的区别）：
+   *  - 本方法 → 应用级主题，走系统 `setColorMode`，
+   *    颜色来自 `resources/base|dark/element/color.json`，
+   *    影响书架、"我的"以及所有用 `AppColor` 的界面；
+   *  - `updateSettings()` 的 `settings.theme` → 只改**阅读页正文背景**
+   *    （浅色/羊皮纸/护眼/夜间）。
+   *
+   * 所以这里**绝不**碰 `settings.theme`：混在一起的话，
+   * 用户选了护眼绿、再点"夜间"，正文背景会被一起改成黑底 —— 那不是他想要的。
+   *
+   * ⚠️ 顺序是「先应用、再落盘」（设计文档 5.7.5 第 4 条）：
+   * 反过来的话 `setColorMode` 一旦失败，设置已经存下，下次启动才生效，
+   * 用户看到"点了没反应，重启以后变了"。
+   *
+   * @returns 是否切换成功
+   */
+  toggleAppTheme(): boolean {
+    const next: number = ThemeApplier.nextToggleMode();
+    if (!ThemeApplier.applyMode(next)) {
+      return false;
+    }
+    // 应用成功才落盘
+    SettingsService.getInstance().putAppThemeMode(next);
+    return true;
   }
 
   hideMenu(): void {
