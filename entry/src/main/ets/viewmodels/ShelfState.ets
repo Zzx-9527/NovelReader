@@ -42,8 +42,41 @@ export class ShelfState {
   reparsing: boolean = false;
   reparseMessage: string = '';
 
+  /**
+   * 当前视图下**一本书都没有**。
+   *
+   * ⚠️ 这个判据**不能直接用来决定显示哪个空状态** —— 它分不清
+   * "书架里真的没有书"和"当前分组里没有书"（用户实测反馈的 bug：
+   * 点进空分组，页面显示"书架还是空的 + 导入 TXT"，好像书全丢了）。
+   * 要区分两者必须看 `selectedGroupId`，见 `isEmptyShelf` / `isEmptyGroup`。
+   */
   get isEmpty(): boolean {
     return !this.loading && !this.reparsing && this.books.length === 0;
+  }
+
+  /**
+   * **书架真的空**：一本书都没有，且没有选中任何分组（"全部"视图）。
+   *
+   * ⚠️ 只有这一种情况才该引导"导入 TXT"：书架里一本书都没有时，
+   * 用户唯一的下一步就是导入。分组筛选下即使列表为空，书架里也**有**书。
+   */
+  get isEmptyShelf(): boolean {
+    return this.isEmpty && this.selectedGroupId < 0;
+  }
+
+  /**
+   * **当前分组空**：书架里有书，只是这个分组里没有。
+   *
+   * ⚠️ 与 `isEmptyShelf` 互斥，两者覆盖"列表为空"的全部情形。
+   * 这一种情况下正确的引导是"把书加进来"，**不是**"导入 TXT" ——
+   * 让用户去导入会得到重复文件（判重会拦下来，但体验很糟），
+   * 而且他会以为书架里的书不见了。
+   *
+   * ⚠️ 判据用 `selectedGroupId >= 0`：只要选中了真实分组，
+   * 就说明这是"分组视图"，与书架里有没有书无关。
+   */
+  get isEmptyGroup(): boolean {
+    return this.isEmpty && this.selectedGroupId >= 0;
   }
 }
 

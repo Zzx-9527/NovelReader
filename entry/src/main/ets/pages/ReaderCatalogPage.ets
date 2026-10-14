@@ -15,6 +15,41 @@ const TAB_CATALOG: number = 0;
 const TAB_BOOKMARK: number = 1;
 
 /**
+ * 「标注」Tab 的类型筛选项。
+ *
+ * ⚠️ `value` 直接用 `AppConstants` 的标注类型常量，**不另造一套枚举**：
+ * 筛选值最终要与 `Annotation.type` 比对，再造一套就得写一层映射 ——
+ * 而映射表是最容易"加了一种标注却忘了加一项"的地方（设计文档第 28 条）。
+ *
+ * ⚠️ 「全部」用 `ANNOTATION_ALL`(0) 而不是 -1：仓储的
+ * `listByBook(bookId, type)` 就是用它作"不限类型"的哨兵，
+ * 两处用同一个值，语义天然一致。
+ */
+class AnnotationFilter {
+  label: string = '';
+  value: number = AppConstants.ANNOTATION_ALL;
+
+  constructor(label: string, value: number) {
+    this.label = label;
+    this.value = value;
+  }
+}
+
+/**
+ * 筛选项列表（顺序即显示顺序）。
+ *
+ * ⚠️ 「全部」放第一个：它是默认视图，也是"我到底标了多少东西"的入口。
+ * 后三项按**使用频率**排（书签最常用），与长按菜单里的顺序保持一致 ——
+ * 同一个 App 里同类选项的次序应当稳定，用户不必重新找。
+ */
+const ANNOTATION_FILTERS: AnnotationFilter[] = [
+  new AnnotationFilter('全部', AppConstants.ANNOTATION_ALL),
+  new AnnotationFilter('书签', AppConstants.ANNOTATION_BOOKMARK),
+  new AnnotationFilter('划线', AppConstants.ANNOTATION_HIGHLIGHT),
+  new AnnotationFilter('笔记', AppConstants.ANNOTATION_NOTE)
+];
+
+/**
  * 目录页（独立页面，**不是**弹窗）。
  *
  * 版面（自上而下）：
@@ -52,7 +87,22 @@ struct ReaderCatalogPage {
   @StorageProp('appDarkMode') appDarkMode: boolean = false;
 
   @State chapters: Chapter[] = [];
+  /**
+   * **全部**标注（未筛选）。
+   *
+   * ⚠️ 存全量、另用 `visibleAnnotations()` 现算筛选结果，而不是"筛选时重查数据库"：
+   *  - 标注量级是几十到几百条，一次全量加载后筛选是纯内存操作，切换瞬时；
+   *  - 各筛选类型的**数量**需要全量才能算出来（见 `countOf`）；
+   *  - 若每次切换都查库，数量就得额外查四次 `COUNT(*)`。
+   * 判据：**数据量小且要反复按不同维度看同一批数据时，一次取全、内存筛选**。
+   */
   @State annotations: Annotation[] = [];
+  /**
+   * 当前标注类型筛选值。
+   *
+   * ⚠️ 用 `AppConstants.ANNOTATION_ALL`(0) 作默认（"全部"），与仓储的哨兵一致。
+   */
+  @State annotationFilter: number = AppConstants.ANNOTATION_ALL;
   @State currentIndex: number = -1;
   @State activeTab: number = TAB_CATALOG;
   @State loading: boolean = true;
@@ -139,6 +189,55 @@ struct ReaderCatalogPage {
   }
 
   /**
+   * 当前筛选下要显示的标注。
+   *
+   * ⚠️ 用**方法现算**而不是维护一份 `@State filtered` 副本：
+   * 副本需要在"筛选变化"和"数据重载"两处都同步更新，漏一处就会出现
+   * "删了标注但列表没变"这类不一致。现算的代价只是一次数组遍历（几百条，可忽略）。
+   */
+  private visibleAnnotations(): Annotation[] {
+    const filter: number = this.annotationFilter;
+    if (filter === AppConstants.ANNOTATION_ALL) {
+      return this.annotations;
+    }
+    const out: Annotation[] = [];
+    for (const item of this.annotations) {
+      if (item.type === filter) {
+        out.push(item);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 某个筛选类型下的标注数量（显示在筛选按钮上）。
+   *
+   * ⚠️ "全部"要返回**总数**，其余按 `type` 统计 —— 判据就是
+   * `value === ANNOTATION_ALL` 这一个分支，不要另写一套"全部 = 三者相加"：
+   * 那样一旦新增标注类型（比如"想法"），求和式就会漏掉它而总数仍显示旧值。
+   */
+  private countOf(filterValue: number): number {
+    if (filterValue === AppConstants.ANNOTATION_ALL) {
+      return this.annotations.length;
+    }
+    let count: number = 0;
+    for (const item of this.annotations) {
+      if (item.type === filterValue) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /** 切换类型筛选 */
+  private selectAnnotationFilter(filterValue: number): void {
+    if (this.annotationFilter === filterValue) {
+      return;
+    }
+    this.annotationFilter = filterValue;
+  }
+
+  /**
    * 标注类型的展示名。
    *
    * ⚠️ 三种类型混在同一个列表里，**必须逐条标出类型** ——
@@ -196,9 +295,18 @@ struct ReaderCatalogPage {
   /** 删除一条标注（书签/划线/笔记共用） */
   private removeAnnotation(annotationId: number): void {
     AnnotationRepository.softDelete(annotationId).then(() => {
+      /**
+       * ⚠️ 只重载数据、**不动 `annotationFilter`**：用户删掉一条后
+       * 当前筛选应当保持 —— 否则"在划线列表里删一条，视图跳回全部"
+       * 会让他重新找一遍位置。
+       *
+       * 边界（已由渲染分支覆盖）：若删掉的正好是该类型最后一条，
+       * `visibleAnnotations()` 变空，页面显示"这一类还没有 + 查看全部"，
+       * 而不是误报"还没有标注"。
+       */
       return this.reloadAnnotations();
     }).catch((e: Object) => {
-      Logger.error(LogTag.READ, `删除书签失败: ${Logger.errText(e)}`);
+      Logger.error(LogTag.READ, `删除标注失败: ${Logger.errText(e)}`);
     });
   }
 
@@ -343,6 +451,46 @@ struct ReaderCatalogPage {
     })
   }
 
+  /**
+   * 标注类型筛选栏：全部 / 书签 / 划线 / 笔记。
+   *
+   * ⚠️ 每项都带**数量**：用户点"划线"前就想知道值不值得点 ——
+   * 显示 0 的项还能顺手回答"我到底划过没有"。这是零成本的（数据已在内存里）。
+   *
+   * ⚠️ 选中态用**中性填充**（`theme.text` 底 + `theme.bg` 字），不用点缀色：
+   * 与书架的分组标签同一套规矩 —— 一行里同时有多个标签，选中的那个若用主题色，
+   * 整条栏的视觉重量会全压到它身上（设计文档：大色块一律中性）。
+   *
+   * ⚠️ 用 `Scroll` + `Row` 而不是 `Flex(wrap)`：四项在窄屏上也放得下，
+   * 且**横排一行**比换行更像"切换器"；万一以后加类型，横向滚动也比换行更可控。
+   */
+  @Builder
+  buildFilterBar() {
+    Scroll() {
+      Row({ space: AppTheme.GAP_S }) {
+        ForEach(ANNOTATION_FILTERS, (filter: AnnotationFilter) => {
+          Text(`${filter.label} ${this.countOf(filter.value)}`)
+            .fontSize(AppTheme.FONT_CAPTION)
+            .fontColor(this.annotationFilter === filter.value
+              ? this.theme().bg
+              : this.theme().secondary)
+            .backgroundColor(this.annotationFilter === filter.value
+              ? this.theme().text
+              : this.theme().barBg)
+            .borderRadius(AppTheme.CHIP_RADIUS)
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .onClick(() => {
+              this.selectAnnotationFilter(filter.value);
+            })
+        }, (filter: AnnotationFilter) => `${filter.value}`)
+      }
+      .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_S, bottom: AppTheme.GAP_S })
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%')
+  }
+
   @Builder
   buildAnnotationList() {
     /**
@@ -351,15 +499,58 @@ struct ReaderCatalogPage {
      * 会按"整页高度"算、把头部顶出去。套一层有界容器就正常了。
      */
     Column() {
+      /**
+       * 类型筛选栏。
+       *
+       * ⚠️ **只在有标注时显示**：一条都没有时它整行都是 0，纯属占地方；
+       * 而且空状态里已经说明了"怎么加标注"，筛选栏反而会让人以为"是不是被筛掉了"。
+       */
+      if (this.annotations.length > 0) {
+        this.buildFilterBar()
+      }
+
       if (this.annotations.length === 0) {
-        // 复用通用空状态组件，文案指明**怎么加**，而不是只说"没有"
-        EmptyView({
-          title: '还没有标注',
-          hint: '阅读时长按选中正文，在弹出菜单里选「书签 / 划线 / 笔记」'
-        })
+        /**
+         * ⚠️ 空状态必须包在**带 `layoutWeight(1)` 的 `Column`** 里。
+         *
+         * `EmptyView` 自身是 `height('100%')` —— 它取的是**父容器**高度。
+         * 现在父容器里多了筛选栏这个兄弟节点，直接放进去它仍按"整栏高度"算，
+         * 会把筛选栏顶出可视区（本项目已在目录页记过同类坑：
+         * "EmptyView 直接放在本页 Column 里会把头部顶出去"）。
+         * 套一层有界容器，它拿到的就是"扣掉筛选栏之后的余量"。
+         */
+        Column() {
+          // 复用通用空状态组件，文案指明**怎么加**，而不是只说"没有"
+          EmptyView({
+            title: '还没有标注',
+            hint: '阅读时长按选中正文，在弹出菜单里选「书签 / 划线 / 笔记」'
+          })
+        }
+        .width('100%')
+        .layoutWeight(1)
+      } else if (this.visibleAnnotations().length === 0) {
+        /**
+         * ⚠️ 区分"一条标注都没有"与"这一类没有"两种情况。
+         *
+         * 后者若复用上面的空状态，会显示"还没有标注"—— 而用户明明有几十条，
+         * 只是当前筛的是"划线"。那会让人以为数据丢了。
+         * 这里明确指向筛选条件，并给出退路（切回全部）。
+         */
+        Column() {
+          EmptyView({
+            title: '这一类还没有',
+            hint: '换一个筛选看看，或点「全部」',
+            actionText: '查看全部',
+            onAction: () => {
+              this.selectAnnotationFilter(AppConstants.ANNOTATION_ALL);
+            }
+          })
+        }
+        .width('100%')
+        .layoutWeight(1)
       } else {
         List() {
-          ForEach(this.annotations, (item: Annotation) => {
+          ForEach(this.visibleAnnotations(), (item: Annotation) => {
             ListItem() {
               Row() {
                 Column({ space: 4 }) {

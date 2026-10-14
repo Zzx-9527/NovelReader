@@ -13,6 +13,14 @@ export class RouteParam {
   offset: number = 0;
   /** 搜索关键词（搜索页） */
   keyword: string = '';
+  /**
+   * 目标分组 id（"选择书籍加入分组"页用）。
+   *
+   * ⚠️ 用 `-1` 表示"未分组"，**不要用 0** —— 0 是数据库自增主键的保留起点，
+   * 拿它当"无分组"的哨兵，将来某天真出现 id=0 就会撞车。
+   * 与 `chapterIndex` 用 -1 表示"未指定"是同一套约定。
+   */
+  groupId: number = -1;
   /** 来源标识，用于返回时的行为分支 */
   from: string = '';
 }
@@ -35,6 +43,14 @@ export class RouteName {
   static readonly BOOK_DETAIL_PAGE: string = 'pages/BookDetailPage';
   static readonly SETTINGS_PAGE: string = 'pages/SettingsPage';
   static readonly IMPORT_CONFIRM_PAGE: string = 'pages/ImportConfirmPage';
+  /**
+   * 「把已导入的书加入分组」页。
+   *
+   * ⚠️ 它是"分组 → 挑书"这条链路的落地页：分组本身只是个标签，
+   * 真正要做的事是**从已导入的书里选**。没有这一页，分组功能就只有
+   * "建/改名/删"，永远装不进任何一本书（本项目实测踩过这个缺口）。
+   */
+  static readonly GROUP_PICKER_PAGE: string = 'pages/GroupPickerPage';
   /** 来源标识（放在 RouteParam.from 里，用于返回时的行为分支） */
   static readonly BOOK_SHELF: string = 'shelf';
   static readonly BOOK_DETAIL: string = 'detail';

@@ -306,12 +306,63 @@ export class BookShelfViewModel {
     }
   }
 
+  /**
+   * 把一本书移入某个分组（`null` = 移出分组，即"未分组"）。
+   *
+   * ⚠️ 这是"分组"功能的**核心动作**：分组本身只是个标签，
+   * 只有能把已导入的书放进去，这个功能才有意义。
+   * 早期只做了"建/改名/删分组"，这个方法写好了却**从未被调用** ——
+   * 结果是分组永远是空的（本项目实测踩过）。
+   */
   async moveToGroup(bookId: number, groupId: number | null): Promise<void> {
     try {
       await BookRepository.setGroup(bookId, groupId);
       await this.refresh();
     } catch (e) {
       this.state.error = `移动失败：${Logger.errText(e as BusinessError)}`;
+    }
+  }
+
+  /**
+   * **批量**把多本书加入分组（选择页点"完成"时调用）。
+   *
+   * ⚠️ 逐本 await 而不是并发 `Promise.all`：
+   *  - 都是同一个 RdbStore 上的写操作，并发提交反而容易撞事务；
+   *  - 顺序执行在几十~几百本的量级下完全够快（每本一条 UPDATE）。
+   *
+   * ⚠️ 失败要**计数并如实返回**，不能吞掉：用户勾了 20 本、实际只成功 18 本
+   * 却提示"已完成"，他会以为全部放好了。返回成功数由调用方决定怎么提示。
+   *
+   * @returns 实际成功的本数
+   */
+  async moveManyToGroup(bookIds: number[], groupId: number | null): Promise<number> {
+    let succeeded: number = 0;
+    try {
+      for (const bookId of bookIds) {
+        await BookRepository.setGroup(bookId, groupId);
+        succeeded++;
+      }
+    } catch (e) {
+      this.state.error = `移动失败（已成功 ${succeeded} 本）：${Logger.errText(e as BusinessError)}`;
+    }
+    // 无论成败都刷新：部分成功时列表必须反映真实状态
+    await this.refresh();
+    return succeeded;
+  }
+
+  /**
+   * 书架全部书籍（**不分组**，用于选择页）。
+   *
+   * ⚠️ 刻意不复用 `state.books`：那份列表受**当前分组筛选**影响
+   * （用户在"第 1 组"里点"添加书籍"，只能看到第 1 组的书就荒谬了）。
+   * 选择页需要的是"我导入过的全部书"，所以这里独立查一次。
+   */
+  async listAllBooks(): Promise<Book[]> {
+    try {
+      return await BookRepository.listShelf(BookSort.ADDED, null);
+    } catch (e) {
+      this.state.error = `加载书籍失败：${Logger.errText(e as BusinessError)}`;
+      return [];
     }
   }
 
