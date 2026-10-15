@@ -7,6 +7,7 @@ import { Logger } from '../common/utils/Logger';
 import { BookShelfViewModel } from '../viewmodels/BookShelfViewModel';
 import { ShelfRefreshRegistry } from '../viewmodels/ShelfRefreshRegistry';
 import { ImportPreparation, ImportResult } from '../data/service/ImportService';
+import { ThemeMenu } from '../views/common/ThemeMenu';
 
 /**
  * 候选编码。
@@ -100,9 +101,17 @@ struct ImportConfirmPage {
    */
   @State private title: string = '';
   @State private encoding: string = '';
-  @State private previewTitles: string[] = [];
+  /**
+   * 章节预览行，格式 `"标题\u0000字数"`（效果稿每行右侧显示字数）。
+   *
+   * ⚠️ 用不可见分隔符拼成字符串数组而不是对象数组：本页字段一律是
+   * **基本类型**（`@State` 对 class/对象的观察只到第一层，字段扁平最可靠）。
+   */
+  @State private previewRows: string[] = [];
   @State private chapterCount: number = 0;
   @State private wordCount: number = 0;
+  /** 文件字节大小（信息卡「大小」行；来自 `ImportPreparation.fileSize`） */
+  @State private fileSize: number = 0;
   @State private lowConfidence: boolean = false;
   @State private fallback: boolean = false;
   /**
@@ -122,6 +131,13 @@ struct ImportConfirmPage {
   @State private error: string = '';
   /** 待确认数据是否有效；false 时整页显示错误态而不是空表单 */
   @State private ready: boolean = false;
+
+  // ── 编码选择菜单（ThemeMenu）的挂载状态 ──────────────────
+  @State private menuVisible: boolean = false;
+  @State private menuTitle: string = '';
+  @State private menuOptions: string[] = [];
+  @State private menuCurrent: number = -1;
+  private menuOnPick: ((index: number) => void) | null = null;
 
   aboutToAppear(): void {
     this.vm = ShelfRefreshRegistry.current;
@@ -178,9 +194,10 @@ struct ImportConfirmPage {
       const result: ImportResult = preparation.result;
       this.title = vm.pendingImportDefaultTitle();
       this.encoding = preparation.encoding;
-      this.previewTitles = vm.pendingImportPreview(PREVIEW_COUNT);
+      this.previewRows = vm.pendingImportPreviewRows(PREVIEW_COUNT);
       this.chapterCount = result.chapterCount;
       this.wordCount = result.wordCount;
+      this.fileSize = preparation.fileSize;
       this.lowConfidence = result.lowConfidence;
       this.fallback = result.fallback;
       this.suspicious = result.suspicious;
@@ -306,53 +323,101 @@ struct ImportConfirmPage {
   }
 
   build() {
-    Column() {
-      this.buildHeader()
-      Divider().color(AppColor.divider)
+    /**
+     * ⚠️ 外层 `Stack`：编码选择菜单（ThemeMenu）是全屏浮层，
+     * 必须能盖住整页 —— 与书架页/分组页同一套做法。
+     */
+    Stack() {
+      Column() {
+        this.buildHeader()
+        Divider().color(AppColor.divider)
 
-      if (!this.ready) {
-        this.buildUnavailable()
-      } else {
-        Scroll() {
-          Column({ space: AppTheme.GAP_L }) {
-            if (this.error.length > 0) {
-              // 错误提示条：常驻在内容顶部，不遮挡下面的表单
-              Text(this.error)
+        if (!this.ready) {
+          this.buildUnavailable()
+        } else {
+          Scroll() {
+            Column({ space: AppTheme.GAP_L }) {
+              if (this.error.length > 0) {
+                // 错误提示条：常驻在内容顶部，不遮挡下面的表单
+                Text(this.error)
+                  .fontSize(AppTheme.FONT_CAPTION)
+                  .fontColor(AppColor.danger)
+                  .width('100%')
+              }
+
+              /**
+               * 顶部说明（效果稿有、此前漏掉的一行）：
+               * 告诉用户"下面这些是自动推断的，编码错了会满屏乱码"——
+               * 这一页的全部意义就是让用户**在入库前核对**，
+               * 一句说明是这一页的"为什么"。
+               */
+              Text('下面的分章结果由文件内容自动推断。编码选错会直接变成满屏乱码，请先核对再导入。')
                 .fontSize(AppTheme.FONT_CAPTION)
-                .fontColor(AppColor.danger)
+                .fontColor(AppColor.textHint)
+                .lineHeight(19)
                 .width('100%')
+
+              /**
+               * 版面严格对齐效果稿：信息卡 → 告警（可选）→ 分章预览。
+               *
+               * ⚠️ 已删除「书名输入行」与「编码胶囊行」（用户要求）：
+               *  - 书名不必在这里改 —— 入库后用长按「重命名」更自然，
+               *    首屏让用户填一个文本框是多余的负担；
+               *  - 六个编码胶囊占地大且与"编码"这一行重复表达同一件事，
+               *    改成信息卡里「编码」行右端的**「更换」**文字动作，
+               *    点开 ThemeMenu 选编码（与长按书换编码同一套交互）。
+               */
+              this.buildFileCard()
+              this.buildWarningBlock()
+              this.buildPreviewRow()
             }
-
-            this.buildFileCard()
-            this.buildWarningBlock()
-            this.buildTitleRow()
-            this.buildEncodingRow()
-            this.buildPreviewRow()
+            .width('100%')
+            .padding({
+              left: AppTheme.PAGE_PADDING,
+              right: AppTheme.PAGE_PADDING,
+              top: AppTheme.GAP_L,
+              bottom: AppTheme.GAP_L
+            })
           }
+          .scrollBar(BarState.Off)
+          .layoutWeight(1)
           .width('100%')
-          .padding({
-            left: AppTheme.PAGE_PADDING,
-            right: AppTheme.PAGE_PADDING,
-            top: AppTheme.GAP_M,
-            bottom: AppTheme.GAP_M
-          })
-        }
-        .scrollBar(BarState.Off)
-        .layoutWeight(1)
-        .width('100%')
 
-        this.buildActionBar()
+          this.buildActionBar()
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(AppColor.bgPage)
+      /**
+       * 沉浸式让位：顶部给状态栏（否则返回按钮被盖住、点不灵），
+       * 底部给手势条。背景色铺满全屏，所以让出的那两条仍是本页底色。
+       */
+      .padding({ top: this.safeAreaTop, bottom: this.safeAreaBottom })
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+      // 编码选择菜单（最上层）
+      if (this.menuVisible) {
+        ThemeMenu({
+          title: this.menuTitle,
+          options: this.menuOptions,
+          dangerIndexes: '',
+          currentIndex: this.menuCurrent,
+          onPick: (index: number) => {
+            this.menuVisible = false;
+            const cb = this.menuOnPick;
+            if (cb !== null) {
+              cb(index);
+            }
+          },
+          onClose: () => {
+            this.menuVisible = false;
+          }
+        })
       }
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(AppColor.bgPage)
-    /**
-     * 沉浸式让位：顶部给状态栏（否则返回按钮被盖住、点不灵），
-     * 底部给手势条。背景色铺满全屏，所以让出的那两条仍是本页底色。
-     */
-    .padding({ top: this.safeAreaTop, bottom: this.safeAreaBottom })
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   /** 待确认数据失效时的兜底页面 */
@@ -417,6 +482,11 @@ struct ImportConfirmPage {
    * 才能凑齐"这是什么文件、多大、什么编码、分出几章"。
    * 收成一张卡，四行对齐，一眼读完。
    *
+   * ⚠️ 尺寸在真机上"整体小一圈、页面空一大截"（用户反馈），
+   * 因此本轮统一放大：标签列 64 → **80**、标签字号 12 → **13**、
+   * 值字号 14 → **16**、行内边距 14 → **18**、标签字距 1 → 1.5。
+   * 四个值（文件名/大小/编码/章节）现在有明确的"表"的量感。
+   *
    * ⚠️ 四行**内联写死**，不抽带参 `@Builder`（设计文档第 15/41 条：串位）。
    */
   @Builder
@@ -425,80 +495,138 @@ struct ImportConfirmPage {
       // ① 文件名
       Row() {
         Text('文件')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(13)
           .fontColor(AppColor.textHint)
-          .letterSpacing(1)
-          .width(64)
+          .letterSpacing(1.5)
+          .width(80)
         Text(this.title.length > 0 ? this.title : '未命名')
-          .fontSize(AppTheme.FONT_BODY)
+          .fontSize(16)
           .fontColor(AppColor.textPrimary)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
       }
       .width('100%')
-      .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+      .padding({ top: 18, bottom: 18, left: 18, right: 18 })
 
-      // ② 大小
+      // ② 大小（**文件字节**，不是字数 —— 效果稿里这一行是"412 KB"）
       Row() {
         Text('大小')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(13)
           .fontColor(AppColor.textHint)
-          .letterSpacing(1)
-          .width(64)
-        Text(FileUtil.humanCount(this.wordCount))
-          .fontSize(AppTheme.FONT_BODY)
+          .letterSpacing(1.5)
+          .width(80)
+        Text(FileUtil.humanSize(this.fileSize))
+          .fontSize(16)
           .fontColor(AppColor.textPrimary)
           .fontFeature(AppFont.TABULAR)
           .layoutWeight(1)
       }
       .width('100%')
-      .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+      .padding({ top: 18, bottom: 18, left: 18, right: 18 })
       .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
 
-      // ③ 编码（当前值 + 低置信度小注；"更换"动作在下面的胶囊行里，此处只展示）
-      Row() {
+      /**
+       * ③ 编码 + **「更换」**（效果稿的关键交互）。
+       *
+       * ⚠️ 「更换」放在这一行右端、与置信度小注同行：编码是"可以改的一项"，
+       * 动作就该贴着它，而不是散在下面的胶囊行里。
+       * 点开 `ThemeMenu` 选编码 —— 与长按书「换编码」用的是同一个菜单组件，
+       * 两处交互因此一致。
+       */
+      Row({ space: AppTheme.GAP_S }) {
         Text('编码')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(13)
           .fontColor(AppColor.textHint)
-          .letterSpacing(1)
-          .width(64)
-        Text(this.encoding)
-          .fontSize(AppTheme.FONT_BODY)
-          .fontColor(AppColor.textPrimary)
+          .letterSpacing(1.5)
+          .width(80)
+
+        Text(this.parsing ? '正在重新解析…' : this.encoding)
+          .fontSize(16)
+          .fontColor(this.parsing ? AppColor.accent : AppColor.textPrimary)
           .fontFeature(AppFont.TABULAR)
-          .layoutWeight(1)
-        if (this.lowConfidence) {
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+        if (this.lowConfidence && !this.parsing) {
           Text('置信度低')
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(AppColor.danger)
+            .fontSize(12)
+            .fontColor(AppColor.textHint)
         }
+
+        Blank()
+
+        Text('更换')
+          .fontSize(13)
+          .fontColor(AppColor.accent)
+          .padding({ left: 10, right: 2, top: 6, bottom: 6 })
+          .onClick(() => {
+            this.showEncodingMenu();
+          })
       }
       .width('100%')
-      .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+      .padding({ top: 18, bottom: 18, left: 18, right: 18 })
+      .alignItems(VerticalAlign.Center)
       .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
 
       // ④ 章节
       Row() {
         Text('章节')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(13)
           .fontColor(AppColor.textHint)
-          .letterSpacing(1)
-          .width(64)
-        Text(this.parsing ? '正在重新解析…' : `${this.chapterCount} 章 · ${FileUtil.humanCount(this.wordCount)}`)
-          .fontSize(AppTheme.FONT_BODY)
-          .fontColor(this.parsing ? AppColor.accent : AppColor.textPrimary)
+          .letterSpacing(1.5)
+          .width(80)
+        Text(this.parsing ? '—' : `${this.chapterCount} 章`)
+          .fontSize(16)
+          .fontColor(AppColor.textPrimary)
           .fontFeature(AppFont.TABULAR)
           .layoutWeight(1)
       }
       .width('100%')
-      .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+      .padding({ top: 18, bottom: 18, left: 18, right: 18 })
       .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
     }
     .width('100%')
     .backgroundColor(AppColor.bgCard)
     .borderRadius(AppTheme.CARD_RADIUS)
     .clip(true)
+  }
+
+  /**
+   * 「更换」编码：弹主题化菜单（与长按书「换编码」同一套组件）。
+   *
+   * ⚠️ 当前编码标上「（当前）」并给朱点：用户一眼看出现在是哪一个。
+   * ⚠️ 选完只重新分章预览、**不写库**（写库在底部「导入书架」）。
+   */
+  private showEncodingMenu(): void {
+    if (this.parsing || this.committing) {
+      return;
+    }
+    /**
+     * ⚠️ 复用模块级的 `ENCODING_OPTIONS`，**不在这里再写一份**：
+     * 编码候选列表（顺序与内容）只允许有一个来源（设计文档第 28 条）。
+     */
+    const labels: string[] = [];
+    let currentIndex: number = -1;
+    for (let i = 0; i < ENCODING_OPTIONS.length; i++) {
+      const item: string = ENCODING_OPTIONS[i];
+      labels.push(item === this.encoding ? `${item}（当前）` : item);
+      if (item === this.encoding) {
+        currentIndex = i;
+      }
+    }
+
+    this.menuTitle = '选择编码';
+    this.menuOptions = labels;
+    this.menuCurrent = currentIndex;
+    this.menuOnPick = (index: number) => {
+      const picked: string = ENCODING_OPTIONS[index];
+      if (picked === undefined || picked === this.encoding) {
+        return;
+      }
+      this.changeEncoding(picked);
+    };
+    this.menuVisible = true;
   }
 
   /**
@@ -512,31 +640,56 @@ struct ImportConfirmPage {
   buildWarningBlock() {
     if (this.suspicious) {
       this.warningBody(
-        '只解析出很少的章节，编码可能不正确。建议换一个编码重新解析，否则阅读时可能卡住。'
+        '只解析出很少的章节，编码可能不正确。建议更换编码后重新解析，否则阅读时可能卡住。'
       )
     } else if (this.lowConfidence || this.fallback) {
       this.warningBody(
         this.lowConfidence
-          ? '编码识别置信度偏低。请核对下方章节名是否有乱码；若显示异常，请更换编码。'
+          ? '请核对下方章节名是否有乱码。若显示异常，点上面的「更换」改选 GB18030 或 GBK。'
           : '没有找到标准章节标记，已按字数自动切分；阅读时若章节不对可换编码重试。'
       )
     }
   }
 
-  /** 告警块本体（朱色左边线 + 淡底 + 标题行 + 说明文字） */
+  /**
+   * 告警块本体（效果稿样式）：**朱色左边线 + 淡朱底 + 两行文字**。
+   *
+   * ⚠️ 三处尺寸是刻意收小的（真机实测"占地太大"）：
+   *  - 左边线 3vp → **2.5vp 且不撑满高度**（用 `alignSelf(ItemAlign.Stretch)`
+   *    配上下 padding 让线随内容高度、不随容器拉伸）；
+   *  - 上下 padding 各 12/13 → **10/11**；
+   *  - 标题与说明之间 4 → **3**。
+   * 效果稿里它就是"两行小字的一块提示"，不该占掉小半屏。
+   *
+   * ⚠️ 底色用 `accent` 的极低不透明度叠在纸面上（不是 `bgCard` 实心白）：
+   * 实心白块与下面信息卡同色，读起来像"另一张卡"；淡朱底才读得出
+   * "这是一条警示"。用 `opacity` 叠色而非新令牌，深浅模式自动成立。
+   */
   @Builder
   warningBody(message: string) {
-    Row({ space: AppTheme.GAP_M }) {
+    /**
+     * ⚠️ **单层 `Row`，不用 `Stack` 叠底色**（真机两轮实测的结论）。
+     *
+     * 前两版都用 `Stack`：底色层 + 内容层。但 `Stack` 的高度由**最高子节点**
+     * 决定，而底色层在没有固定高度时仍会去要满父容器的剩余空间 ——
+     * `height('100%')` 会撑满、`alignSelf(Stretch)` 也会被拉满，
+     * 于是整块被拉成一大片（用户连续两轮反馈"红色区域为什么这么大"）。
+     *
+     * 现在：**一个 `Row` 直接承载底色**，高度由内容（两行文字）自然决定。
+     * 底色用带 alpha 的 `#14A8342A`（朱砂 8%）而不是 `opacity` 叠层 ——
+     * `opacity` 会波及子节点文字，alpha 色值不会。
+     */
+    Row({ space: 10 }) {
+      // 朱色左边线：高度由 Row 的内容决定（不写 height）
       Column()
-        .width(3)
-        .height('100%')
-        .borderRadius(2)
+        .width(2.5)
+        .alignSelf(ItemAlign.Stretch)
         .backgroundColor(AppColor.accent)
 
-      Column({ space: 4 }) {
-        Row({ space: 6 }) {
+      Column({ space: 3 }) {
+        Row({ space: 5 }) {
           Text('⚠')
-            .fontSize(12)
+            .fontSize(11)
             .fontColor(AppColor.accent)
           Text(this.suspicious ? '分章结果可疑' : '编码识别置信度偏低')
             .fontSize(AppTheme.FONT_CAPTION)
@@ -547,164 +700,127 @@ struct ImportConfirmPage {
         Text(message)
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(AppColor.textSecondary)
-          .lineHeight(18)
+          .lineHeight(17)
           .width('100%')
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .padding({ top: 12, bottom: 13, left: 0, right: 12 })
-    .backgroundColor(AppColor.bgCard)
+    .padding({ top: 10, bottom: 11, left: 0, right: 12 })
+    // 淡朱底：直接写在 Row 上（#14 = alpha 8%），不叠层、不撑高
+    .backgroundColor('#14A8342A')
     .borderRadius(AppTheme.ITEM_RADIUS)
-  }
-
-  // ------------------------------------------------------------ 书名
-
-  /** 书名编辑行。保留独立编辑能力，标签与输入框收进同一张卡片语汇 */
-  @Builder
-  buildTitleRow() {
-    Column({ space: AppTheme.GAP_S }) {
-      Text('书名')
-        .fontSize(AppTheme.FONT_CAPTION)
-        .fontColor(AppColor.textHint)
-        .letterSpacing(1)
-        .width('100%')
-      TextInput({ text: this.title, placeholder: '输入书名' })
-        .fontSize(AppTheme.FONT_BODY)
-        .fontColor(AppColor.textPrimary)
-        .placeholderColor(AppColor.textHint)
-        .backgroundColor(AppColor.bgCard)
-        .borderRadius(AppTheme.ITEM_RADIUS)
-        .width('100%')
-        .height(44)
-        .maxLength(60)
-        .onChange((value: string) => {
-          this.title = value;
-        })
-    }
-    .width('100%')
-  }
-
-  // ------------------------------------------------------------ 编码
-
-  /**
-   * 编码选择：**点击即重新分章预览**。
-   *
-   * ⚠️ 没有"确认"按钮，点了立刻重解析 —— 用户是在"试哪个编码不乱码"，
-   * 加一步确认只会让他多按一次。重解析期间用 `parsing` 挡住重复点击。
-   */
-  @Builder
-  buildEncodingRow() {
-    Column({ space: AppTheme.GAP_S }) {
-      Row() {
-        Text('编码')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.textHint)
-          .letterSpacing(1)
-          .layoutWeight(1)
-        if (this.parsing) {
-          Text('正在重新解析…')
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(AppColor.accent)
-        }
-      }
-      .width('100%')
-
-      /**
-       * ⚠️ 用 `Flex` + `wrap` 而不是 `Row`：六个编码名长短不一
-       * （`GB18030` 明显更长），`Row` 里挤不下会被压缩或溢出。
-       * 换行排列在小屏上也更稳。
-       *
-       * ⚠️ 选中态用**墨色实心**（`primary`），与"我的"页外观分段控件同一语汇 ——
-       * 编码是"二选一/六选一"的排他选择，用中性实心表达"被选中的那颗"，
-       * 不占用朱色（朱色留给告警与主按钮）。
-       */
-      Flex({ wrap: FlexWrap.Wrap }) {
-        ForEach(ENCODING_OPTIONS, (item: string) => {
-          Text(item)
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(this.encoding === item
-              ? AppColor.onPrimary
-              : AppColor.textSecondary)
-            .backgroundColor(this.encoding === item
-              ? AppColor.primary
-              : AppColor.bgCard)
-            .borderRadius(AppTheme.CHIP_RADIUS)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .margin({ right: AppTheme.GAP_S, bottom: AppTheme.GAP_S })
-            .onClick(() => {
-              this.changeEncoding(item);
-            })
-        }, (item: string) => item)
-      }
-      .width('100%')
-    }
-    .width('100%')
   }
 
   // ------------------------------------------------------------ 预览
 
+  /**
+   * 分章预览（严格照效果稿）：
+   * ```
+   * ┌─────────────────────────────────────┐
+   * │ 分章预览              前 4 章 / 共 35 │  ← 标题**在卡片内**，下方一条发丝线
+   * │ ─────────────────────────────────── │
+   * │ 01   第一章 · 落雪          2 840 字 │  ← 行高 40，字号 13 / 11
+   * │ 02   第二章 · 旧信          3 120 字 │
+   * └─────────────────────────────────────┘
+   * ```
+   *
+   * ⚠️ **标题行必须在卡片内部**（用户指出）：早先把它放在卡片外面，
+   * 视觉上是"一个游离的标签 + 一张表"，而效果稿里它是一个**带表头的卡**。
+   * 表头下方那条发丝线与行间线同色同粗，把表头与数据行分开。
+   *
+   * ⚠️ 尺寸照效果稿收小：内边距 16 → **14**，章节名 `FONT_BODY`(14) → **13**，
+   * 字数 `FONT_CAPTION`(12) → **11**，行高 12+12 → **11+11**（总高约 40）。
+   * 原来那版整体大一圈，与上面的信息卡不成比例。
+   *
+   * ⚠️ 每行**右侧带字数**：某一章字数异常大（如 8 万字）通常说明分章没分对
+   * （编码错了），字数是最好的判据 —— 效果稿里这一列不是装饰。
+   */
   @Builder
   buildPreviewRow() {
-    Column({ space: AppTheme.GAP_S }) {
+    Column() {
+      // ① 表头（卡片内）：左"分章预览"，右"前 N 章 / 共 M"
       Row() {
-        Text('章节预览')
-          .fontSize(AppTheme.FONT_CAPTION)
+        Text('分章预览')
+          .fontSize(13)
           .fontColor(AppColor.textHint)
           .letterSpacing(1)
           .layoutWeight(1)
-        Text(`前 ${this.previewTitles.length} 章 / 共 ${this.chapterCount}`)
-          .fontSize(AppTheme.FONT_CAPTION)
+        Text(`前 ${this.previewRows.length} 章 / 共 ${this.chapterCount}`)
+          .fontSize(12)
           .fontColor(AppColor.textHint)
           .fontFeature(AppFont.TABULAR)
       }
       .width('100%')
+      .padding({ top: 15, bottom: 14, left: 16, right: 16 })
 
-      Column() {
-        if (this.previewTitles.length === 0) {
-          Text('没有解析出章节')
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(AppColor.textHint)
-            .width('100%')
-            .padding(AppTheme.GAP_M)
-        } else {
-          /**
-           * 每行：序号 + 章节名，行间发丝线（从文字列起，与列表卡同一语汇）。
-           *
-           * ⚠️ 行**内联写死**在 ForEach 里：结构相同、数据不同，
-           * 由 ForEach 参数化即可，不需要再抽 @Builder。
-           */
-          ForEach(this.previewTitles, (item: string, index: number) => {
-            Row({ space: AppTheme.GAP_M }) {
-              Text(`${index + 1 < 10 ? '0' : ''}${index + 1}`)
-                .fontSize(AppTheme.FONT_CAPTION)
-                .fontColor(AppColor.textHint)
-                .fontFeature(AppFont.TABULAR)
-                .width(24)
+      // 表头下的发丝线（与行间线同源）
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(AppColor.divider)
 
-              Text(item)
-                .fontSize(AppTheme.FONT_BODY)
-                .fontColor(AppColor.textSecondary)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ top: 11, bottom: 11, left: 16, right: 16 })
-            .border({
-              width: { top: index > 0 ? AppTheme.HAIRLINE : 0 },
-              color: AppColor.divider
-            })
-          }, (item: string, index: number) => `${index}_${item}`)
-        }
+      // ② 数据行
+      if (this.previewRows.length === 0) {
+        Text('没有解析出章节')
+          .fontSize(13)
+          .fontColor(AppColor.textHint)
+          .width('100%')
+          .padding({ top: 16, bottom: 16, left: 16, right: 16 })
+      } else {
+        ForEach(this.previewRows, (row: string, index: number) => {
+          Row({ space: 12 }) {
+            // 序号：两位定宽（十位以上自动变三位）
+            Text(`${index + 1 < 10 ? '0' : ''}${index + 1}`)
+              .fontSize(12)
+              .fontColor(AppColor.textHint)
+              .fontFeature(AppFont.TABULAR)
+              .width(24)
+
+            // 章节名（左端，可省略）
+            Text(this.previewTitle(row))
+              .fontSize(15)
+              .fontColor(AppColor.textSecondary)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+
+            // 字数（右端，效果稿的关键一列）
+            Text(`${this.previewWordCount(row)} 字`)
+              .fontSize(12)
+              .fontColor(AppColor.textHint)
+              .fontFeature(AppFont.TABULAR)
+          }
+          .width('100%')
+          .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+          .border({
+            width: { top: index > 0 ? AppTheme.HAIRLINE : 0 },
+            color: AppColor.divider
+          })
+        }, (row: string, index: number) => `${index}_${row}`)
       }
-      .width('100%')
-      .borderRadius(AppTheme.ITEM_RADIUS)
-      .backgroundColor(AppColor.bgCard)
-      .clip(true)
     }
     .width('100%')
+    .borderRadius(AppTheme.ITEM_RADIUS)
+    .backgroundColor(AppColor.bgCard)
+    .clip(true)
+  }
+
+  /** 预览行里的章节标题（`"标题\u0000字数"` 的前半段） */
+  private previewTitle(row: string): string {
+    const parts: string[] = row.split('\u0000');
+    return parts.length > 0 ? parts[0] : row;
+  }
+
+  /** 预览行里的字数（`"标题\u0000字数"` 的后半段；解析不出时返回 0） */
+  private previewWordCount(row: string): number {
+    const parts: string[] = row.split('\u0000');
+    if (parts.length < 2) {
+      return 0;
+    }
+    const n: number = Number.parseInt(parts[1], 10);
+    return Number.isNaN(n) ? 0 : n;
   }
 
   // ------------------------------------------------------------ 操作栏
@@ -719,9 +835,9 @@ struct ImportConfirmPage {
        * 实心就会和它抢重量；描边表达"这是个退路，不是推荐动作"。
        */
       Button('取消')
-        .fontSize(AppTheme.FONT_BODY)
+        .fontSize(15)
         .layoutWeight(1)
-        .height(44)
+        .height(48)
         .backgroundColor(AppColor.bgCard)
         .fontColor(AppColor.textSecondary)
         .border({ width: AppTheme.HAIRLINE, color: AppColor.divider })
@@ -740,9 +856,9 @@ struct ImportConfirmPage {
        * ⚠️ 没有章节时不给导入：入库一本"一章都没有"的书没有意义。
        */
       Button(this.committing ? '正在导入…' : '导入书架')
-        .fontSize(AppTheme.FONT_BODY)
+        .fontSize(15)
         .layoutWeight(2)
-        .height(44)
+        .height(48)
         .backgroundColor(AppColor.accent)
         .fontColor(AppColor.onPrimary)
         .borderRadius(AppTheme.ITEM_RADIUS)

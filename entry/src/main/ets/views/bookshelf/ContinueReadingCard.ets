@@ -113,19 +113,33 @@ export struct ContinueReadingCard {
 
         Row({ space: AppTheme.GAP_S }) {
           /**
-           * 进度：2vp 发丝轨道 + accent 填充 + **末梢圆点**。
+           * 进度：2vp 发丝轨道 + **accent 填充条** + **末梢圆点**。
+           *
+           * ⚠️ 填充条与圆点是**两个兄弟节点**，缺一不可：
+           * 早先的实现只画了圆点（`Row` 里只有那个 6vp 的点，没有横线），
+           * 于是整条进度读起来是"灰轨道 + 一个红点"，看不出读了多少 ——
+           * 与封面/列表行上"朱色填充 + 圆点"的语汇也不一致。
            *
            * ⚠️ 圆点靠"放在一个宽度等于填充量的 `Row` 里、右对齐"来定位：
            * 轨道宽是布局算出来的，代码里拿不到像素值。
            * 用 `justifyContent(End)` 让布局引擎自己去算右端。
            */
           Stack({ alignContent: Alignment.Start }) {
+            // 轨道（灰底，通栏）
             Row()
               .width('100%')
               .height(AppTheme.RAIL_H)
               .backgroundColor(AppColor.divider)
 
+            // 填充量容器：宽度 = 进度百分比，内部放"填充条 + 末梢圆点"
             Row() {
+              // 填充条：铺满这个容器（即进度长度）
+              Row()
+                .layoutWeight(1)
+                .height(AppTheme.RAIL_H)
+                .backgroundColor(AppColor.accent)
+
+              // 末梢圆点：标"我正停在这里"
               Row()
                 .width(AppTheme.RAIL_DOT)
                 .height(AppTheme.RAIL_DOT)
@@ -134,7 +148,6 @@ export struct ContinueReadingCard {
             }
             .width(this.fillWidth())
             .height(AppTheme.RAIL_H)
-            .justifyContent(FlexAlign.End)
             .alignItems(VerticalAlign.Center)
           }
           .layoutWeight(1)

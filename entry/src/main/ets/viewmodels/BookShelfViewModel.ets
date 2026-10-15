@@ -420,6 +420,33 @@ export class BookShelfViewModel {
   }
 
   /**
+   * 确认页的章节预览**行**：标题 + 字数（效果稿每行右侧显示"2 840 字"）。
+   *
+   * ⚠️ 与 `pendingImportPreview` 并存而不是替换它：那个方法返回的纯标题数组
+   * 已被本页用作"有没有解析出章节"的判据，语义清晰；
+   * 这里多带一个字数字段，供渲染右侧小字。
+   *
+   * ⚠️ 返回字符串数组（"标题\u0000字数"）而不是对象数组：本页的字段
+   * 一律是**基本类型**（见 `ImportConfirmPage` 的字段说明），
+   * 传对象数组会让 `@State` 的观察变复杂。用不可见分隔符拼装，
+   * 渲染时 split 一次即可 —— 章节标题里不可能出现 `\u0000`。
+   */
+  pendingImportPreviewRows(limit: number = 8): string[] {
+    const preparation = this.state.pendingImport;
+    if (preparation === null) {
+      return [];
+    }
+    const rows: string[] = [];
+    const count: number = Math.min(limit, preparation.chapters.length);
+    for (let i = 0; i < count; i++) {
+      const chapter = preparation.chapters[i];
+      const title: string = chapter.title.length > 0 ? chapter.title : `第 ${i + 1} 章`;
+      rows.push(`${title}\u0000${chapter.wordCount}`);
+    }
+    return rows;
+  }
+
+  /**
    * 确认页的默认书名（取自文件名，去扩展名）。
    *
    * 与 `ImportService.commit` 在 `bookTitle` 为空时的兜底**同源**，

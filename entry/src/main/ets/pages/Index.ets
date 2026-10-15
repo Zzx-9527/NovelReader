@@ -223,23 +223,13 @@ struct Index {
   tabBuilder(index: number) {
     Column() {
       /**
-       * ⚠️ 栏顶发丝线：**三块各画一段，拼成整栏的一条**。
+       * ⚠️ **栏顶发丝线已删除**（用户要求）。
        *
-       * 为什么不直接给 `Tabs` 的 bar 加边框：`Tabs` 的 `barBackgroundColor`
-       * 只能设底色，系统 bar 内部没有暴露边框入口；而把线放在 `Tabs`
-       * **外面**（与 bar 同级）又做不到 —— bar 是 `Tabs` 自己布局的。
-       * 画在每个 tabBuilder 顶部是唯一能贴住栏顶的做法，
-       * 代价是它参与 tab 的高度计算（所以下面的内容区必须用 `layoutWeight`）。
-       *
-       * ⚠️ 存在的理由：原实现的导航栏与页面底色（`bgPage` #FAFAFA）之间
-       * 只靠 `bgCard`(#FFFFFF) 的 2% 明度差区分，在浅色下几乎看不出"这里
-       * 开始是另一层"，深色下（#1A1A1A / #242424）更糊。一条发丝线
-       * 一句话说清"导航栏到这里为止"，而它只花 1vp。
+       * 早先三块各画一段拼成整栏一条线，理由是"导航栏与页面底色明度差太小"。
+       * 但那道线在视觉上把 Tab 栏框成了一个"独立的横条"，
+       * 与"整页是同一张纸"的语汇冲突 —— 栏的分界由 `bgCard` 与 `bgPage`
+       * 的色差承担即可（现在的纸白/宣纸差比原来的白/浅灰明显得多）。
        */
-      Row()
-        .width('100%')
-        .height(AppTheme.HAIRLINE)
-        .backgroundColor(AppColor.divider)
 
       /**
        * 选中短横的**固定槽位**（4vp）。
