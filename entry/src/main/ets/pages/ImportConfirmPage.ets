@@ -1,4 +1,5 @@
 import { AppColor, AppTheme } from '../common/theme/AppTheme';
+import { AppFont } from '../common/theme/AppFont';
 import { AppConstants } from '../common/constants/AppConstants';
 import { Encodings } from '../common/utils/EncodingDetector';
 import { FileUtil } from '../common/utils/FileUtil';
@@ -41,17 +42,23 @@ const PREVIEW_COUNT: number = 8;
 /**
  * 导入确认页（选完文件、尚未入库）。
  *
- * 版面（自上而下）：
+ * 版面（自上而下，与效果稿一致；标题栏不变）：
  * ```
  * ‹ 返回        导入确认
  * ───────────────────────────────
+ * ┌ 文件  长夜将尽.txt ┐
+ * │ 大小  290.0 万字   │          ← 信息卡：账目行式四行
+ * │ 编码  GB18030      │
+ * │ 章节  35 章        │
+ * └───────────────────┘
+ * ⚠ 分章结果可疑 / 置信度低     ← 朱色左边线告警块（按状态出现）
  * 书名   [________________]      ← 可编辑，初值取自文件名
- * 编码   UTF-8  GBK  GB18030 …   ← 点击即重新分章预览
- * 分章   共 1287 章 · 12.3 MB
- * 预览   第一章 …
- *        第二章 …
+ * 编码   utf-8  gb18030 …        ← 点击即重新分章预览
+ * 章节预览            前 8 / 共 35
+ *   01  第一章                ← 序号 + 发丝线行
+ *   02  第二章
  * ───────────────────────────────
- *          [取消]   [导入]
+ *      [取消]   [ 导入书架 ]    ← 描边 + 朱砂实心
  * ```
  *
  * ⚠️ **为什么必须有这一页**（设计文档 §P1 / 附录 B 第 6 项）：
@@ -62,8 +69,7 @@ const PREVIEW_COUNT: number = 8;
  *
  * ⚠️ 数据来源：**共享的 `BookShelfViewModel.state.pendingImport`**，
  * 不走路由参数（含上千章节对象，序列化既慢又可能丢字段）。
- * 本页只取"展示需要的标量"存进**基本类型**的 `@State` 字段，
- * 避免把整个 `preparation` 交给状态系统（见下方字段说明）。
+ * 本页只取"展示需要的标量"存进**基本类型**的 `@State` 字段。
  *
  * ⚠️ 配色走 `AppColor` 而**不是** `ReaderTheme`：本页属于书架流程
  * （不是阅读页内部），要跟随系统深浅色，与书架页一致。
@@ -307,24 +313,20 @@ struct ImportConfirmPage {
       if (!this.ready) {
         this.buildUnavailable()
       } else {
-        if (this.error.length > 0) {
-          // 错误提示条：常驻在内容顶部，不遮挡下面的表单
-          Text(this.error)
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(AppColor.danger)
-            .width('100%')
-            .padding({
-              left: AppTheme.PAGE_PADDING,
-              right: AppTheme.PAGE_PADDING,
-              top: AppTheme.GAP_S
-            })
-        }
-
         Scroll() {
           Column({ space: AppTheme.GAP_L }) {
+            if (this.error.length > 0) {
+              // 错误提示条：常驻在内容顶部，不遮挡下面的表单
+              Text(this.error)
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(AppColor.danger)
+                .width('100%')
+            }
+
+            this.buildFileCard()
+            this.buildWarningBlock()
             this.buildTitleRow()
             this.buildEncodingRow()
-            this.buildSummaryRow()
             this.buildPreviewRow()
           }
           .width('100%')
@@ -405,14 +407,168 @@ struct ImportConfirmPage {
     .width('100%')
   }
 
+  // ------------------------------------------------------------ 文件信息卡
+
+  /**
+   * 文件信息卡：文件 / 大小 / 编码 / 章节，**账目行**式排版
+   * （左标签、右值、行间发丝线），与统计页同一套语汇。
+   *
+   * ⚠️ 原实现把"分章结果"散在编码行下面的一行字里，用户要扫三块
+   * 才能凑齐"这是什么文件、多大、什么编码、分出几章"。
+   * 收成一张卡，四行对齐，一眼读完。
+   *
+   * ⚠️ 四行**内联写死**，不抽带参 `@Builder`（设计文档第 15/41 条：串位）。
+   */
+  @Builder
+  buildFileCard() {
+    Column() {
+      // ① 文件名
+      Row() {
+        Text('文件')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .letterSpacing(1)
+          .width(64)
+        Text(this.title.length > 0 ? this.title : '未命名')
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(AppColor.textPrimary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+
+      // ② 大小
+      Row() {
+        Text('大小')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .letterSpacing(1)
+          .width(64)
+        Text(FileUtil.humanCount(this.wordCount))
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(AppColor.textPrimary)
+          .fontFeature(AppFont.TABULAR)
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+      .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
+
+      // ③ 编码（当前值 + 低置信度小注；"更换"动作在下面的胶囊行里，此处只展示）
+      Row() {
+        Text('编码')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .letterSpacing(1)
+          .width(64)
+        Text(this.encoding)
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(AppColor.textPrimary)
+          .fontFeature(AppFont.TABULAR)
+          .layoutWeight(1)
+        if (this.lowConfidence) {
+          Text('置信度低')
+            .fontSize(AppTheme.FONT_CAPTION)
+            .fontColor(AppColor.danger)
+        }
+      }
+      .width('100%')
+      .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+      .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
+
+      // ④ 章节
+      Row() {
+        Text('章节')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .letterSpacing(1)
+          .width(64)
+        Text(this.parsing ? '正在重新解析…' : `${this.chapterCount} 章 · ${FileUtil.humanCount(this.wordCount)}`)
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(this.parsing ? AppColor.accent : AppColor.textPrimary)
+          .fontFeature(AppFont.TABULAR)
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+      .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
+    }
+    .width('100%')
+    .backgroundColor(AppColor.bgCard)
+    .borderRadius(AppTheme.CARD_RADIUS)
+    .clip(true)
+  }
+
+  /**
+   * 告警块：低置信度 / 兜底切分 / 章节可疑，三档共用一个**朱色左边线**的提示块。
+   *
+   * ⚠️ 原实现是三段散落的裸文字，权重靠颜色硬撑；收成带左边线的块后
+   * "这是一条需要你停下来看的提示"有了形状 —— 与效果稿一致。
+   * 可疑（suspicious）最严重，独占文案；低置信度与兜底可并存，取并集文案。
+   */
+  @Builder
+  buildWarningBlock() {
+    if (this.suspicious) {
+      this.warningBody(
+        '只解析出很少的章节，编码可能不正确。建议换一个编码重新解析，否则阅读时可能卡住。'
+      )
+    } else if (this.lowConfidence || this.fallback) {
+      this.warningBody(
+        this.lowConfidence
+          ? '编码识别置信度偏低。请核对下方章节名是否有乱码；若显示异常，请更换编码。'
+          : '没有找到标准章节标记，已按字数自动切分；阅读时若章节不对可换编码重试。'
+      )
+    }
+  }
+
+  /** 告警块本体（朱色左边线 + 淡底 + 标题行 + 说明文字） */
+  @Builder
+  warningBody(message: string) {
+    Row({ space: AppTheme.GAP_M }) {
+      Column()
+        .width(3)
+        .height('100%')
+        .borderRadius(2)
+        .backgroundColor(AppColor.accent)
+
+      Column({ space: 4 }) {
+        Row({ space: 6 }) {
+          Text('⚠')
+            .fontSize(12)
+            .fontColor(AppColor.accent)
+          Text(this.suspicious ? '分章结果可疑' : '编码识别置信度偏低')
+            .fontSize(AppTheme.FONT_CAPTION)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppColor.accent)
+        }
+
+        Text(message)
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textSecondary)
+          .lineHeight(18)
+          .width('100%')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding({ top: 12, bottom: 13, left: 0, right: 12 })
+    .backgroundColor(AppColor.bgCard)
+    .borderRadius(AppTheme.ITEM_RADIUS)
+  }
+
   // ------------------------------------------------------------ 书名
 
+  /** 书名编辑行。保留独立编辑能力，标签与输入框收进同一张卡片语汇 */
   @Builder
   buildTitleRow() {
     Column({ space: AppTheme.GAP_S }) {
       Text('书名')
-        .fontSize(AppTheme.FONT_BODY)
-        .fontColor(AppColor.textPrimary)
+        .fontSize(AppTheme.FONT_CAPTION)
+        .fontColor(AppColor.textHint)
+        .letterSpacing(1)
         .width('100%')
       TextInput({ text: this.title, placeholder: '输入书名' })
         .fontSize(AppTheme.FONT_BODY)
@@ -421,6 +577,7 @@ struct ImportConfirmPage {
         .backgroundColor(AppColor.bgCard)
         .borderRadius(AppTheme.ITEM_RADIUS)
         .width('100%')
+        .height(44)
         .maxLength(60)
         .onChange((value: string) => {
           this.title = value;
@@ -442,8 +599,9 @@ struct ImportConfirmPage {
     Column({ space: AppTheme.GAP_S }) {
       Row() {
         Text('编码')
-          .fontSize(AppTheme.FONT_BODY)
-          .fontColor(AppColor.textPrimary)
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .letterSpacing(1)
           .layoutWeight(1)
         if (this.parsing) {
           Text('正在重新解析…')
@@ -457,12 +615,15 @@ struct ImportConfirmPage {
        * ⚠️ 用 `Flex` + `wrap` 而不是 `Row`：六个编码名长短不一
        * （`GB18030` 明显更长），`Row` 里挤不下会被压缩或溢出。
        * 换行排列在小屏上也更稳。
+       *
+       * ⚠️ 选中态用**墨色实心**（`primary`），与"我的"页外观分段控件同一语汇 ——
+       * 编码是"二选一/六选一"的排他选择，用中性实心表达"被选中的那颗"，
+       * 不占用朱色（朱色留给告警与主按钮）。
        */
       Flex({ wrap: FlexWrap.Wrap }) {
         ForEach(ENCODING_OPTIONS, (item: string) => {
           Text(item)
             .fontSize(AppTheme.FONT_CAPTION)
-            // 选中态用中性填充（同书架分组标签：大色块不用点缀色）
             .fontColor(this.encoding === item
               ? AppColor.onPrimary
               : AppColor.textSecondary)
@@ -478,64 +639,6 @@ struct ImportConfirmPage {
         }, (item: string) => item)
       }
       .width('100%')
-
-      /**
-       * ⚠️ 低置信度必须**明确说清"该做什么"**，而不是只说"识别不准"：
-       * 用户不知道怎么办时，正确做法是告诉他"如果下面预览是乱码就换个编码"。
-       */
-      if (this.lowConfidence) {
-        Text('自动识别把握不大：如果预览里的章节名是乱码，请换一个编码')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.danger)
-          .width('100%')
-      }
-    }
-    .width('100%')
-  }
-
-  // ------------------------------------------------------------ 摘要
-
-  @Builder
-  buildSummaryRow() {
-    Column({ space: AppTheme.GAP_S }) {
-      Row() {
-        Text('分章结果')
-          .fontSize(AppTheme.FONT_BODY)
-          .fontColor(AppColor.textPrimary)
-          .layoutWeight(1)
-        /**
-         * ⚠️ 字数用 `humanCount`（"320.5 万字"），**不能**用 `humanSize` ——
-         * 后者是**文件字节**格式化，字数喂进去会显示成"12.3 MB"这种荒谬结果。
-         * 两个函数长得像，用途完全不同，别混。
-         */
-        Text(`共 ${this.chapterCount} 章 · ${FileUtil.humanCount(this.wordCount)}`)
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.textSecondary)
-      }
-      .width('100%')
-
-      /**
-       * ⚠️ 兜底切分要提示：它意味着这本书**没有识别到标准章节标记**
-       * （`第 x 章` 之类），只能按固定字数硬切。用户看到章节名是
-       * "第 1 节 / 第 2 节"这种机械命名时，会以为程序出错了。
-       *
-       * ⚠️ "只有几章"要**升级成明确告警**：兜底切分正常也有几十章，
-       * 只有个位数说明**编码八成选错了**（字节/字符比被算得离谱，
-       * 按 8000 字切出来的章会大得惊人）。这种书一旦入库，
-       * 打开阅读页会因为"单章几十万字"触发数千次分页测量而白屏假死。
-       * 所以这里必须**在入库前**拦住，让用户换编码重试。
-       */
-      if (this.suspicious) {
-        Text('只解析出很少的章节，编码可能不正确 —— 建议换一个编码重新解析，否则阅读时可能卡住')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.danger)
-          .width('100%')
-      } else if (this.fallback) {
-        Text('没有找到标准章节标记，已按字数自动切分；阅读时若章节不对可换编码重试')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.textHint)
-          .width('100%')
-      }
     }
     .width('100%')
   }
@@ -545,33 +648,61 @@ struct ImportConfirmPage {
   @Builder
   buildPreviewRow() {
     Column({ space: AppTheme.GAP_S }) {
-      Text('章节预览')
-        .fontSize(AppTheme.FONT_BODY)
-        .fontColor(AppColor.textPrimary)
-        .width('100%')
+      Row() {
+        Text('章节预览')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .letterSpacing(1)
+          .layoutWeight(1)
+        Text(`前 ${this.previewTitles.length} 章 / 共 ${this.chapterCount}`)
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .fontFeature(AppFont.TABULAR)
+      }
+      .width('100%')
 
-      Column({ space: 6 }) {
+      Column() {
         if (this.previewTitles.length === 0) {
           Text('没有解析出章节')
             .fontSize(AppTheme.FONT_CAPTION)
             .fontColor(AppColor.textHint)
             .width('100%')
+            .padding(AppTheme.GAP_M)
         } else {
+          /**
+           * 每行：序号 + 章节名，行间发丝线（从文字列起，与列表卡同一语汇）。
+           *
+           * ⚠️ 行**内联写死**在 ForEach 里：结构相同、数据不同，
+           * 由 ForEach 参数化即可，不需要再抽 @Builder。
+           */
           ForEach(this.previewTitles, (item: string, index: number) => {
-            Text(item)
-              .fontSize(AppTheme.FONT_CAPTION)
-              .fontColor(AppColor.textSecondary)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
+            Row({ space: AppTheme.GAP_M }) {
+              Text(`${index + 1 < 10 ? '0' : ''}${index + 1}`)
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(AppColor.textHint)
+                .fontFeature(AppFont.TABULAR)
+                .width(24)
+
+              Text(item)
+                .fontSize(AppTheme.FONT_BODY)
+                .fontColor(AppColor.textSecondary)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ top: 11, bottom: 11, left: 16, right: 16 })
+            .border({
+              width: { top: index > 0 ? AppTheme.HAIRLINE : 0 },
+              color: AppColor.divider
+            })
           }, (item: string, index: number) => `${index}_${item}`)
         }
       }
       .width('100%')
-      .padding(AppTheme.GAP_M)
       .borderRadius(AppTheme.ITEM_RADIUS)
       .backgroundColor(AppColor.bgCard)
-      .alignItems(HorizontalAlign.Start)
+      .clip(true)
     }
     .width('100%')
   }
@@ -582,10 +713,10 @@ struct ImportConfirmPage {
   buildActionBar() {
     Row({ space: AppTheme.GAP_M }) {
       /**
-       * 取消：**中性填充的浅色底**而非主操作色。
+       * 取消：**描边**而非实心。
        *
-       * ⚠️ 它与"导入"并排，两个都用 `primary` 实心会让人分不清哪个是主操作；
-       * 取消是"退出"语义，弱化处理才符合层级。
+       * ⚠️ 主操作（导入）现在是朱砂实心 —— 取消再铺一块 `bgCard`
+       * 实心就会和它抢重量；描边表达"这是个退路，不是推荐动作"。
        */
       Button('取消')
         .fontSize(AppTheme.FONT_BODY)
@@ -593,23 +724,28 @@ struct ImportConfirmPage {
         .height(44)
         .backgroundColor(AppColor.bgCard)
         .fontColor(AppColor.textSecondary)
+        .border({ width: AppTheme.HAIRLINE, color: AppColor.divider })
+        .borderRadius(AppTheme.ITEM_RADIUS)
         .enabled(!this.committing)
         .onClick(() => {
           this.cancelImport();
         })
 
       /**
-       * 导入：**中性填充**（近黑/近白），主操作。
+       * 导入：**朱砂实心**，主操作（整页唯一的彩色大块）。
        *
-       * ⚠️ `fontColor` 必须显式设成 `onPrimary`：`Button` 默认字色是白色，
-       * 深色模式下 `primary` 接近白色，不设就是"白底白字"看不见。
+       * ⚠️ `fontColor` 显式设成 `onPrimary`：深色模式下 `accent` 提亮为
+       * `#C4553F`，默认白字仍可读，但显式声明才不依赖"恰好可读"。
+       *
+       * ⚠️ 没有章节时不给导入：入库一本"一章都没有"的书没有意义。
        */
-      Button(this.committing ? '正在导入…' : '导入')
+      Button(this.committing ? '正在导入…' : '导入书架')
         .fontSize(AppTheme.FONT_BODY)
-        .layoutWeight(1)
+        .layoutWeight(2)
         .height(44)
-        .backgroundColor(AppColor.primary)
+        .backgroundColor(AppColor.accent)
         .fontColor(AppColor.onPrimary)
+        .borderRadius(AppTheme.ITEM_RADIUS)
         // 没有章节时不给导入：入库一本"一章都没有"的书没有意义
         .enabled(!this.committing && !this.parsing && this.chapterCount > 0)
         .onClick(() => {
@@ -623,6 +759,6 @@ struct ImportConfirmPage {
       top: AppTheme.GAP_M,
       bottom: AppTheme.GAP_M
     })
-    .backgroundColor(AppColor.bgCard)
+    .backgroundColor(AppColor.bgPage)
   }
 }

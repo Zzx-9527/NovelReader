@@ -3,7 +3,7 @@ import { ReaderState, BookmarkSaveResult, BookmarkDraft } from '../viewmodels/Re
 import { ReaderViewModel } from '../viewmodels/ReaderViewModel';
 import { ReaderJump, ReaderJumpRegistry } from '../viewmodels/ReaderJumpRegistry';
 import { RouteName, RouteParam } from '../model/RouteParam';
-import { AppTheme, ReaderTheme } from '../common/theme/AppTheme';
+import { AppColor, AppTheme, ReaderTheme } from '../common/theme/AppTheme';
 import { AppFont } from '../common/theme/AppFont';
 import { Logger } from '../common/utils/Logger';
 import { AppConstants, LogTag } from '../common/constants/AppConstants';
@@ -596,6 +596,8 @@ struct ReaderPage {
           ).animation({ duration: 180, curve: Curve.FastOutSlowIn }))
 
           // 菜单显示时，点中间空白处收回菜单。
+          // ⚠️ **不加蒙层**（用户明确要求）：菜单模式要能看清正文改了什么样，
+          // 顶栏/底栏夹着正文，中间保持透明；蒙层只用于设置面板。
           // 分页模式下翻页层此时**不存在**（两块区域互斥渲染），没有这个点击点，
           // 用户就只能靠"返回"关菜单 —— 这是"菜单弹出来收不回去"的另一半。
           // 用 hideMenu() 而不是 toggleMenu()：收起是幂等的，
@@ -603,6 +605,9 @@ struct ReaderPage {
           Blank()
             .onClick(() => {
               this.vm.hideMenu();
+              // hideMenu 会连带收掉设置面板 —— 本地镜像同步，
+              // 否则状态已 false 而 sheet 还开着（下次点"设置"没反应）
+              this.sheetShow = false;
             })
 
           ReaderBottomBar({
@@ -652,6 +657,8 @@ struct ReaderPage {
             },
             onOpenSettings: () => {
               this.vm.setSettingsVisible(true);
+              // 本地镜像同步拉起 sheet（bindSheet 的 isShow 读它）
+              this.sheetShow = true;
             }
           })
           /**
@@ -682,88 +689,13 @@ struct ReaderPage {
         .padding({ top: this.safeAreaTop })
       }
 
-      // 第 4 层：设置面板。
-      // 铺满全屏：下半部是面板本体，上半部是**透明的关闭热区** ——
-      // 点空白处收起是浮层的通用预期，不给块遮罩是为了还能看见正文改了什么样。
-      // 但没有透明热区又会"点面板以外毫无反应"，只能去点右上角"完成"。
-      if (this.state.settingsVisible && this.state.error.length === 0) {
-        Column() {
-          // 上半部：空白热区，点了收起面板。
-          // 给个最小高度，保证小屏上也不会被面板挤成 0 ——
-          // 热区没了，用户就只能去点"完成"才能关面板。
-          Column()
-            .width('100%')
-            .constraintSize({ minHeight: 56 })
-            .layoutWeight(1)
-            .onClick(() => {
-              this.vm.setSettingsVisible(false);
-            })
-
-          SettingsPanel({
-            settings: this.state.settings,
-            theme: this.theme(),
-            safeAreaBottom: this.safeAreaBottom,
-            onChange: (next: ReaderSettings) => {
-              // 就地生效：改完立刻重排，用户能直接看着正文调
-              this.vm.updateSettings(next).then(() => {
-                /**
-                 * ⚠️ 改排版参数（尤其**切到滚动模式**）后必须按当前偏移重新对齐：
-                 * `updateSettings` 会重排正文，而滚动容器的偏移仍停在旧排版上。
-                 * 用户在分页模式调完字号再切到滚动模式时最明显 ——
-                 * 否则正文会停在一个与进度无关的位置，并立刻把错误偏移写进进度。
-                 *
-                 * ⚠️ 这里**不能**走 `resetScrollAfterChapterChange()`：
-                 * 改字号/行距不该改变阅读位置，回到章首或章末都是错的。
-                 */
-                this.restoreScrollToCurrentOffset();
-                /**
-                 * ⚠️ 窗口级设置（亮度 / 常亮）**必须在这里跟着应用**，
-                 * 不能只在打开页面时应用一次：
-                 * 用户在面板里把亮度从 0.8 拖到 0.3，期望是**立刻**变暗。
-                 * 只在打开时应用的话，改动要等退出阅读页再进来才生效 ——
-                 * 那正是"设置看起来没用"的来源。
-                 *
-                 * ⚠️ 它是**异步且可能失败**的（系统策略可拒绝），
-                 * 但**不能**因此阻塞或打断 `updateSettings` 的链路：
-                 * 排版是主业、亮度是附属，所以单独一条 Promise 链、只记日志。
-                 */
-                this.applyWindowEffects(next);
-              }).catch((e: Object) => {
-                Logger.error(LogTag.READ, `应用阅读设置失败: ${Logger.errText(e)}`);
-              });
-            },
-            onClose: () => {
-              this.vm.setSettingsVisible(false);
-            }
-          })
-          // 面板最多占屏幕七成：留出热区，也让"改完能瞄一眼正文"
-          .constraintSize({ maxHeight: '70%' })
-          /**
-           * 从底部滑入/滑出，与菜单底栏动作一致。
-           *
-           * ⚠️ 动画挂在**面板自身**，不挂外层 Column：外层还含"关闭热区"，
-           * 一起位移会让热区在动画期间错位（顶部一截点不到）。
-           * 热区是透明的，瞬间出现也看不出来，没必要参与动画。
-           */
-          .transition(TransitionEffect.asymmetric(
-            TransitionEffect.translate({ y: 80 }).combine(TransitionEffect.opacity(0)),
-            TransitionEffect.translate({ y: 80 }).combine(TransitionEffect.opacity(0))
-          ).animation({ duration: 180, curve: Curve.FastOutSlowIn }))
-        }
-        .width('100%')
-        .height('100%')
-        /**
-         * ⚠️ **不让位**，与菜单底栏同理：设置面板从屏幕底部升起，
-         * 要**盖住**常驻底栏，而不是叠在它上面。
-         *
-         * 早期写法是让出 `footerTotalHeight()`，结果面板底部停在常驻栏上沿，
-         * 屏幕上同时出现"面板 + 常驻栏"两排信息 —— 与菜单底栏一样的观感问题。
-         * 底部安全区改由 `SettingsPanel` 自己涂满。
-         *
-         * 顶部留出安全区，是为了让上面的关闭热区不被状态栏干扰。
-         */
-        .padding({ top: this.safeAreaTop })
-      }
+      // 第 4 层：设置面板 —— **系统 bindSheet 底部弹窗**（挂在最外层 Stack 上，
+      // 见 build() 尾部的 .bindSheet；这里不再需要任何手写浮层节点）。
+      //
+      // ⚠️ 早期是"手写浮层"：自绘蒙层热区 + 面板组件 + 自挂圆角/裁切，
+      // 三样都要自己维护，而且圆角在嵌套边界上反复不生效（实测多轮未果）。
+      // `bindSheet` 的蒙层、顶角圆角、底部滑入动画、下滑关闭手势
+      // **全部由系统提供** —— "卡片式底部弹窗"就是系统对该形态的标准实现。
 
       // 第 5 层：加书签弹窗（最顶，压在设置面板之上）
       //
@@ -813,6 +745,95 @@ struct ReaderPage {
      * （`setWindowLayoutFullScreen(true)`）—— 没有那一步，这里写什么都没用。
      */
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    /**
+     * **设置面板 = 系统 bindSheet 底部弹窗**（挂在常驻的根 Stack 上）。
+     *
+     * ⚠️ `isShow` 走本地 `@State sheetShow`（bindSheet 的布尔参数要求可双向驱动），
+     * 与 `state.settingsVisible` 的同步关系：
+     *  - 打开：`onOpenSettings` 里两个都置 true（见 `syncSheetShow`）；
+     *  - 系统侧关闭（点蒙层 / 下滑手势）→ `onDisappear` 里把状态回写 false；
+     *  - 面板内「完成」→ `onClose` 置 false → `build` 重跑 → sheet 收起。
+     *
+     * ⚠️ 蒙层、顶角圆角、底部滑入动画、下滑关闭手势全部由系统提供 ——
+     * 不再手写蒙层热区/圆角/clip（嵌套边界上反复不生效，实测多轮未果）。
+     */
+    .bindSheet(this.sheetShow, this.settingsSheetBuilder(), {
+      height: this.sheetHeight(),
+      preferType: SheetType.BOTTOM,
+      dragBar: false,
+      /**
+       * 关掉系统自带的右上角 ✕ 关闭钮。
+       * 关闭路径：面板内「完成」、点蒙层、下滑手势 —— 不需要 ✕。
+       */
+      showClose: false,
+      onDisappear: () => {
+        // 系统侧关闭（点蒙层 / 下滑手势）：回写状态，否则
+        // "设置"入口点了没反应（settingsVisible 还停在 true）
+        if (this.state.settingsVisible) {
+          this.vm.setSettingsVisible(false);
+        }
+        this.sheetShow = false;
+      }
+    })
+  }
+
+  /**
+   * 面板显隐的本地镜像。
+   *
+   * ⚠️ `state.settingsVisible` 是 `@Observed` 对象的属性，页面上读它做 `if`
+   * 可以，但 `bindSheet` 的 isShow 参数要一个**能直接赋值**的状态位；
+   * 本地 `@State` 是最直接的载体，与状态系统的同步只发生在
+   * "打开"与"关闭"两个明确时刻（见上方 bindSheet 注释）。
+   */
+  @State private sheetShow: boolean = false;
+
+  /**
+   * sheet 高度：最多占屏幕七成（固定 70% 而不是按内容自适应 ——
+   * `SettingsPanel` 内部已有自己的 Scroll，固定高度让"抓手/标题"位置稳定，
+   * 不会随每一项设置增减而跳动）。
+   */
+  private sheetHeight():  Length {
+    return '70%';
+  }
+
+  /** 面板内容的 @Builder 包装（bindSheet 只接受 @Builder 引用） */
+  @Builder
+  settingsSheetBuilder() {
+    SettingsPanel({
+      settings: this.state.settings,
+      theme: this.theme(),
+      safeAreaBottom: this.safeAreaBottom,
+      onChange: (next: ReaderSettings) => {
+        // 就地生效：改完立刻重排，用户能直接看着正文调
+        this.vm.updateSettings(next).then(() => {
+          /**
+           * ⚠️ 改排版参数（尤其**切到滚动模式**）后必须按当前偏移重新对齐：
+           * `updateSettings` 会重排正文，而滚动容器的偏移仍停在旧排版上。
+           * 用户在分页模式调完字号再切到滚动模式时最明显 ——
+           * 否则正文会停在一个与进度无关的位置，并立刻把错误偏移写进进度。
+           *
+           * ⚠️ 这里**不能**走 `resetScrollAfterChapterChange()`：
+           * 改字号/行距不该改变阅读位置，回到章首或章末都是错的。
+           */
+          this.restoreScrollToCurrentOffset();
+          /**
+           * ⚠️ 窗口级设置（亮度 / 常亮）**必须在这里跟着应用**，
+           * 不能只在打开页面时应用一次（见旧实现的论证，逻辑不变）。
+           *
+           * ⚠️ 它是**异步且可能失败**的（系统策略可拒绝），
+           * 但**不能**因此阻塞或打断 `updateSettings` 的链路：
+           * 排版是主业、亮度是附属，所以单独一条 Promise 链、只记日志。
+           */
+          this.applyWindowEffects(next);
+        }).catch((e: Object) => {
+          Logger.error(LogTag.READ, `应用阅读设置失败: ${Logger.errText(e)}`);
+        });
+      },
+      onClose: () => {
+        this.vm.setSettingsVisible(false);
+        this.sheetShow = false;
+      }
+    })
   }
 
   /**

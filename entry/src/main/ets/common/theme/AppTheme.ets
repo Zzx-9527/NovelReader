@@ -385,6 +385,12 @@ export class ReaderTheme {
       t.text = '#3B2F20';
       t.secondary = '#8A7A66';
       t.barBg = '#F2F3E9D6';
+    } else if (effective === 'warm') {
+      // 暖白：比纯白的"浅色"暖半档、比"羊皮纸"淡得多 —— 效果稿里阅读页的纸色
+      t.bg = '#FFFDF8';
+      t.text = '#221E17';
+      t.secondary = '#8A8175';
+      t.barBg = '#F2FFFDF8';
     } else if (effective === 'eye_care') {
       // 低饱和绿：饱和度高的绿反而更累眼
       t.bg = '#D8E6D4';
@@ -396,7 +402,7 @@ export class ReaderTheme {
   }
 
   /** 主题标识列表，设置面板按此顺序渲染 */
-  static readonly THEMES: string[] = ['light', 'sepia', 'eye_care', 'dark'];
+  static readonly THEMES: string[] = ['light', 'warm', 'sepia', 'eye_care', 'dark'];
 
   static labelOf(theme: string): string {
     if (theme === 'dark') {
@@ -404,6 +410,9 @@ export class ReaderTheme {
     }
     if (theme === 'sepia') {
       return '羊皮纸';
+    }
+    if (theme === 'warm') {
+      return '暖白';
     }
     if (theme === 'eye_care') {
       return '护眼';

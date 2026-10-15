@@ -83,7 +83,7 @@ export class ReaderSettings {
   // ---------------------------------------------------------------- 显示
   /** 'scroll' | 'page' | 'cover' */
   pageMode: string = 'scroll';
-  /** 'light' | 'dark' | 'sepia' | 'eye_care' */
+  /** 'light' | 'warm' | 'dark' | 'sepia' | 'eye_care' */
   theme: string = 'light';
   /**
    * 屏幕亮度：**-1 表示跟随系统**，0~1 为手动值。
