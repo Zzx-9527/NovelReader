@@ -38,9 +38,7 @@ export class SettingsKeys {
    * 由菜单底栏的"夜间"按钮切换（见 `ThemeApplier`）。
    */
   static readonly APP_THEME_MODE: string = 'app_theme_mode';
-  static readonly BG_COLOR: string = 'bg_color';
   static readonly KEEP_SCREEN_ON: string = 'keep_screen_on';
-  static readonly HIDE_STATUS_BAR: string = 'hide_status_bar';
   static readonly VOLUME_KEY_PAGE: string = 'volume_key_page';
   static readonly BRIGHTNESS: string = 'brightness';
 

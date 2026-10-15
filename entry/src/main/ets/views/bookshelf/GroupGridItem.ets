@@ -1,5 +1,6 @@
 import { BookGroup } from '../../model/BookGroup';
 import { AppColor, AppTheme } from '../../common/theme/AppTheme';
+import { AppFont } from '../../common/theme/AppFont';
 import { GroupCover } from './GroupCover';
 
 /**
@@ -20,6 +21,22 @@ import { GroupCover } from './GroupCover';
  * `ForEach` 的键是 `group.id`，刷新后键不变 ⇒ ArkUI 会**复用**组件实例，
  * 普通成员只在创建时快照，复用时就拿不到新的 `BookGroup` ——
  * 组名改了、数量变了、封面里的书换了都不会更新。
+ *
+ * ## 本次改动：数量从"黑角标"改成"标签板"
+ *
+ * 原实现把「3 本」做成右下角的黑底角标（`mask` + `onScrim`）压在 2×2 封面上。
+ * 两个问题：① 它是**压在内容上的深色块**，一屏出现两三次之后整片网格变脏；
+ * ② 它和书籍封面上的进度角标是同一个视觉元素，于是"分组"和"书"在缩略图上
+ * 分不出来 —— 而这两者恰恰是最需要区分的。
+ *
+ * 现在改成封面**底边的一条标签板**：蓝色（`coverBg`）底 + `coverText` 文字。
+ * 于是封面内部天然出现"内容区 / 标签区"两段，与书籍封面（整片纸 + 书脊）
+ * 一眼可分。这条板只占 18vp，2×2 的格子从 43×60 变成 43×52 ——
+ * 首字字号仍是 14，实测这个尺寸下不会撑爆。
+ *
+ * ⚠️ 刻意**不加描边**：给整格加 `border` 会让它比同一行的书籍格高 2vp，
+ * 网格行高取最大值，于是整行会错开 2vp。用"底色分段"而不是"线条"
+ * 来表达结构，正好绕开这个几何问题，也不需要新增颜色（`coverBg` 是既有令牌）。
  */
 @Component
 export struct GroupGridItem {
@@ -29,39 +46,35 @@ export struct GroupGridItem {
 
   build() {
     Column({ space: 6 }) {
-      Stack() {
-        /**
-         * 封面：**2×2 四个格子，用组内书的封面填**（见 `GroupCover`）。
-         *
-         * ⚠️ 不是静态图标 —— 组里有几本填几格，填满 4 格后不再变化。
-         * 早期版本放了一个固定的 4 方块 SVG，永远长一样，
-         * 看不出这个分组里有没有书（用户明确指出了这一点）。
-         *
-         * ⚠️ 外层给一点内边距：四个格子直接铺满会显得很挤，
-         * 留出边距后更像"文件夹里露出几张封面"。
-         */
+      Column() {
+        // 上半：2×2 封面格。四边内边距让格子不贴边，读作"文件夹里露出几张封面"
         Column() {
           GroupCover({ books: this.group.coverBooks })
         }
         .width('100%')
-        .height('100%')
-        .padding(6)
+        .layoutWeight(1)
+        .padding({ left: 6, right: 6, top: 6, bottom: 4 })
         .backgroundColor(AppColor.bgCard)
 
         /**
-         * 书籍数量角标。
+         * 下半：标签板。
          *
-         * ⚠️ 底色用 `mask`（两种模式下都是黑），字色必须用 `onScrim` ——
-         * 与 `BookGridItem` 的进度角标同一个理由：`textPrimary` 在浅色模式下
-         * 是近黑，配黑底就是"黑底黑字"看不见。
+         * ⚠️ 外面套 `Row` 而不是给 `Text` 写 `height` + `textAlign`：
+         * `Text` 在自己被撑高之后文字靠上对齐，看起来是"顶在板上"；
+         * `Row` + `justifyContent/alignItems` 才是确定的垂直居中。
          */
-        Text(`${this.group.bookCount} 本`)
-          .fontSize(10)
-          .fontColor(AppColor.onScrim)
-          .backgroundColor(AppColor.mask)
-          .borderRadius(4)
-          .padding({ left: 4, right: 4, top: 1, bottom: 1 })
-          .position({ right: 4, bottom: 4 })
+        Row() {
+          Text(`${this.group.bookCount} 本`)
+            .fontSize(9.5)
+            .fontColor(AppColor.coverText)
+            // 数量会随整理变化，等宽数字让它在刷新时不会左右微跳
+            .fontFeature(AppFont.TABULAR)
+        }
+        .width('100%')
+        .height(18)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(VerticalAlign.Center)
+        .backgroundColor(AppColor.coverBg)
       }
       .width('100%')
       .aspectRatio(3 / 4)
@@ -73,6 +86,7 @@ export struct GroupGridItem {
       Text(this.group.name)
         .fontSize(AppTheme.FONT_CAPTION)
         .fontColor(AppColor.textPrimary)
+        .letterSpacing(AppTheme.TRACK_NAME)
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')

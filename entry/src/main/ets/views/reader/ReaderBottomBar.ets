@@ -190,6 +190,26 @@ export struct ReaderBottomBar {
       .width('100%')
 
       /**
+       * 两行之间的分隔线。
+       *
+       * ⚠️ 原实现两行之间**什么都没有**，只靠 `Column` 的 4vp 间距区分。
+       * 结果是：上行的"上一章 / 下一章"（16vp、`theme.text`）与下行的
+       * "目录 / 夜间 / 设置"（14vp、同色）看起来是**同一组平级操作**，
+       * 而实际上它们是两类东西 —— 上行是**跳转**（改变阅读位置），
+       * 下行是**入口**（打开另一个界面）。多一条线，语义就分开了。
+       *
+       * ⚠️ 用比栏底（`READER_RULE_ALPHA` 0.30）更轻的
+       * `READER_INNER_RULE_ALPHA`(0.20)：栏底那条是"这一栏的边界"，
+       * 这条是"栏内两组的分组"，分组线应该更弱，否则两条同重的线
+       * 会让人以为这里是两个独立的栏。
+       */
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(this.theme.secondary)
+        .opacity(AppTheme.READER_INNER_RULE_ALPHA)
+
+      /**
        * 第二行：目录 / 夜间 / 设置，**等分三块**，每块 = 图标 + 文字。
        *
        * ⚠️ 三个都用 `layoutWeight(1)` 而不是各自写宽度：

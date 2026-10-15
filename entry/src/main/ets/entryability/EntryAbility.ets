@@ -8,6 +8,7 @@ import { LogTag } from '../common/constants/AppConstants';
 import { RouteName } from '../model/RouteParam';
 import { AppStateKey } from '../model/AppState';
 import { ThemeApplier } from '../common/theme/ThemeApplier';
+import { AppFont } from '../common/theme/AppFont';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
@@ -69,6 +70,32 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onWindowStageCreate');
 
     /**
+     * 标题字体：探测系统是否自带中文衬线（**仅 2-in-1 设备可能命中**）。
+     *
+     * ⚠️ 必须在 `loadContent` **之前**同步执行。改成异步会引入一个可见的缺陷：
+     * `getMainWindow()` 走的是 **Promise**（下面那条链），而 `loadContent`
+     * 是**紧接着同步执行**的 —— 两者之间没有先后保证。
+     * 若把探测挂在下面那条 `.then()` 里，启动页的首帧往往**早于**探测完成，
+     * 于是「静读」两个字会先按无衬线画一帧、再重绘成衬线：
+     * 肉眼看到的就是**字体闪一下**。而启动页恰好是全 app 唯一一屏
+     * "整屏只有品牌"的页面，字体切换在那里最显眼。
+     * 所以这里用 `getMainWindowSync()` 拿窗口、**同步**探测。
+     *
+     * ⚠️ 本项目**不引入**衬线字体文件（理由见 `AppFont` 的类注释：
+     * 中文衬线动辄 20MB，而标题只用到几十个字，与"轻量"定位不相称）。
+     * 所以这次探测是"有则更好、没有就回退无衬线"，**不是**设计的依赖项 ——
+     * 手机上它基本不会命中，这是预期内的。
+     *
+     * ⚠️ `probe` 自己吞掉所有内部异常，这里只需要处理
+     * `getMainWindowSync()` 本身可能抛出的异常。字体是装饰，绝不该影响启动。
+     */
+    try {
+      AppFont.probe(windowStage.getMainWindowSync().getUIContext());
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'Failed to probe title font. Cause: %{public}s', JSON.stringify(err));
+    }
+
+    /**
      * 开启**沉浸式全屏布局**：整个 app 的内容延伸到状态栏与手势条区域。
      *
      * ⚠️ 这一步是各页面 `expandSafeArea(...)` 生效的**前提**（本项目实测踩过）。
@@ -128,6 +155,15 @@ export default class EntryAbility extends UIAbility {
   private static publishSafeArea(mainWindow: window.Window): void {
     try {
       const uiContext = mainWindow.getUIContext();
+      /**
+       * ⚠️ 字体注册**不在这里** —— 它已经移到 `onWindowStageCreate` 里、
+       * `loadContent` **之前**同步执行（见那边的说明：放这里晚于启动页首帧，
+       * 会让品牌 wordmark 闪一下字体）。
+       *
+       * 本方法只负责"安全区"这一件事。系统衬线的探测（`AppFont.probe`）
+       * 也跟着一起移走了：它虽然不急着赶首帧，但与注册是同一类事，
+       * 两处分开写只会让"字体到底在哪初始化的"变得难找。
+       */
       const topPx: number = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect.height;
       const bottomPx: number =
         mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height;

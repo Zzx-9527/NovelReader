@@ -44,6 +44,16 @@ export struct TextInputDialog {
 
   /** 输入框当前内容（本地状态，确认时才交出去） */
   @State private value: string = '';
+  /**
+   * 输入框是否聚焦。
+   *
+   * ⚠️ 这是原实现**完全缺失**的一个状态：原来的输入框只有 `bgPage` 底色、
+   * **没有任何边框**，看上去像页面上挖了一个洞；而且从默认态到聚焦态
+   * 没有任何视觉变化，用户无法确认"光标到底在不在这里"。
+   * `operate.md` 要求每个交互组件都有 default/hover/focus/active/disabled
+   * 等状态，这里补的正是 focus。
+   */
+  @State private focused: boolean = false;
 
   aboutToAppear(): void {
     this.value = this.initialValue;
@@ -100,7 +110,34 @@ export struct TextInputDialog {
           .fontColor(AppColor.textPrimary)
           .placeholderColor(AppColor.textHint)
           .backgroundColor(AppColor.bgPage)
+          /**
+           * ⚠️ 描边粗细**恒定 1.5vp**，只有颜色随聚焦变化。
+           *
+           * 若把"有没有边框 / 边框多粗"也跟着聚焦变，输入框的内容区
+           * 会在聚焦瞬间缩进 1.5vp —— 文字与光标**跳一下**。
+           * 这是最容易被忽略的一种状态切换代价：视觉上只是描边变了，
+           * 但布局跟着动了。恒定粗细换来零位移。
+           *
+           * 聚焦色用 `accent`（点缀色）而不是某个"强调色"：
+           * 焦点是"小面积、瞬时"的强调，正是点缀色的用途。
+           */
+          .border({
+            width: 1.5,
+            color: this.focused ? AppColor.accent : AppColor.divider
+          })
           .borderRadius(AppTheme.ITEM_RADIUS)
+          /**
+           * ⚠️ 光标色必须显式设：默认是系统蓝，与本项目的点缀色 `#35597F`
+           * 不是同一个蓝，会在一屏里出现两种主题色（深色模式下差别更明显）。
+           * 这是"浏览器/系统原生表面也要跟着设计走"的那一类细节。
+           */
+          .caretColor(AppColor.accent)
+          .onFocus(() => {
+            this.focused = true;
+          })
+          .onBlur(() => {
+            this.focused = false;
+          })
           .width('100%')
           .maxLength(20)
           .onChange((input: string) => {

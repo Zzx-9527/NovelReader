@@ -1,12 +1,19 @@
 import { Book } from '../../model/Book';
 import { AppColor, AppTheme } from '../../common/theme/AppTheme';
-import { FileUtil } from '../../common/utils/FileUtil';
+import { BookCover } from './BookCover';
 
 /**
  * 网格模式下的单个书籍项。
  *
- * 封面暂用"书名首字 + 渐变色块"占位 —— TXT 没有封面，
- * 后续接入 EPUB 封面时只需替换这部分的渲染。
+ * 封面本体已抽到 `BookCover`（书脊 / 题花线 / 底部进度发丝都在那里，
+ * 三种尺寸共用一份）。本组件只负责**尺寸与外部形状**：
+ * 3:4 的比例、8vp 圆角、裁切，以及封面下方的书名。
+ *
+ * ⚠️ 尺寸与裁切留在本组件、而不是下沉到 `BookCover`，是刻意的分工：
+ * `BookCover` 被列表（48×64）与继续阅读卡（56×76）复用，
+ * 那两处的比例**不是** 3:4（64/48=1.333、76/56=1.357）。若把
+ * `aspectRatio(3/4)` 写进 `BookCover`，列表封面就会被强行拉成 3:4 而变形。
+ * 所以：**组件管画什么，容器管多大**。
  */
 @Component
 export struct BookGridItem {
@@ -19,7 +26,7 @@ export struct BookGridItem {
   onTap?: (book: Book) => void;
   onLongPress?: (book: Book) => void;
 
-  /** 用书名首字做占位封面的字，最多取 2 个字符 */
+  /** 用书名首字做占位封面的字，最多取 2 个字符（`BookCover` 的首字口径） */
   private coverLabel(): string {
     const title: string = this.book.title.length > 0 ? this.book.title : '书';
     return title.substring(0, title.length >= 2 ? 2 : 1);
@@ -27,50 +34,32 @@ export struct BookGridItem {
 
   build() {
     Column({ space: 6 }) {
+      /**
+       * 封面容器：比例、圆角、裁切三件事都在这里。
+       *
+       * ⚠️ 底色用 `coverBg` 而不是原来的 `bgCard`：`BookCover` 自己不画底，
+       * 万一有半个像素的缝，露出的应该是"纸色"而不是"卡片白"。
+       *
+       * ⚠️ `clip(true)` 是书脊与进度发丝能贴到圆角里的前提 ——
+       * 少了它，3vp 书脊会是一条方角的直边，从圆角处戳出来。
+       */
       Stack() {
-        // 封面占位：书名首字 + **中性**底色（不用点缀色）。
-        //
-        // ⚠️ 一屏同时有 6~9 个封面，用主题色会把整片网格染成一块同色，
-        // 书名反而看不清 —— 主题色只留给小面积元素（见 AppColor.accent 的说明）。
-        //
-        // TODO(EPUB/封面)：接入真实封面时用 `Image(absolutePath)` ——
-        // ArkUI 的 Image 支持沙箱文件路径，但**不支持空字符串**（会抛错），
-        // 所以这里先只做占位，不做无效分支。
-        Column() {
-          Text(this.coverLabel())
-            .fontSize(22)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(AppColor.coverText)
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-        .backgroundColor(AppColor.coverBg)
-
-        // 阅读进度角标。
-        //
-        // ⚠️ 底色是 `mask`（两种模式下都是黑），所以字色必须用 `onScrim`
-        // 而不是 `textPrimary` —— 后者在浅色模式下是近黑，会变成"黑底黑字"。
-        if (this.book.progressPercent > 0) {
-          Text(FileUtil.humanPercent(this.book.progressPercent))
-            .fontSize(10)
-            .fontColor(AppColor.onScrim)
-            .backgroundColor(AppColor.mask)
-            .borderRadius(4)
-            .padding({ left: 4, right: 4, top: 1, bottom: 1 })
-            .position({ right: 4, bottom: 4 })
-        }
+        BookCover({
+          label: this.coverLabel(),
+          percent: this.book.progressPercent
+        })
       }
       .width('100%')
       .aspectRatio(3 / 4)
       .borderRadius(AppTheme.ITEM_RADIUS)
       .clip(true)
-      .backgroundColor(AppColor.bgCard)
+      .backgroundColor(AppColor.coverBg)
 
       Text(this.book.title)
         .fontSize(AppTheme.FONT_CAPTION)
         .fontColor(AppColor.textPrimary)
+        // 书名在密集网格里，字距只加一点点；再大就会让三列标题失去对齐感
+        .letterSpacing(AppTheme.TRACK_NAME)
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')

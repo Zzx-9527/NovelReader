@@ -10,6 +10,7 @@ import { ShelfRefreshRegistry } from '../viewmodels/ShelfRefreshRegistry';
 import { BookSort } from '../data/repository/BookRepository';
 import { StorageBootstrap } from '../common/StorageBootstrap';
 import { AppColor, AppColorLiteral, AppTheme } from '../common/theme/AppTheme';
+import { AppFont } from '../common/theme/AppFont';
 import { Encodings } from '../common/utils/EncodingDetector';
 import { Logger } from '../common/utils/Logger';
 import { LoadingView } from '../views/common/LoadingView';
@@ -20,6 +21,7 @@ import { BookListItem } from '../views/bookshelf/BookListItem';
 import { GroupGridItem } from '../views/bookshelf/GroupGridItem';
 import { GroupListItem } from '../views/bookshelf/GroupListItem';
 import { ContinueReadingCard } from '../views/bookshelf/ContinueReadingCard';
+import { ShelfSkeleton } from '../views/bookshelf/ShelfSkeleton';
 import { TextInputDialog } from '../views/common/TextInputDialog';
 import { RouteName, RouteParam } from '../model/RouteParam';
 
@@ -114,12 +116,39 @@ export struct BookShelfPage {
          */
         if (this.state.loading && this.state.books.length === 0
           && this.state.groups.length === 0) {
-          LoadingView({ message: this.state.reparsing ? '正在重新解析…' : '正在加载书架…' })
+          /**
+           * ⚠️ 首屏加载与"重新解析"**必须分开**，不能用同一个占位：
+           *
+           *  - 首次加载 → **骨架屏**（`ShelfSkeleton`）：它按真实版面铺块，
+           *    加载完成时是"占位块被内容替换"，位置与尺寸都不变，零跳变；
+           *  - 重新解析 → 保留转圈 + 文案：这是一个**有明确文案的过程**
+           *    （用户刚点完"换编码"，需要知道正在做什么），
+           *    而它的时长不可预测（大文件可能十几秒），骨架屏在这里
+           *    反而会让人以为"书已经在加载了"。
+           *
+           * 判据：**知道要出现什么形状 → 骨架屏；只知道"在处理" → 转圈 + 文案。**
+           */
+          if (this.state.reparsing) {
+            LoadingView({ message: '正在重新解析…' })
+          } else {
+            ShelfSkeleton()
+          }
         } else if (this.state.error.length > 0 && this.state.books.length === 0
           && this.state.groups.length === 0) {
           ErrorView({
             message: this.state.error,
-            hint: '下拉重试，或检查存储权限',
+            /**
+             * ⚠️ 提示里必须补上「已导入的文件不会丢失」。
+             *
+             * 书架报错时，用户最怕的不是"读不出来"，而是"我的书是不是没了" ——
+             * 而这两件事在这里是完全独立的：错误来自**读库/读索引**，
+             * 书源文件一直躺在沙箱里。把这句话说在前面，用户才敢按"重试"
+             * 而不是先去文件管理器翻。
+             *
+             * 判据：**错误文案要同时说"怎么了"和"我最怕的那件事没发生"**，
+             * 只给一个动作（重试）是不够的。
+             */
+            hint: '下拉重试，或检查存储权限。已导入的文件不会丢失。',
             actionText: '重试',
             onRetry: () => {
               this.vm.clearError();
@@ -179,53 +208,66 @@ export struct BookShelfPage {
 
   // ------------------------------------------------------------ 头部
 
+  /**
+   * 标题行下方的**计数副标题**。
+   *
+   * ⚠️ 空书架时返回空串、调用方整行不渲染：
+   * 首屏加载中书架是空的，此时显示「0 本」会与骨架屏自相矛盾
+   * （骨架屏说"马上有一屏书"，副标题说"一本都没有"）。
+   * 而真的空书架会走 `EmptyView` 那一屏，也不需要这个计数。
+   *
+   * ⚠️ 用「组」而不是「个分组」：标题行右侧还有四个操作，
+   * 副标题的可用宽度只有一百多 vp，多两个字就会被省略号截断。
+   */
+  private shelfCountText(): string {
+    const books: number = this.state.books.length;
+    const groups: number = this.state.groups.length;
+    if (books === 0 && groups === 0) {
+      return '';
+    }
+    if (groups === 0) {
+      return `${books} 本`;
+    }
+    return `${books} 本 · ${groups} 组`;
+  }
+
+  /**
+   * 头部：标题 + 计数 + 操作，下面一条**通栏发丝线**。
+   *
+   * ⚠️ 本次从"一行挤下标题与四个操作"改成**两行**，理由是量出来的：
+   * 三个胶囊（约 50 / 50 / 62vp）+「导入」（约 56vp）+ 四个 8vp 间距
+   * 已经占掉 218+32 = 250vp，而整行可用 328vp —— 留给标题的只有 78vp。
+   * 「书架」占 40vp，副标题需要约 76vp，**零余量**：任何字体差异都会
+   * 把计数截成省略号。分两行之后标题拿到全部宽度，操作行也不必再压字号。
+   *
+   * ⚠️ 发丝线**通栏**（左右都不留 16vp 内边距）：它是一条"版面分隔"，
+   * 而不是某个块的外框。出血到屏幕两边才读得出这个意思。
+   * 为此它必须挂在**不带内边距**的容器上，所以本 `@Builder` 分了三段：
+   * 带内边距的标题行 / 通栏线 / 带内边距的后续块。
+   */
   @Builder
   buildHeader() {
-    Column({ space: AppTheme.GAP_M }) {
+    Column() {
+      // ① 标题 + 计数 + 导入
       Row({ space: AppTheme.GAP_S }) {
-        Text('书架')
-          .fontSize(AppTheme.FONT_TITLE)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(AppColor.textPrimary)
-          .layoutWeight(1)
+        Column({ space: 4 }) {
+          Text('书架')
+            .fontSize(AppTheme.FONT_TITLE)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(AppColor.textPrimary)
+            .letterSpacing(AppTheme.TRACK_TITLE)
 
-        // 两个文字操作：属于**小面积点缀**，保留主题色
-        Text(this.state.gridMode ? '列表' : '网格')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.accent)
-          .padding(8)
-          .onClick(() => {
-            this.vm.toggleGridMode();
-          })
-
-        Text('排序')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.accent)
-          .padding(8)
-          .onClick(() => {
-            this.showSortMenu();
-          })
-
-        /**
-         * 「＋分组」：新建分组。
-         *
-         * ⚠️ 它必须留在**标题行**这个常驻位置。
-         *
-         * 早期分组入口藏在"分组标签行末尾的「＋ 管理」"里，而那一行现在已经
-         * 整个取消（分组不再作为筛选标签，而是像书一样显示在书架里）——
-         * 如果这里不补上，用户就**没有任何途径新建分组**了。
-         *
-         * ⚠️ 点它直接进"新建"弹窗，不再套一层菜单：
-         * 从标题行进来时用户的意图就是"我要建一个组"，
-         * 中间夹一个「新建/管理」的选择纯属多一步（管理已有分组走长按分组条目）。
-         */
-        Text('＋分组')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.accent)
-          .padding(8)
-          .onClick(() => {
-            this.openCreateGroupDialog();
-          })
+          if (this.shelfCountText().length > 0) {
+            Text(this.shelfCountText())
+              .fontSize(AppTheme.FONT_CAPTION)
+              .fontColor(AppColor.textHint)
+              .fontFeature(AppFont.TABULAR)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
 
         /**
          * 「导入」按钮：**中性填充**，不是点缀色。
@@ -244,12 +286,97 @@ export struct BookShelfPage {
           })
       }
       .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({
+        left: AppTheme.PAGE_PADDING,
+        right: AppTheme.PAGE_PADDING,
+        top: AppTheme.GAP_M
+      })
 
+      // ② 操作行：三个**发丝描边胶囊**
+      Row({ space: AppTheme.GAP_S }) {
+        /**
+         * 三个文字操作都是**小面积点缀**，保留主题色。
+         *
+         * ⚠️ 从"裸文字 + 8vp 内边距"改成**1vp 描边胶囊**（30 高、圆角走
+         * `CHIP_RADIUS`）：裸文字没有边界，用户看不出可点范围，
+         * 三个并排时也辨不出是三个独立控件还是一个词组。
+         * 胶囊用 `divider` 描边而不是实心填充 —— 实心会与「导入」抢主次，
+         * 而「导入」才是这一屏的主操作。
+         *
+         * ⚠️ 描边粗细走 `AppTheme.HAIRLINE`：与全局所有线条同源。
+         */
+        Text(this.state.gridMode ? '列表' : '网格')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.accent)
+          .height(AppTheme.CHIP_H)
+          .padding({ left: 12, right: 12 })
+          .border({ width: AppTheme.HAIRLINE, color: AppColor.divider })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            this.vm.toggleGridMode();
+          })
+
+        Text('排序')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.accent)
+          .height(AppTheme.CHIP_H)
+          .padding({ left: 12, right: 12 })
+          .border({ width: AppTheme.HAIRLINE, color: AppColor.divider })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            this.showSortMenu();
+          })
+
+        /**
+         * 「＋分组」：新建分组。
+         *
+         * ⚠️ 它必须留在**标题区**这个常驻位置。
+         *
+         * 早期分组入口藏在"分组标签行末尾的「＋ 管理」"里，而那一行现在已经
+         * 整个取消（分组不再作为筛选标签，而是像书一样显示在书架里）——
+         * 如果这里不补上，用户就**没有任何途径新建分组**了。
+         *
+         * ⚠️ 点它直接进"新建"弹窗，不再套一层菜单：
+         * 从标题行进来时用户的意图就是"我要建一个组"，
+         * 中间夹一个「新建/管理」的选择纯属多一步（管理已有分组走长按分组条目）。
+         */
+        Text('＋分组')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.accent)
+          .height(AppTheme.CHIP_H)
+          .padding({ left: 12, right: 12 })
+          .border({ width: AppTheme.HAIRLINE, color: AppColor.divider })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            this.openCreateGroupDialog();
+          })
+      }
+      .width('100%')
+      .padding({
+        left: AppTheme.PAGE_PADDING,
+        right: AppTheme.PAGE_PADDING,
+        top: AppTheme.GAP_M,
+        bottom: AppTheme.GAP_M
+      })
+
+      // ③ 通栏发丝线
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(AppColor.divider)
+
+      /**
+       * ④ 状态文案 + 继续阅读卡片。
+       *
+       * 这两块都必须自己带左右内边距：它们已经不在①③的带内边距容器里了。
+       */
       if (this.state.importMessage.length > 0) {
         Text(this.state.importMessage)
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(AppColor.textSecondary)
           .width('100%')
+          .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
       }
 
       if (this.state.reparseMessage.length > 0) {
@@ -257,6 +384,7 @@ export struct BookShelfPage {
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(AppColor.accent)
           .width('100%')
+          .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
       }
 
       /**
@@ -270,18 +398,25 @@ export struct BookShelfPage {
        * 显示一本组外的书会自相矛盾（用户实测反馈过）；
        * 现在分组是**文件夹**（点进去才筛选），首页不存在"当前分组"，
        * 这个矛盾自然消失了。
+       *
+       * ⚠️ 外面套一层带内边距的 `Column`，而不是给卡片传 margin ——
+       * `@Prop`/普通成员的组件不该由调用方决定外边距，
+       * 与"组件管画什么、容器管放在哪"是同一条分工。
        */
       if (this.state.continueBook !== null) {
-        ContinueReadingCard({
-          book: this.state.continueBook ?? undefined,
-          onContinue: (book: Book) => {
-            this.openReader(book);
-          }
-        })
+        Column() {
+          ContinueReadingCard({
+            book: this.state.continueBook ?? undefined,
+            onContinue: (book: Book) => {
+              this.openReader(book);
+            }
+          })
+        }
+        .width('100%')
+        .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
       }
     }
     .width('100%')
-    .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
   }
 
   /**
@@ -365,42 +500,79 @@ export struct BookShelfPage {
       .width('100%')
       .scrollBar(BarState.Off)
     } else {
-      List({ space: AppTheme.GAP_S }) {
-        ForEach(this.state.entries, (entry: ShelfEntry) => {
-          ListItem() {
-            if (entry.isGroup) {
-              GroupListItem({
-                group: entry.group,
-                onTap: (g: BookGroup) => {
-                  this.openGroupDetail(g);
-                },
-                onLongPress: (g: BookGroup) => {
-                  this.showGroupActions(g.id, g.name);
-                }
-              })
-            } else {
-              BookListItem({
-                book: entry.book,
-                onTap: (b: Book) => {
-                  this.openReader(b);
-                },
-                onLongPress: (b: Book) => {
-                  this.showBookActions(b);
-                }
-              })
+      /**
+       * 列表形态：**整列收成一块卡片**，行与行之间用一根缩进发丝线分开。
+       *
+       * ⚠️ 原实现是 `List({ space: 8 })` + 每行自己一张 `bgCard` 圆角卡，
+       * 六行就是"六张白卡叠在浅灰底上"—— 白/灰交替出现，整列读起来是碎的，
+       * 而且**每张卡都在重复表达同一个边界**（这一列本来就是一个整体）。
+       *
+       * 现在把卡片底挪到 `List` 自己身上：一列只有一条外边界，
+       * 内部靠"从文字列开始的缩进线"分区。缩进线而不是通栏线，是因为
+       * 通栏线等于又把整块切成一行行的卡 —— 封面那一列必须保持连续，
+       * 视觉上才说得通"这是一排书"。
+       *
+       * ⚠️ 卡片底 + 圆角 + `clip` 都挂在 `List` 上（不是外层 `Column`）：
+       * 挂在 `List` 上才能让**滚动内容一起被裁**；挂在外层则滚动时
+       * 行会从圆角外面滑出来。这也是把内边距留给外层 `Column` 的原因。
+       *
+       * ⚠️ `space` 必须去掉（默认 0）：行间现在靠发丝线分区，
+       * 再留 8vp 间距会让线悬在两段空白之间，读起来像"断开的表格"。
+       */
+      Column() {
+        List() {
+          /**
+           * ⚠️ `ForEach` 的 itemGenerator 这里**必须**收第二个参数 `index`：
+           * 首行不画线（否则线会顶在卡片上边缘，看起来像卡片缺了个边）。
+           * 用 `entry.key()` 做键 —— 排序变化时键跟着变，实例重建，
+           * `topRule` 才会跟着重新求值。
+           */
+          ForEach(this.state.entries, (entry: ShelfEntry, index: number) => {
+            ListItem() {
+              if (entry.isGroup) {
+                GroupListItem({
+                  group: entry.group,
+                  inset: true,
+                  topRule: index > 0,
+                  onTap: (g: BookGroup) => {
+                    this.openGroupDetail(g);
+                  },
+                  onLongPress: (g: BookGroup) => {
+                    this.showGroupActions(g.id, g.name);
+                  }
+                })
+              } else {
+                BookListItem({
+                  book: entry.book,
+                  inset: true,
+                  topRule: index > 0,
+                  onTap: (b: Book) => {
+                    this.openReader(b);
+                  },
+                  onLongPress: (b: Book) => {
+                    this.showBookActions(b);
+                  }
+                })
+              }
             }
-          }
-        }, (entry: ShelfEntry) => entry.key())
+          }, (entry: ShelfEntry) => entry.key())
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .backgroundColor(AppColor.bgCard)
+        .borderRadius(AppTheme.CARD_RADIUS)
+        .clip(true)
+        .cachedCount(6)
+        .scrollBar(BarState.Off)
       }
+      .width('100%')
+      .layoutWeight(1)
       .padding({
         left: AppTheme.PAGE_PADDING,
         right: AppTheme.PAGE_PADDING,
         top: AppTheme.GAP_M,
         bottom: AppTheme.GAP_L
       })
-      .layoutWeight(1)
-      .width('100%')
-      .scrollBar(BarState.Off)
     }
   }
 

@@ -221,36 +221,91 @@ struct Index {
    */
   @Builder
   tabBuilder(index: number) {
-    Column({ space: 2 }) {
+    Column() {
       /**
-       * ⚠️ 选中态用**点缀色**（`accent`）—— 这是主题色最主要的去处：
-       * 面积小、位置固定（底部一栏），既能一眼看出在哪一页，又不会喧宾夺主。
-       * 不要为了"更醒目"把它换成大色块（如给整个 Tab 加底色）。
+       * ⚠️ 栏顶发丝线：**三块各画一段，拼成整栏的一条**。
+       *
+       * 为什么不直接给 `Tabs` 的 bar 加边框：`Tabs` 的 `barBackgroundColor`
+       * 只能设底色，系统 bar 内部没有暴露边框入口；而把线放在 `Tabs`
+       * **外面**（与 bar 同级）又做不到 —— bar 是 `Tabs` 自己布局的。
+       * 画在每个 tabBuilder 顶部是唯一能贴住栏顶的做法，
+       * 代价是它参与 tab 的高度计算（所以下面的内容区必须用 `layoutWeight`）。
+       *
+       * ⚠️ 存在的理由：原实现的导航栏与页面底色（`bgPage` #FAFAFA）之间
+       * 只靠 `bgCard`(#FFFFFF) 的 2% 明度差区分，在浅色下几乎看不出"这里
+       * 开始是另一层"，深色下（#1A1A1A / #242424）更糊。一条发丝线
+       * 一句话说清"导航栏到这里为止"，而它只花 1vp。
        */
-      Image(TAB_ICONS[index])
-        .width(TAB_ICON_SIZE)
-        .height(TAB_ICON_SIZE)
-        .fillColor(this.activeTab === index ? AppColor.accent : AppColor.textHint)
-        .objectFit(ImageFit.Contain)
-        /**
-         * ⚠️ 颜色变化加一段**短过渡**：用 `.animation()` 属性式动画，
-         * 它作用于**它上方**的属性，所以颜色一改就自动补间，不需要手写 `animateTo`。
-         *
-         * 直接硬切会显得"闪"一下；这里 120ms 足够快、察觉不到延迟，
-         * 又让图标与文字的颜色变化是"融"过去的。时长刻意远小于页签
-         * 切换动画，避免重新引入"慢一拍"的观感。
-         */
-        .animation({ duration: 120, curve: Curve.EaseOut })
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(AppColor.divider)
 
-      Text(TAB_LABELS[index])
-        .fontSize(AppTheme.FONT_CAPTION)
-        .fontColor(this.activeTab === index ? AppColor.accent : AppColor.textHint)
-        .fontWeight(this.activeTab === index ? FontWeight.Medium : FontWeight.Normal)
-        .animation({ duration: 120, curve: Curve.EaseOut })
+      /**
+       * 选中短横的**固定槽位**（4vp）。
+       *
+       * ⚠️ 槽位必须恒定存在、只有内容按选中态显隐 —— 若把整个 `Row` 放进
+       * `if` 里，切换页签时栏内容会整体上下跳 4vp（这正是设计文档里
+       * "高度随条件变化"那一类坑）。空槽位不画任何东西，但占住高度。
+       *
+       * ⚠️ 有了这条短横，选中态就有了**形状**上的标记，不再只靠颜色 ——
+       * 对色觉障碍用户，颜色是唯一线索的界面是读不出选中项的。
+       * 颜色（accent）与形状（短横）同时表达同一个状态，是冗余编码。
+       */
+      Row() {
+        if (this.activeTab === index) {
+          Row()
+            .width(AppTheme.TAB_MARK_W)
+            .height(AppTheme.TAB_MARK_H)
+            .borderRadius(AppTheme.TAB_MARK_H / 2)
+            .backgroundColor(AppColor.accent)
+        }
+      }
+      .width('100%')
+      .height(4)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+
+      /**
+       * 图标 + 文字。
+       *
+       * ⚠️ `layoutWeight(1)` 吃掉"栏高 − 发丝线 − 短横槽"的余量，
+       * 再用 `justifyContent(Center)` 在余量里居中 ——
+       * 于是上面那两行是**贴边**的，而图标文字仍是垂直居中的。
+       */
+      Column({ space: 2 }) {
+        /**
+         * ⚠️ 选中态用**点缀色**（`accent`）—— 这是主题色最主要的去处：
+         * 面积小、位置固定（底部一栏），既能一眼看出在哪一页，又不会喧宾夺主。
+         * 不要为了"更醒目"把它换成大色块（如给整个 Tab 加底色）。
+         */
+        Image(TAB_ICONS[index])
+          .width(TAB_ICON_SIZE)
+          .height(TAB_ICON_SIZE)
+          .fillColor(this.activeTab === index ? AppColor.accent : AppColor.textHint)
+          .objectFit(ImageFit.Contain)
+          /**
+           * ⚠️ 颜色变化加一段**短过渡**：用 `.animation()` 属性式动画，
+           * 它作用于**它上方**的属性，所以颜色一改就自动补间，不需要手写 `animateTo`。
+           *
+           * 直接硬切会显得"闪"一下；这里 120ms 足够快、察觉不到延迟，
+           * 又让图标与文字的颜色变化是"融"过去的。时长刻意远小于页签
+           * 切换动画，避免重新引入"慢一拍"的观感。
+           */
+          .animation({ duration: 120, curve: Curve.EaseOut })
+
+        Text(TAB_LABELS[index])
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.activeTab === index ? AppColor.accent : AppColor.textHint)
+          .fontWeight(this.activeTab === index ? FontWeight.Medium : FontWeight.Normal)
+          .animation({ duration: 120, curve: Curve.EaseOut })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
     }
     .width('100%')
     .height(AppTheme.TAB_BAR_HEIGHT)
-    .justifyContent(FlexAlign.Center)
     /**
      * ⚠️ **按压反馈**：自定义 `@Builder` tabBar 不像系统默认 tabBar
      * 自带按压效果，必须自己实现 —— 否则用户点了"没有反应"，

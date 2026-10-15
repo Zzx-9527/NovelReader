@@ -4,6 +4,7 @@ import { ReaderViewModel } from '../viewmodels/ReaderViewModel';
 import { ReaderJump, ReaderJumpRegistry } from '../viewmodels/ReaderJumpRegistry';
 import { RouteName, RouteParam } from '../model/RouteParam';
 import { AppTheme, ReaderTheme } from '../common/theme/AppTheme';
+import { AppFont } from '../common/theme/AppFont';
 import { Logger } from '../common/utils/Logger';
 import { AppConstants, LogTag } from '../common/constants/AppConstants';
 import { LoadingView } from '../views/common/LoadingView';
@@ -13,6 +14,15 @@ import { ReaderBottomBar } from '../views/reader/ReaderBottomBar';
 import { SettingsPanel } from '../views/reader/SettingsPanel';
 import { BookmarkDialog } from '../views/reader/BookmarkDialog';
 import { ReaderSettings } from '../model/ReaderSettings';
+import { TextRun } from '../model/TextRun';
+import { ReaderWindowEffects } from '../common/utils/ReaderWindowEffects';
+/**
+ * ⚠️ `KeyCode` **不是全局枚举**，必须显式导入（查 SDK：
+ * 它声明在 `@ohos.multimodalInput.keyCode.d.ts`，而 `KeyType` 才是全局的、
+ * 在 `component/enums.d.ts` 里）。漏了这一行会编译不过 ——
+ * 与 `KeyType` 那种"看着像内置、其实要导入"的情况正好相反。
+ */
+import { KeyCode } from '@kit.InputKit';
 
 /**
  * 阅读页（全屏，不显示底部 Tab）。
@@ -291,6 +301,41 @@ struct ReaderPage {
    * 时触发，若不清空，用户切个后台再回来就会莫名又跳一次。
    */
   onPageShow(): void {
+    /**
+     * ⚠️ 每次页面显示都重新应用窗口级设置（亮度 / 常亮），**不能只在打开页面时应用一次**。
+     *
+     * `onPageShow` 有两个触发时机，两个都需要重设：
+     *  1. **从目录页返回** —— 目录页可能被系统回收过窗口；
+     *  2. **App 从后台回到前台** —— 这是关键的：离开应用（锁屏、切走）时
+     *     系统会**收回**窗口级的亮度与常亮设置，回到前台不会自动恢复。
+     *     不重设的话表现是"从后台回来亮度就变回系统值了，要重新拖一下才好"。
+     *
+     * ⚠️ 放在 `onPageShow` 而不是 `aboutToAppear`：后者只在页面**首次创建**
+     * 时跑一次，从目录页返回不触发（页面还在栈里）。
+     */
+    this.applyWindowEffects(this.state.settings);
+
+    /**
+     * ⚠️ 重取本页划线：目录页可能刚**删掉一条划线**，而底纹是画在正文上的。
+     *
+     * 不重取的话，用户从目录页删掉一条划线、返回阅读页，
+     * 那段底色**还留在正文上** —— 看起来像"删除没生效"，
+     * 而其实库里已经删了，只是内存里的 `state.highlights` 是旧的。
+     *
+     * ⚠️ 让阅读页在"重新可见"时自己刷新，而不是让目录页去通知阅读页：
+     * 目录页不该知道阅读页的内部状态（两个页面之间**没有**持有关系，
+     * 走路由参数传一个"刷新信号"既脆弱又多一条隐式契约）。
+     * 而 `onPageShow` 本来就是"我又显示了"这个语义的天然时机 ——
+     * 它与上面 `applyWindowEffects` 是同一个理由。
+     *
+     * ⚠️ 只重取数据、**不重排**：划线只影响 `Span` 底色，
+     * 不改任何字符的宽高，所以不需要重新分页
+     * （重排会让用户当前的位置跳一下，代价远大于收益）。
+     */
+    this.vm.refreshHighlights().catch((e: Object) => {
+      Logger.warn(LogTag.READ, `刷新划线失败: ${Logger.errText(e)}`);
+    });
+
     const jump: ReaderJump | null = ReaderJumpRegistry.consume();
     if (jump === null) {
       return;
@@ -678,6 +723,18 @@ struct ReaderPage {
                  * 改字号/行距不该改变阅读位置，回到章首或章末都是错的。
                  */
                 this.restoreScrollToCurrentOffset();
+                /**
+                 * ⚠️ 窗口级设置（亮度 / 常亮）**必须在这里跟着应用**，
+                 * 不能只在打开页面时应用一次：
+                 * 用户在面板里把亮度从 0.8 拖到 0.3，期望是**立刻**变暗。
+                 * 只在打开时应用的话，改动要等退出阅读页再进来才生效 ——
+                 * 那正是"设置看起来没用"的来源。
+                 *
+                 * ⚠️ 它是**异步且可能失败**的（系统策略可拒绝），
+                 * 但**不能**因此阻塞或打断 `updateSettings` 的链路：
+                 * 排版是主业、亮度是附属，所以单独一条 Promise 链、只记日志。
+                 */
+                this.applyWindowEffects(next);
               }).catch((e: Object) => {
                 Logger.error(LogTag.READ, `应用阅读设置失败: ${Logger.errText(e)}`);
               });
@@ -763,6 +820,19 @@ struct ReaderPage {
      * （`setWindowLayoutFullScreen(true)`）—— 没有那一步，这里写什么都没用。
      */
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    /**
+     * 音量键翻页。
+     *
+     * ⚠️ 挂在**根节点**上：`onKeyEvent` 需要节点在焦点链上才能收到按键。
+     * 根节点覆盖整页、一定在链上；挂在某个子节点（比如正文 `Text`）上
+     * 则会因为焦点在别处而**收不到按键** —— 表现是"开了开关也没反应"。
+     *
+     * ⚠️ 处理逻辑里对"菜单已弹出 / 滚动模式 / 开关关闭"一律返回 `false`，
+     * 把事件交回系统 —— 详见 `onReaderKeyEvent` 的三条约束。
+     */
+    .onKeyEvent((event: KeyEvent) => {
+      return this.onReaderKeyEvent(event);
+    })
   }
 
   /**
@@ -802,11 +872,28 @@ struct ReaderPage {
      * （沉浸式要的效果），而文字仍落在手势条上方。
      */
     Column() {
-      // 与正文的分隔线。
-      // 用 `theme.secondary` 而非 `AppColor.divider`：本栏属于阅读页，
-      // 配色必须跟随阅读主题（羊皮纸/夜间/护眼），
-      // 用系统资源令牌会在这些主题下露出与正文不搭的系统色。
-      Divider().color(this.theme().secondary)
+      /**
+       * 与正文的分隔线。
+       *
+       * 用 `theme.secondary` 而非 `AppColor.divider`：本栏属于阅读页，
+       * 配色必须跟随阅读主题（羊皮纸/夜间/护眼），
+       * 用系统资源令牌会在这些主题下露出与正文不搭的系统色。
+       *
+       * ⚠️ 从 `Divider().color(secondary)`（**满强度**）换成 30% 的发丝线：
+       * 满强度的 `secondary` 在浅色主题下是 #888888，比正文（#1A1A1A）里的
+       * 标点还显眼，读起来像给正文加了个下边框。分隔线的职责是"轻声说这里有边界"，
+       * 而不是成为这一屏最重的一根线。
+       *
+       * ⚠️ 高度与顶栏那条同源（`AppTheme.READER_RULE_ALPHA`）：一顶一底两条线
+       * 粗细深浅必须一致。本栏的总高由 `footerTotalHeight()` 决定，
+       * 这条线的 1vp 早已算在里面（原来是 `Divider` 默认 1vp，现在也是 1vp），
+       * 所以换实现**不改变任何布局高度**。
+       */
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(this.theme().secondary)
+        .opacity(AppTheme.READER_RULE_ALPHA)
 
       Row() {
         // 左：章节名。长标题截断，完整标题在目录里能看全
@@ -825,17 +912,24 @@ struct ReaderPage {
          * 右侧只剩百分比。
          *
          * 两段都用 `GAP_S` 做左间距，靠右依次排列：`5/16  97.1%`。
+         *
+         * ⚠️ 两段都走 `AppFont.TABULAR`（等宽数字）。这是本栏最需要它的一处：
+         * 翻页时页码从 `5/16` 变成 `6/16`、百分比从 `97.1%` 变成 `97.4%`，
+         * 比例数字下每一位宽度不同，整段会**左右抖动**——
+         * 它又恰好紧贴屏幕右下角，抖动非常显眼。
          */
         if (this.state.pageText.length > 0) {
           Text(this.state.pageText)
             .fontSize(AppTheme.FONT_CAPTION)
             .fontColor(this.theme().secondary)
+            .fontFeature(AppFont.TABULAR)
             .margin({ left: AppTheme.GAP_S })
         }
 
         Text(this.state.progressText)
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(this.theme().secondary)
+          .fontFeature(AppFont.TABULAR)
           .margin({ left: AppTheme.GAP_S })
       }
       .width('100%')
@@ -955,6 +1049,101 @@ struct ReaderPage {
   }
 
   // ------------------------------------------------------------ 正文
+
+  /**
+   * 把"窗口级"阅读设置应用到真实窗口：屏幕亮度、保持常亮。
+   *
+   * ⚠️ 为什么单独一个方法、并且**只记日志不抛错**：
+   *  1. 这两个设置都要 `window.Window`，而页面拿不到 —— 所以走
+   *     `ReaderWindowEffects`（它用 `window.getLastWindow` 自己取）；
+   *  2. 它们**可以被系统拒绝**（省电模式、机型限制）。失败时用户改的
+   *     设置本身是成功的，不该弹"设置失败" —— 那会让人以为设置没保存。
+   *
+   * ⚠️ 取不到 Context 就直接返回：读 `getHostContext()` 可能返回 undefined
+   * （SDK 声明如此），不是异常，但也没有窗口可设。
+   */
+  private applyWindowEffects(settings: ReaderSettings): void {
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) {
+      return;
+    }
+    ReaderWindowEffects.applyBrightness(context, settings.brightness).catch(() => {
+      // 内部已记日志，这里只是把 Promise 收干净，避免未处理的拒绝
+    });
+    ReaderWindowEffects.applyKeepScreenOn(context, settings.keepScreenOn).catch(() => {
+    });
+  }
+
+  /**
+   * 音量键翻页。
+   *
+   * ## 为什么需要它
+   *
+   * `ReaderSettings.volumeKeyPage` 这个开关**早就存在、也早就落盘了**
+   * （见 `SettingsKeys.VOLUME_KEY_PAGE`），但全项目没有任何地方监听按键 ——
+   * 于是它是个"存了但从不生效"的死设置。这里把消费端补上。
+   *
+   * ## 三条约束
+   *
+   * 1. **只在 `volumeKeyPage` 打开、且菜单/设置面板都没弹出时生效**。
+   *    菜单弹出时音量键应该走系统默认行为（调音量），
+   *    否则用户想调音量却翻了页，非常容易误触。
+   * 2. **只在分页模式生效**。滚动模式没有"翻页"这个概念（整章连续滚动），
+   *    按下音量键什么都不该发生，而不是莫名其妙跳一屏。
+   * 3. **返回 true 表示已消费**，阻止事件继续冒泡到系统 ——
+   *    不消费的话会一边翻页一边把系统音量调小，那是双重副作用。
+   *
+   * ⚠️ 键值只认 `KEYCODE_VOLUME_UP` / `KEYCODE_VOLUME_DOWN`；
+   * 其它键一律返回 false，保证返回键、电源键等行为完全不变。
+   */
+  private onReaderKeyEvent(event: KeyEvent): boolean {
+    if (!this.state.settings.volumeKeyPage) {
+      return false;
+    }
+    if (this.state.menuVisible || this.state.settingsVisible) {
+      return false;
+    }
+    if (this.state.settings.pageMode === 'scroll') {
+      return false;
+    }
+    // 只处理按下，避免"抬起"再触发一次（一次按键翻两页）
+    if (event.type !== KeyType.Down) {
+      return false;
+    }
+    const code: number = event.keyCode;
+    /**
+     * ⚠️ 翻页走 `vm.prevPage()` / `vm.nextPage()`，与**左右滑动翻页**
+     * （`buildPageControls` 的 PanGesture）用的是同一对方法：
+     * 它们内部已经处理了"翻到本章首/末页时自动跨章"的逻辑。
+     * 若在这里自己判断页码再跳章，就等于把跨章规则抄第二份 ——
+     * 两处迟早不一致（本项目反复记过这类坑）。
+     */
+    if (code === KeyCode.KEYCODE_VOLUME_UP) {
+      this.vm.prevPage();
+      return true;
+    }
+    if (code === KeyCode.KEYCODE_VOLUME_DOWN) {
+      this.vm.nextPage();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 本页正文的「普通段 / 高亮段」分段，供 `buildReaderBody` 渲染 `Span`。
+   *
+   * ⚠️ 为什么包一层方法而不是在 `build()` 里直接调 ViewModel：
+   * `build()` 里不能声明局部变量、也不能做复杂逻辑；这里只是把
+   * "拿当前章的划线 + 交给 ViewModel 切分"这两步收在一处，
+   * 让渲染处只剩一个 `ForEach`。
+   *
+   * ⚠️ 分段逻辑**完全在 ViewModel 里**（`buildTextRuns`），不在这里实现：
+   * 它需要 `renderedText` 与原文片段的双游标对齐，而那份对齐必须与
+   * `toOriginalOffset` 同源（同一个装饰规则）。放在页面里就等于抄第二份。
+   */
+  private buildTextRuns(): TextRun[] {
+    return this.vm.buildTextRuns(this.state.highlights);
+  }
 
   /**
    * 长按选中正文后的自定义菜单：在系统默认项（复制等）旁边加上**书签**。
@@ -1319,18 +1508,56 @@ struct ReaderPage {
   @Builder
   buildChapterHeading() {
     if (this.headingText().length > 0) {
-      Text(this.headingText())
-        .fontSize(this.state.settings.fontSize + AppTheme.SIZE_STEP)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.theme().text)
-        // 字体必须与分页测量同源（见 ReaderSettings.resolveFontFamily）
-        .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
-        // 显式给行高：高度要可预测，分页按 headingHeight() 扣它
-        .lineHeight(this.headingLineHeight())
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
-        .padding({ top: AppTheme.GAP_S, bottom: AppTheme.GAP_M })
+      /**
+       * ⚠️ 用 `Stack` 把"题花线"叠在标题**自己的下内边距里**，
+       * 而**不是**在标题下面新起一行 —— 这一点至关重要：
+       * `headingHeight()` 是按"行高 + 上内边距 + 下内边距"算出来交给分页服务的
+       * （首页要给标题让位）。若题花线真的占了新的一行，就必须同步改
+       * `headingHeight()`；一旦漏改，首页会多算一行高度、最后一行正文被裁掉，
+       * 而且**不报错**（设计文档反复记过这个坑：裁掉的是正文，用户看不出原因）。
+       * 叠在既有的 12vp 下内边距**之内**，总高一个 vp 都不变，
+       * 分页算术完全不受影响 —— 这是本次重构里唯一碰阅读正文的改动，
+       * 之所以敢动，正是因为它是零高度的。
+       */
+      Stack({ alignContent: Alignment.BottomStart }) {
+        Text(this.headingText())
+          .fontSize(this.state.settings.fontSize + AppTheme.SIZE_STEP)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.theme().text)
+          // 字体必须与分页测量同源（见 ReaderSettings.resolveFontFamily）
+          .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
+          /**
+           * 章节标题加一点点字距：中文标题本就短，加字距立刻有"排印"的味道。
+           * ⚠️ 它不影响单行高度（`maxLines(1)` + 省略号），所以不动分页算术 ——
+           * 这正是"能加装饰"的前提：装饰只能改**宽度方向**，不能改高度方向。
+           */
+          .letterSpacing(AppTheme.TRACK_CHAPTER)
+          // 显式给行高：高度要可预测，分页按 headingHeight() 扣它
+          .lineHeight(this.headingLineHeight())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .padding({ top: AppTheme.GAP_S, bottom: AppTheme.GAP_M })
+
+        /**
+         * 题花线：全书**唯一**的装饰元素。
+         *
+         * ⚠️ 左对齐而不是居中或整宽：它与标题**同起点**，读起来是
+         * "标题下方的一条起笔线"；居中会变成装饰性分隔符，
+         * 整宽则又退化成一条分隔线（那就与常驻底栏那条线重复了）。
+         *
+         * ⚠️ 颜色取 `theme.secondary` 而不是 `AppColor` 的某个令牌：
+         * 它长在正文里，必须跟随四套阅读底色（羊皮纸/护眼/夜间），
+         * 用系统令牌会在那些主题下露出不搭的系统色。
+         */
+        Row()
+          .width(AppTheme.READER_RULE_W)
+          .height(AppTheme.HAIRLINE)
+          .backgroundColor(this.theme().secondary)
+          .opacity(0.55)
+          .margin({ bottom: 6 })
+      }
+      .width('100%')
     }
   }
 
@@ -1341,7 +1568,25 @@ struct ReaderPage {
       Scroll(this.scroller) {
         Column() {
           this.buildChapterHeading()
-          Text(this.state.renderedText, { controller: this.textController })
+          /**
+           * 正文：与分页模式**同一套 `Span` 渲染**（理由见 `buildReaderBody` 分页分支的说明：
+           * `measureTextSize` 不接受 `StyledString`，只有 `Span` 能不破坏
+           * "测量与渲染同源"）。
+           *
+           * ⚠️ 滚动模式的 `renderedText` 是**整章**，分页模式是**当前页** ——
+           * 两者共用 `buildTextRuns`：它在 `pageRawStart()` 里已经分了这两种情况
+           * （scroll 返回 0，即"整章都是本页"），所以这里不需要任何额外分支。
+           */
+          Text('', { controller: this.textController }) {
+            ForEach(this.buildTextRuns(), (run: TextRun) => {
+              if (run.highlighted) {
+                Span(run.text)
+                  .textBackgroundStyle(AppTheme.highlightSpanStyle())
+              } else {
+                Span(run.text)
+              }
+            }, (run: TextRun, index: number) => `s${index}_${run.highlighted}_${run.text.length}`)
+          }
             .fontSize(this.state.settings.fontSize)
             .fontColor(this.theme().text)
             // 字体与分页测量同源（见 ReaderSettings.resolveFontFamily）——
@@ -1463,7 +1708,49 @@ struct ReaderPage {
         })
       }
       // 翻页与呼出菜单由上层 buildPageControls 处理
-      Text(this.state.renderedText, { controller: this.textController })
+      /**
+       * 正文：**用 `Span` 子节点而不是整段字符串**，唯一目的是让**划线**能画出底色。
+       *
+       * ⚠️ 为什么必须是 `Span`、不能换成 `TextController.setStyledString()`：
+       * 分页测量走 `getMeasureUtils().measureTextSize()`，而它的
+       * `MeasureOptions.textContent` 只接受 `string | Resource`，**不接受 `StyledString`**。
+       * 改用 styled string 就变成"渲染走 styled 路径、测量仍走纯字符串" ——
+       * 正是设计文档反复警告的**测量与渲染不同源**，后果是分页悄悄算错、
+       * 末行被裁且不报错。`Span` 是 `Text` 的子节点，字体/行高/字距/内外边距
+       * 全部继承父 `Text`，父级那套测量口径一字未改。
+       *
+       * ⚠️ **没有划线时只渲染一个 `Span`**（见 `buildTextRuns` 的返回值），
+       * 排版结果与改动前的整段字符串**逐字符相同** —— 所以这个改动
+       * 对分页是零影响的：`buildTextRuns` 只切分、不增删任何字符。
+       *
+       * ⚠️ `Text` 的**全部属性保持原样**（字号/行高/字距/页边距/选区/长按菜单）：
+       * `Span` 继承父级排版属性，所以父级一个值都不能少，
+       * 否则正文的字号或行高会变 —— 而分页是按这些值算的。
+       *
+       * ⚠️ 父 `Text` 传**空串**而不是 `undefined`：正文全部由 `Span` 子节点提供，
+       * 父级内容为空是 `Span` 模式的标准写法；显式写 `undefined` 虽然
+       * 类型上也合法（`content?` 是可选参数），但在严格模式下容易被挑剔，
+       * 空串没有任何歧义。
+       */
+      Text('', { controller: this.textController }) {
+        ForEach(this.buildTextRuns(), (run: TextRun) => {
+          /**
+           * ⚠️ 交替渲染两种 `Span`，**不在一个 `Span` 里用 `if` 切样式**：
+           * `Span` 的样式是构建期属性，`if` 分支会让同一个节点被复用/
+           * 重建（本项目在"复用实例导致样式不更新"上踩过多次）。
+           *
+           * ⚠️ 高亮底色走 `AppTheme.highlightSpanStyle()`，不是在这里写字面量：
+           * ArkTS 禁止无类型对象字面量，而 `build()` 里不能声明局部变量，
+           * 所以那个对象必须由外部提供（见该方法的说明）。
+           */
+          if (run.highlighted) {
+            Span(run.text)
+              .textBackgroundStyle(AppTheme.highlightSpanStyle())
+          } else {
+            Span(run.text)
+          }
+        }, (run: TextRun, index: number) => `${index}_${run.highlighted}_${run.text.length}`)
+      }
         .fontSize(this.state.settings.fontSize)
         .fontColor(this.theme().text)
         // 字体与分页测量同源（见 ReaderSettings.resolveFontFamily）

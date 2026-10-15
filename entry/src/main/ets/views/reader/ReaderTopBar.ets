@@ -154,6 +154,32 @@ export struct ReaderTopBar {
       .width('100%')
       .height('100%')
       .alignItems(VerticalAlign.Center)
+
+      /**
+       * 栏底发丝线。
+       *
+       * ⚠️ 新增这一条的判据：顶栏弹出时它**压着正文**，而它的底色与
+       * 正文底色常常是同一个（浅色主题下都是 #FFFFFF）——
+       * 于是"顶栏到哪里结束"只靠正文文字的截断位置暗示，读起来是含混的。
+       * 一条 30% 的 `theme.secondary` 说清边界，且因为用的是 `secondary`
+       * 而不是 `AppColor.divider`，在羊皮纸/护眼/夜间三套主题下都不会
+       * 露出不搭的系统色。
+       *
+       * ⚠️ 不透明度走 `AppTheme.READER_RULE_ALPHA`：与常驻底栏的分隔线**同源**。
+       * 两条线一个在顶一个在底，粗细与深浅必须一致，否则整页会显得歪。
+       *
+       * ⚠️ 用 `position({ left, right, bottom })` 定位，而**不是**把本栏改成
+       * `Column { Stack + 线 }`：改结构要给整个栈内的子节点重新缩进一级，
+       * 而这个文件里每一行都带着说明它为什么存在的注释 —— 大范围重排
+       * 会让 diff 淹没真正的改动。`position` 的 `Edges` 形式不参与布局，
+       * 只是把这根线钉在栏底，零副作用。
+       */
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(this.theme.secondary)
+        .opacity(AppTheme.READER_RULE_ALPHA)
+        .position({ left: 0, right: 0, bottom: 0 })
     }
     .width('100%')
     .height(52)

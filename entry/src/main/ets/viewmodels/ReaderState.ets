@@ -1,5 +1,6 @@
 import { Book } from '../model/Book';
 import { Chapter } from '../model/Chapter';
+import { Annotation } from '../model/Annotation';
 import { ReaderSettings } from '../model/ReaderSettings';
 import { ReadingPosition } from '../model/ReadingPosition';
 
@@ -26,6 +27,19 @@ export class ReaderState {
 
   /** 实际渲染的文本：scroll 模式为整章，page 模式为当前页 */
   renderedText: string = '';
+  /**
+   * 当前章的**划线**（只含 `ANNOTATION_HIGHLIGHT`，不含书签与笔记）。
+   *
+   * ⚠️ 为什么正文里只画划线：书签是"一个位置"而不是"一段范围"，
+   * 没有区间可上底色；笔记的正文是用户写的备注、在段落里没有落脚处。
+   * 两者都在目录页的「书签 / 笔记」Tab 里看。给它们上底色只会让正文变花，
+   * 用户还分不清这一段到底是划线还是笔记。
+   *
+   * ⚠️ 必须在**每次换章、每次重新分页**时跟着刷新：
+   * `buildTextRuns` 依赖它算出本页的高亮区间，留旧章的划线
+   * 会让新章正文出现不相干的高亮（而且看起来像数据错乱）。
+   */
+  highlights: Annotation[] = [];
   /**
    * 本页是否从**段落中间**开始（即上一页把这一段切开了）。
    *

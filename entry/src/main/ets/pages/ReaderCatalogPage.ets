@@ -313,9 +313,23 @@ struct ReaderCatalogPage {
   build() {
     Column() {
       this.buildHeader()
-      // 分隔线用 `theme.secondary`：本页配色跟随阅读主题，
-      // 用 `AppColor.divider` 会在羊皮纸/夜间主题下露出不搭的系统灰
-      Divider().color(this.theme().secondary)
+      /**
+       * 分隔线用 `theme.secondary`：本页配色跟随阅读主题，
+       * 用 `AppColor.divider` 会在羊皮纸/夜间主题下露出不搭的系统灰。
+       *
+       * ⚠️ 并从 `Divider().color(secondary)`（**满强度**）改成
+       * `AppTheme.READER_RULE_ALPHA`(0.30) 的发丝线：本页属于阅读流程，
+       * 顶栏 / 常驻底栏 / 菜单栏三条线现在都是 0.30，
+       * 这一条若仍是满强度，从阅读页点进目录时会看到"线突然变重"。
+       *
+       * 判据：**同一条语义的线，全流程必须同源** —— 深浅靠同一个常量，
+       * 而不是靠各处"看起来差不多"。
+       */
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(this.theme().secondary)
+        .opacity(AppTheme.READER_RULE_ALPHA)
 
       if (this.loading) {
         // 目录可能上千章，加载期间给个明确的等待态，而不是一片空白

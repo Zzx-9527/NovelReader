@@ -127,9 +127,7 @@ export class SettingsService {
 
     s.pageMode = this.getString(SettingsKeys.PAGE_MODE, s.pageMode);
     s.theme = this.getString(SettingsKeys.THEME, s.theme);
-    s.bgColor = this.getString(SettingsKeys.BG_COLOR, s.bgColor);
     s.keepScreenOn = this.getBoolean(SettingsKeys.KEEP_SCREEN_ON, s.keepScreenOn);
-    s.hideStatusBar = this.getBoolean(SettingsKeys.HIDE_STATUS_BAR, s.hideStatusBar);
     s.volumeKeyPage = this.getBoolean(SettingsKeys.VOLUME_KEY_PAGE, s.volumeKeyPage);
     s.brightness = this.getNumber(SettingsKeys.BRIGHTNESS, s.brightness);
 
@@ -154,9 +152,7 @@ export class SettingsService {
 
     this.putString(SettingsKeys.PAGE_MODE, s.pageMode);
     this.putString(SettingsKeys.THEME, s.theme);
-    this.putString(SettingsKeys.BG_COLOR, s.bgColor);
     this.putBoolean(SettingsKeys.KEEP_SCREEN_ON, s.keepScreenOn);
-    this.putBoolean(SettingsKeys.HIDE_STATUS_BAR, s.hideStatusBar);
     this.putBoolean(SettingsKeys.VOLUME_KEY_PAGE, s.volumeKeyPage);
     this.putNumber(SettingsKeys.BRIGHTNESS, s.brightness);
 

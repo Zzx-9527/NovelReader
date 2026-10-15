@@ -1,3 +1,5 @@
+import { AppConstants } from '../constants/AppConstants';
+
 /**
  * 颜色令牌：**全部走 `$r()` 资源引用，绝不写 hex 字面量**。
  *
@@ -185,6 +187,140 @@ export class AppTheme {
    * 底栏同理。所有"比正文大/小一号"的地方都从这里取。
    */
   static readonly SIZE_STEP: number = 2;
+
+  // ============================================================ 「纸与线」装饰层
+  /**
+   * 这一组常量是本次界面重构（"纸与线"）的全部装饰参数。
+   *
+   * ⚠️ **它们不含任何颜色** —— 颜色一律来自 `AppColor`（资源令牌），
+   * 因为颜色必须跟随深浅模式。这里只有**尺寸与不透明度**，
+   * 所以放在 `AppTheme` 而不是 `AppColor` 里。
+   *
+   * ⚠️ 集中在这里的理由与正文排版参数一样（设计文档第 28 条）：
+   * 发丝线出现在十几处，各处写一个 `1` 或 `0.28` 就再也无法统一调整。
+   */
+
+  /**
+   * 发丝线粗细（vp）。全项目所有"分隔线"的唯一来源。
+   *
+   * ⚠️ 恒为 1：在 3x 屏上就是 3 个物理像素，正好是"印刷里的一条细线"的量感。
+   * 调成 2 会立刻变成"框"，整个界面会从"纸"滑向"表格"。
+   */
+  static readonly HAIRLINE: number = 1;
+
+  // ---------------------------------------------------------------- 封面
+  /** 封面左侧书脊宽度（vp） */
+  static readonly COVER_SPINE_W: number = 3;
+  /**
+   * 书脊不透明度。
+   *
+   * ⚠️ 这是"点缀色只用于小面积"这条既有纪律的关键：一屏 9 个封面，
+   * 每个 3vp 宽，合计着色面积约 27vp² —— 远小于一个按钮底。
+   * 取 1.0 会让网格里出现 9 条硬边蓝线，取 0.55 才是"书的厚度"。
+   */
+  static readonly COVER_SPINE_ALPHA: number = 0.55;
+  /** 封面首字下方题花线宽度（vp） */
+  static readonly COVER_RULE_W: number = 18;
+  /** 题花线不透明度（色用 `cover_text`） */
+  static readonly COVER_RULE_ALPHA: number = 0.45;
+  /** 封面底部进度**轨道**不透明度（有进度时才画，色用 `cover_text`） */
+  static readonly COVER_TRACK_ALPHA: number = 0.22;
+
+  // ---------------------------------------------------------------- 进度发丝
+  /**
+   * 进度发丝线粗细（vp）。
+   *
+   * ⚠️ 从原来的 4 降到 2：4vp 在浅色卡片上是一条"色块"，
+   * 2vp 才像书页上的一条标线。这一点点差别决定了卡片是"工具"还是"纸张"。
+   */
+  static readonly RAIL_H: number = 2;
+  /** 进度末梢圆点直径（vp），标记"我正停在这里" */
+  static readonly RAIL_DOT: number = 6;
+
+  // ---------------------------------------------------------------- 阅读页
+  /** 章节标题下题花短线宽度（vp）。全书只此一处装饰 */
+  static readonly READER_RULE_W: number = 24;
+  /**
+   * 阅读页浮层分隔线的不透明度。
+   *
+   * ⚠️ 原来是**满强度**的 `theme.secondary`，在浅色主题下那条线比正文还重，
+   * 看起来像输入框的边框。降到 0.30 才是"分隔"的语义。
+   */
+  static readonly READER_RULE_ALPHA: number = 0.30;
+  /** 阅读页两行菜单之间的分隔线（比浮层边界更轻） */
+  static readonly READER_INNER_RULE_ALPHA: number = 0.20;
+
+  // ---------------------------------------------------------------- 列表
+  /**
+   * 列表模式"缩进发丝线"的左起点（vp）。
+   *
+   * ⚠️ 必须等于 `封面 48 + 间距 12 + 内边距 12`：
+   * 线从**文字列**开始，封面那一列保持连续 —— 这是印刷里"缩进线"的做法，
+   * 通栏线会把每一行切成独立的卡片，正好是我们要去掉的观感。
+   * 改了封面尺寸或间距，这里要一起改。
+   */
+  static readonly LIST_RULE_INSET: number = 72;
+
+  // ---------------------------------------------------------------- 底部导航
+  /** 选中页签上方的点缀短横：宽 / 高（vp） */
+  static readonly TAB_MARK_W: number = 18;
+  static readonly TAB_MARK_H: number = 2;
+
+  // ---------------------------------------------------------------- 其他
+  /**
+   * 胶囊类小控件高度（vp）。
+   *
+   * 圆角复用既有的 `CHIP_RADIUS`(14)：30 高配 14 圆角即视觉上的全圆角，
+   * 再单独加一个 15 的常量只会多一个要同步的数字。
+   */
+  static readonly CHIP_H: number = 30;
+  /** 空状态几何标记边长（vp） */
+  static readonly MARK_SIZE: number = 92;
+
+  // ================================================================ 字距
+  /**
+   * 标题类文字的字距（vp）。
+   *
+   * ⚠️ 这一组是"书卷气"的**主要来源**，而不是衬线字体 ——
+   * 原因见 `AppFont` 的说明（手机上取不到中文衬线）。
+   * 中文正文加字距会显得松散，但**标题加一点点**会立刻有"排印"的味道，
+   * 且与字体、设备、系统版本全部无关，是确定性收益。
+   */
+  static readonly TRACK_TITLE: number = 0.5;
+  /** 书名 / 分组名的字距（比标题更克制，因为它出现在密集网格里） */
+  static readonly TRACK_NAME: number = 0.2;
+  /** 封面首字的字距 */
+  static readonly TRACK_COVER: number = 1;
+  /** 「静读」wordmark 的字距（大字号下才敢用这么大的值） */
+  static readonly TRACK_WORDMARK: number = 4;
+  /** 阅读页章节标题的字距 */
+  static readonly TRACK_CHAPTER: number = 0.5;
+
+  // ============================================================ 划线底纹
+  /**
+   * 划线底纹的样式（`Span.textBackgroundStyle` 的参数）。
+   *
+   * ⚠️ 存在的唯一理由是 **ArkTS 的类型要求**：本项目的 linter 启用了
+   * `arkts-no-untyped-obj-literals`，而 `build()` 里**不能声明局部变量** ——
+   * 于是无法在渲染处"先把字面量赋给带类型的变量再传进去"
+   * （这是本项目在 `buildTextEditMenu` 里用过的标准写法）。
+   * 把对象提到这里、用确定类型的静态字段承载，是唯一干净的解法。
+   *
+   * ⚠️ 颜色取 `AppConstants.HIGHLIGHT_DEFAULT_COLOR`，与写库时用的是**同一个常量**：
+   * 两处各写一个色值，将来改颜色就会"库里存 A、界面画 B"，而且不报错。
+   *
+   * ⚠️ 这里**不跟随** `ReaderTheme`：划线的暖黄是"记号笔"的颜色，
+   * 四种阅读底色（浅色/羊皮纸/护眼/夜间）下都必须一样 ——
+   * 它标记的是"我划过这里"，不是界面装饰。夜间模式下暖黄底 + 浅灰字
+   * 依然可读（这正是选暖黄而不是深色的原因）。
+   */
+  static highlightSpanStyle(): TextBackgroundStyle {
+    const style: TextBackgroundStyle = {
+      color: AppConstants.HIGHLIGHT_DEFAULT_COLOR,
+      radius: AppConstants.HIGHLIGHT_RADIUS
+    };
+    return style;
+  }
 }
 
 /**

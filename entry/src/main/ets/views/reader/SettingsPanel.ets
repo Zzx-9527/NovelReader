@@ -88,9 +88,7 @@ export struct SettingsPanel {
     next.firstLineIndent = s.firstLineIndent;
     next.pageMode = s.pageMode;
     next.theme = s.theme;
-    next.bgColor = s.bgColor;
     next.keepScreenOn = s.keepScreenOn;
-    next.hideStatusBar = s.hideStatusBar;
     next.volumeKeyPage = s.volumeKeyPage;
     next.brightness = s.brightness;
     next.gridMode = s.gridMode;
@@ -121,6 +119,18 @@ export struct SettingsPanel {
           this.buildPageMarginRow()
           this.buildPageModeRow()
           this.buildThemeRow()
+          /**
+           * ⚠️ 亮度与两个开关**排在排版项之后**，顺序是有意的：
+           * 本面板的开头是"调正文"（字号/行距/缩进/边距），
+           * 用户最常动的就是这几项；亮度与常亮是**一次配好就不再动**的项，
+           * 放在最下面才不会挡路。
+           *
+           * ⚠️ 这三项都是**窗口级**设置（作用于整个阅读界面，不改排版），
+           * 与上面"改一下就重排正文"的项性质不同 —— 分组排列本身
+           * 就在表达这个区别。
+           */
+          this.buildBrightnessRow()
+          this.buildSwitchRows()
         }
         .width('100%')
         .padding({ bottom: AppTheme.GAP_L })
@@ -548,6 +558,174 @@ export struct SettingsPanel {
       }
       .width('100%')
       .justifyContent(FlexAlign.SpaceBetween)
+    }
+    .width('100%')
+  }
+
+  // ------------------------------------------------------------ 亮度
+
+  /**
+   * 屏幕亮度。
+   *
+   * ⚠️ 滑块范围是 **0~100**（整数），但设置里存的是 **-1 或 0~1** ——
+   * 转换只在本方法里做一次：`-1` 是"跟随系统"这个哨兵值，
+   * 它在滑块上表现为**最左端之外的一个独立状态**，所以用下面那颗
+   * 「跟随系统」胶囊来切换，滑块本身只表示 0~1 的手动值。
+   *
+   * ⚠️ 拖动中也只改显示、松手才提交（与本面板其它滑块一致）：
+   * 每次改动都会走一遍 `updateSettings` → 重排正文，
+   * 拖动过程中连续提交会把主线程压满。
+   */
+  @Builder
+  buildBrightnessRow() {
+    Column({ space: AppTheme.GAP_S }) {
+      Row() {
+        Text('亮度')
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(this.theme.text)
+        Text(this.brightnessLabel())
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.theme.secondary)
+          .margin({ left: AppTheme.GAP_S })
+        Blank()
+        // 「跟随系统」：把亮度交回系统。选中态用反色胶囊，与翻页方式一致
+        Text('跟随系统')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.brightness < 0 ? this.theme.bg : this.theme.text)
+          .backgroundColor(this.settings.brightness < 0 ? this.theme.text : this.theme.bg)
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .border({ width: 1, color: this.theme.secondary })
+          .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+          .onClick(() => {
+            if (this.settings.brightness < 0) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            /**
+             * ⚠️ 显式写 -1，而不是"留空/跳过"：切回跟随系统必须把这个值
+             * 真的传下去，页面才会调 `setWindowBrightness(-1)` 交还控制权。
+             * 跳过的话屏幕会一直停在手动亮度上（见 `ReaderSettings.brightness`）。
+             */
+            next.brightness = -1;
+            this.emit(next);
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Slider({
+        // 跟随系统（-1）时滑块归位到 0.5，纯属显示：此时它不生效
+        value: this.settings.brightness < 0 ? 50 : this.settings.brightness * 100,
+        min: 0,
+        max: 100,
+        step: 1
+      })
+        .selectedColor(this.theme.text)
+        .trackColor(this.theme.secondary)
+        .width('100%')
+        .enabled(this.settings.brightness >= 0)
+        .opacity(this.settings.brightness >= 0 ? 1 : 0.4)
+        .onChange((value: number, mode: SliderChangeMode) => {
+          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+            const next: ReaderSettings = this.derive();
+            next.brightness = Math.round(value) / 100;
+            this.emit(next);
+          }
+        })
+    }
+    .width('100%')
+  }
+
+  /** 亮度标签：跟随系统时显示"跟随系统"，否则显示百分比 */
+  private brightnessLabel(): string {
+    if (this.settings.brightness < 0) {
+      return '跟随系统';
+    }
+    return `${Math.round(this.settings.brightness * 100)}%`;
+  }
+
+  // ------------------------------------------------------------ 显示开关
+
+  /**
+   * 两个开关：保持屏幕常亮、音量键翻页。
+   *
+   * ⚠️ 用同一套胶囊（选中反色）而不是 `Toggle` 组件：
+   * 本面板已有「翻页方式 / 跟随系统」两种胶囊，再来一种开关形态会让
+   * 面板里出现三套控件语汇。胶囊在这里足够表达"二选一状态"，
+   * 而且颜色跟随 `ReaderTheme`（`Toggle` 的默认配色不跟阅读主题）。
+   *
+   * ⚠️ 两行**内联写死**，不抽带参 `@Builder`：本项目反复记过
+   * "带参 `@Builder` 在同一处 build 里调多次会串位"（设计文档第 15/41 条），
+   * 而这里恰好要调两次、且两行的文案与字段都不同。
+   */
+  @Builder
+  buildSwitchRows() {
+    Column({ space: AppTheme.GAP_M }) {
+      Row() {
+        Column({ space: 2 }) {
+          Text('保持常亮')
+            .fontSize(AppTheme.FONT_BODY)
+            .fontColor(this.theme.text)
+            .width('100%')
+          Text('阅读时屏幕不自动熄灭')
+            .fontSize(AppTheme.FONT_CAPTION)
+            .fontColor(this.theme.secondary)
+            .width('100%')
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Text(this.settings.keepScreenOn ? '开' : '关')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.keepScreenOn ? this.theme.bg : this.theme.text)
+          .backgroundColor(this.settings.keepScreenOn ? this.theme.text : this.theme.bg)
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .border({ width: 1, color: this.theme.secondary })
+          .padding({ left: 16, right: 16, top: 4, bottom: 4 })
+          .onClick(() => {
+            const next: ReaderSettings = this.derive();
+            next.keepScreenOn = !this.settings.keepScreenOn;
+            this.emit(next);
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Row() {
+        Column({ space: 2 }) {
+          Text('音量键翻页')
+            .fontSize(AppTheme.FONT_BODY)
+            .fontColor(this.theme.text)
+            .width('100%')
+          /**
+           * ⚠️ 说明里必须写明"仅分页模式"：滚动模式整章连续滚动，
+           * 没有"翻页"这个概念，此时按音量键走系统默认行为（调音量）。
+           * 不写清楚的话，用户在滚动模式下开了它、按音量键没反应，
+           * 会以为功能坏了。
+           */
+          Text('仅分页模式生效；滚动模式下音量键仍调音量')
+            .fontSize(AppTheme.FONT_CAPTION)
+            .fontColor(this.theme.secondary)
+            .width('100%')
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Text(this.settings.volumeKeyPage ? '开' : '关')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.volumeKeyPage ? this.theme.bg : this.theme.text)
+          .backgroundColor(this.settings.volumeKeyPage ? this.theme.text : this.theme.bg)
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .border({ width: 1, color: this.theme.secondary })
+          .padding({ left: 16, right: 16, top: 4, bottom: 4 })
+          .onClick(() => {
+            const next: ReaderSettings = this.derive();
+            next.volumeKeyPage = !this.settings.volumeKeyPage;
+            this.emit(next);
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
   }

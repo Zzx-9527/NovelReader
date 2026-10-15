@@ -58,12 +58,27 @@ export class ReaderSettings {
   pageMode: string = 'scroll';
   /** 'light' | 'dark' | 'sepia' | 'eye_care' */
   theme: string = 'light';
-  /** 自定义背景色，空串表示跟随主题 */
-  bgColor: string = '';
+  /**
+   * 阅读时保持屏幕常亮。
+   *
+   * ⚠️ 它由阅读页在**进入页面**与**每次改动**时应用到窗口
+   * （见 `ReaderWindowEffects.applyKeepScreenOn`）。
+   */
   keepScreenOn: boolean = false;
-  hideStatusBar: boolean = true;
+  /**
+   * 音量键翻页。
+   *
+   * ⚠️ 只在**分页模式**、且菜单未弹出时生效（见 `ReaderPage.onReaderKeyEvent`）。
+   * 滚动模式没有"翻页"概念，按音量键应走系统默认行为。
+   */
   volumeKeyPage: boolean = false;
-  /** -1 表示跟随系统 */
+  /**
+   * 屏幕亮度：**-1 表示跟随系统**，0~1 为手动值。
+   *
+   * ⚠️ `-1` 不是"无效值"而是**明确的语义**：切回它时必须调用
+   * `setWindowBrightness(-1)` 把控制权交回系统。跳过调用的话，
+   * 用户从"手动 0.3"切回"跟随系统"屏幕会一直停在 0.3。
+   */
   brightness: number = -1;
 
   // ---------------------------------------------------------------- 书架

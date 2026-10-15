@@ -1,5 +1,6 @@
 import { Book } from '../../model/Book';
 import { AppColor } from '../../common/theme/AppTheme';
+import { AppFont } from '../../common/theme/AppFont';
 
 /**
  * 分组封面：**2×2 四个格子，用组内书的封面填**。
@@ -120,6 +121,12 @@ export struct GroupCover {
           .fontSize(this.compact ? 10 : 14)
           .fontWeight(FontWeight.Bold)
           .fontColor(AppColor.coverText)
+          /**
+           * ⚠️ 字体族与 `BookCover` 的封面首字**必须同源**（`AppFont.titleFamily()`）：
+           * 分组封面里露出的就是组内那几本书的首字，字体不一致会一眼看出
+           * "同一个字在分组里和书上长得不一样"。
+           */
+          .fontFamily(AppFont.titleFamily())
       }
     }
     .layoutWeight(1)

@@ -37,6 +37,16 @@ export class AppConstants {
    */
   static readonly HIGHLIGHT_DEFAULT_COLOR: string = '#FFF2A8';
 
+  /**
+   * 划线底纹的圆角（vp）。
+   *
+   * ⚠️ 取一个很小的值（2）而不是 0 或全圆角：底色是**逐行**铺在文字后面的，
+   * 行与行之间会被行距切开；圆角 0 时每一行都是一段硬边色块，堆起来像表格；
+   * 圆角太大（≥4）又会在短行上把色块缩成一个胶囊，看着像按钮。
+   * 2 足以去掉硬角，又保持"这是一段连续的标线"的观感。
+   */
+  static readonly HIGHLIGHT_RADIUS: number = 2;
+
   // ---------------------------------------------------------------- 书籍格式
   static readonly FORMAT_TXT: string = 'txt';
   static readonly FORMAT_EPUB: string = 'epub';

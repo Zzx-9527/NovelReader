@@ -1,4 +1,5 @@
 import { AppColor, AppTheme } from '../common/theme/AppTheme';
+import { AppFont } from '../common/theme/AppFont';
 import { RouteName } from '../model/RouteParam';
 import { StorageBootstrap } from '../common/StorageBootstrap';
 import { Logger } from '../common/utils/Logger';
@@ -171,6 +172,36 @@ struct SplashPage {
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
             .fontColor(AppColor.textPrimary)
+            /**
+             * ⚠️ 字距 + 同量的左缩进，是一对，不能只写一个。
+             *
+             * `letterSpacing` 会在**每个字之后**（含最后一个字）加空隙，
+             * 于是文字块的右侧多出一个字距的空白、整块看起来偏左。
+             * 补一个等量的左内边距才重新居中 —— 这是排版里的常规做法，
+             * 与"我的"页页脚落款用的是同一套处理。
+             */
+            .letterSpacing(AppTheme.TRACK_WORDMARK)
+            .padding({ left: AppTheme.TRACK_WORDMARK })
+            // 与"我的"页的落款、封面首字同源：探测到衬线才有，取不到自动回退
+            .fontFamily(AppFont.titleFamily())
+
+          /**
+           * 落款短线。
+           *
+           * ⚠️ 存在的理由是"收尾"：品牌区原本是「图标 → 应用名 → 口号」
+           * 三行**同宽居中**的文字，读起来像一个未完成的下拉列表 ——
+           * 没有主次、也没有结束感。加一条 30×2vp 的点缀色短线之后，
+           * 图形与文字之间有了一个"分隔"，而它本身也是这一屏唯一的颜色。
+           *
+           * ⚠️ 只有 2vp、颜色只用点缀色：启动页是用户每天都会看到的第一屏，
+           * 它必须安静。所谓"品牌感"来自克制，不来自面积。
+           */
+          Row()
+            .width(30)
+            .height(2)
+            .borderRadius(1)
+            .backgroundColor(AppColor.accent)
+            .margin({ top: 2, bottom: 8 })
 
           Text(SLOGAN)
             .fontSize(AppTheme.FONT_SLOGAN)

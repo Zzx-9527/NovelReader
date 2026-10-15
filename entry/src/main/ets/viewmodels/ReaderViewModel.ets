@@ -2,6 +2,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { Book } from '../model/Book';
 import { Chapter } from '../model/Chapter';
 import { Annotation } from '../model/Annotation';
+import { TextRun } from '../model/TextRun';
 import { ReadingPosition } from '../model/ReadingPosition';
 import { ReaderSettings } from '../model/ReaderSettings';
 import { PageCache } from '../model/PageCache';
@@ -371,6 +372,17 @@ export class ReaderViewModel {
       this.state.pageIndex = 0;
       this.state.offset = 0;
       this.state.error = '';
+      /**
+       * ⚠️ 划线必须**在渲染之前**取回来。
+       *
+       * `renderAt` 之后页面立刻会调 `buildTextRuns` 去画底纹，
+       * 若此时 `state.highlights` 还是旧章的，新章正文会带上一批
+       * 不相干的高亮 —— 看起来像数据错乱，而其实只是时序问题。
+       *
+       * ⚠️ 失败**不改变章节加载结果**：划线是增强，取不到就是"这一章没有高亮"，
+       * 绝不该因为一次查询失败而让用户读不了书。所以单独 try、只清空不抛错。
+       */
+      await this.reloadHighlights();
       await this.buildPagination();
       // target >= 0 时说明是"恢复进度"触发的加载，定位到该偏移；否则停在章首
       this.renderAt(target >= 0 ? target : 0);
@@ -1012,9 +1024,23 @@ export class ReaderViewModel {
       return 0;
     }
     try {
-      return await AnnotationRepository.addHighlight(
+      const id: number = await AnnotationRepository.addHighlight(
         this.bookId, this.state.chapterIndex, startOriginal, endOriginal,
         text, AppConstants.HIGHLIGHT_DEFAULT_COLOR);
+      /**
+       * ⚠️ 写入成功后**立刻重取划线**，否则新划的那一段要等下次换章才显示。
+       *
+       * 这正是本功能之前"划了线什么都看不见"的残留部分：数据已经进库，
+       * 但内存里的 `state.highlights` 还是旧的，正文自然画不出新底纹。
+       * 用户会以为划线失败、再划一次，于是库里留下重复记录。
+       *
+       * ⚠️ 重取失败**不影响返回值**：标注已经写进去了，不该因为
+       * 一次刷新失败就报告"划线失败"（那是谎报，会让用户重复操作）。
+       */
+      if (id > 0) {
+        await this.reloadHighlights();
+      }
+      return id;
     } catch (e) {
       Logger.error(LogTag.READ, `保存划线失败: ${Logger.errText(e as Object)}`);
       return 0;
@@ -1131,6 +1157,243 @@ export class ReaderViewModel {
       head++;
     }
     return head;
+  }
+
+  /**
+   * 本页**原文片段**的区间 `[start, end)`。
+   *
+   * ⚠️ 与 `toOriginalOffset` / `pageRawStart` 取的是**同一段**：
+   * 起点要剥掉页首换行（与 `renderAt` 一致），终点在本页断点处。
+   * 三处必须同源，否则分段结果与偏移换算会各说各话。
+   */
+  private pageRawRange(): number[] {
+    const text: string = this.state.getFullText();
+    const head: number = this.pageRawStart();
+    let end: number = text.length;
+    if (this.state.settings.pageMode !== 'scroll' && this.state.breaks.length > 0) {
+      const pageIndex: number = this.state.pageIndex;
+      end = pageIndex + 1 < this.state.breaks.length
+        ? this.state.breaks[pageIndex + 1]
+        : text.length;
+    }
+    return [head, end];
+  }
+
+  /**
+   * 重新加载**当前章**的划线，供正文画底纹。
+   *
+   * ⚠️ `listByChapter` 返回的是**本章全部标注**（书签 + 划线 + 笔记），
+   * 这里按 `isHighlight()` 过滤后才存进 `state.highlights`。
+   * 不过滤的话书签与笔记也会进正文分段逻辑 —— 书签没有区间（`isChapterOnly`）、
+   * 笔记虽有区间但不该上色，两者都会让高亮出现在不该出现的位置。
+   *
+   * ⚠️ 查询失败**只清空、不抛错**：正文能否渲染不能依赖一次装饰性查询。
+   */
+  async reloadHighlights(): Promise<void> {
+    if (this.bookId <= 0 || this.state.chapterIndex < 0) {
+      this.state.highlights = [];
+      return;
+    }
+    try {
+      const all: Annotation[] =
+        await AnnotationRepository.listByChapter(this.bookId, this.state.chapterIndex);
+      const only: Annotation[] = [];
+      for (const item of all) {
+        if (item.isHighlight() && !item.isChapterOnly()) {
+          only.push(item);
+        }
+      }
+      this.state.highlights = only;
+    } catch (e) {
+      this.state.highlights = [];
+      Logger.warn(LogTag.READ, `加载划线失败，正文不画底纹: ${Logger.errText(e as BusinessError)}`);
+    }
+  }
+
+  /**
+   * 供页面在**新增 / 删除划线之后**刷新底纹。
+   *
+   * ⚠️ 只重取数据，**不重排、不动分页**：划线只影响 `Span` 的底色，
+   * 不影响任何字符的宽度与高度，所以不需要重新分页
+   * （重排反而会让用户当前的位置跳一下，代价远大于收益）。
+   */
+  async refreshHighlights(): Promise<void> {
+    await this.reloadHighlights();
+  }
+
+  /**
+   * 把当前渲染的正文切成「普通段 / 高亮段」交替的片段列表，供阅读页用 `Span` 画出划线底色。
+   *
+   * ## 核心约束：拼接结果**必须**等于 `renderedText`
+   *
+   * 这是本方法的正确性判据，也是它敢用的前提：所有片段按顺序拼起来
+   * 与原来的整段字符串**逐字符相同** ⇒ 排版结果与改动前完全一致，
+   * 分页不受任何影响（只是把 `Text` 的一个字符串子节点换成了多个 `Span`）。
+   * 为此本方法**只做切分、不做任何字符增删**。
+   *
+   * ## 怎么把"原文偏移"映射到"渲染下标"
+   *
+   * 渲染文本 = 原文片段经过两步装饰（见 `renderAt`）：剥页首换行 + 段首补缩进。
+   * 装饰**只插入字符、从不改写**，所以用与 `toOriginalOffset` 相同的
+   * **双游标对齐**算法正着走一遍：两个游标同步前进，
+   * 字符相同则一起前进，不同则说明渲染侧多了一个插入的缩进字符。
+   *
+   * ⚠️ 刻意**不重建缩进逻辑**（不去重新判断哪里是段首）：
+   * 重建等于把 `indentParagraphHeads` 抄第二份，改一处忘另一处就会
+   * **静默**错位（设计文档记过同类坑）。这里拿"已经装饰好的 renderedText"
+   * 当唯一真相去对齐，天然与装饰实现同步。
+   *
+   * @param highlights 当前章的全部划线（**只传划线**，书签/笔记不参与）
+   */
+  buildTextRuns(highlights: Annotation[]): TextRun[] {
+    const rendered: string = this.state.renderedText;
+    if (rendered.length === 0) {
+      return [];
+    }
+
+    const range: number[] = this.pageRawRange();
+    const head: number = range[0];
+    const raw: string = this.state.getFullText().substring(head, range[1]);
+
+    /**
+     * 先把每个划线区间换算成**渲染下标**区间，再合并重叠区间。
+     *
+     * ⚠️ 合并是必要的，不是优化：同一段文字上可能有多条划线
+     * （用户重复划、或两条相邻），不合并就会出现互相嵌套的区间，
+     * 切分时后一条会把前一条切断、生成大量零碎片段（`Span` 数量暴涨）。
+     * 合并后每个字符最多属于一个高亮区间，切分天然干净。
+     *
+     * 区间用 `[start, end)` 半开表示，与分页断点的口径一致。
+     */
+    const spans: number[][] = [];
+    /**
+     * 渲染下标 → 原文偏移 的对照表：`renderedIndexOfRaw[k]` = 原文片段里
+     * 第 k 个字符在**渲染文本**中的下标。
+     *
+     * ⚠️ 用"原文下标 → 渲染下标"这个方向建表（不是反过来），因为待换算的
+     * 划线区间给的是**原文偏移**；建好表就能 O(1) 查两端点。
+     * 未被赋值的位置（对应被插入字符"顶掉"的偏移）由 `lookupRendered` 兜底。
+     */
+    const renderedIndexOfRaw: number[] = [];
+
+    /**
+     * 单趟双游标对齐。与 `toOriginalOffset` 是**同一个算法、同一个方向假设**：
+     * 渲染文本只比原文**多**插入字符（段首缩进），从不改写或删除，
+     * 所以两游标字符不同时，一定是渲染侧那个字符是插入的 —— 只推渲染游标。
+     *
+     * ⚠️ 循环条件写成两个独立的 `while` 边界判断、不用 `break`：
+     * 用 `break` 时"最后一次相等推进"可能来不及记账，
+     * 于是页面最后一个字符永远查不到下标，高亮会在行尾**短一截**。
+     */
+    let i: number = 0;
+    let j: number = 0;
+    while (i < rendered.length) {
+      if (j < raw.length && rendered.charAt(i) === raw.charAt(j)) {
+        renderedIndexOfRaw[j] = i;
+        i++;
+        j++;
+      } else if (j < raw.length) {
+        // 渲染侧多出来的插入字符（缩进）：不属于任何原文偏移
+        i++;
+      } else {
+        // 原文片段已走完，剩下的渲染字符都是插入的，无需记账
+        break;
+      }
+    }
+
+    for (const item of highlights) {
+      if (!item.isHighlight() || item.isChapterOnly()) {
+        continue;
+      }
+      const s: number | null = item.startOffset;
+      const e: number | null = item.endOffset;
+      if (s === null || e === null || e <= s) {
+        continue;
+      }
+      // 原文偏移 → 本页内的相对下标
+      const relStart: number = s - head;
+      const relEnd: number = e - head;
+      // 与本页无交集（别的页上的划线）
+      if (relEnd <= 0 || relStart >= raw.length) {
+        continue;
+      }
+      const clampedStart: number = relStart < 0 ? 0 : relStart;
+      const clampedEnd: number = relEnd > raw.length ? raw.length : relEnd;
+
+      const rs: number = ReaderViewModel.lookupRendered(renderedIndexOfRaw, clampedStart, rendered.length);
+      const re: number = ReaderViewModel.lookupRendered(renderedIndexOfRaw, clampedEnd, rendered.length);
+      if (re <= rs) {
+        continue;
+      }
+      spans.push([rs, re]);
+    }
+
+    if (spans.length === 0) {
+      // 没有划线：**返回单个普通片段**，而不是空数组 ——
+      // 空数组会让调用方渲染出空白正文
+      return [new TextRun(rendered, false)];
+    }
+
+    // 按起点排序后合并重叠/相接区间
+    spans.sort((a: number[], b: number[]): number => a[0] - b[0]);
+    const merged: number[][] = [];
+    for (const span of spans) {
+      const last: number[] | undefined = merged.length > 0 ? merged[merged.length - 1] : undefined;
+      if (last !== undefined && span[0] <= last[1]) {
+        if (span[1] > last[1]) {
+          last[1] = span[1];
+        }
+      } else {
+        merged.push([span[0], span[1]]);
+      }
+    }
+
+    /**
+     * 按合并后的区间切分。
+     *
+     * ⚠️ 用 `substring` 顺序拼接，**不做 trim、不做任何字符替换** ——
+     * 拼接结果必须与 `rendered` 逐字符相同（见方法注释的核心约束）。
+     */
+    const runs: TextRun[] = [];
+    let cursor: number = 0;
+    for (const m of merged) {
+      const start: number = m[0] < 0 ? 0 : m[0];
+      const end: number = m[1] > rendered.length ? rendered.length : m[1];
+      if (start > cursor) {
+        runs.push(new TextRun(rendered.substring(cursor, start), false));
+      }
+      if (end > start) {
+        runs.push(new TextRun(rendered.substring(start, end), true));
+      }
+      cursor = end > cursor ? end : cursor;
+    }
+    if (cursor < rendered.length) {
+      runs.push(new TextRun(rendered.substring(cursor), false));
+    }
+    return runs;
+  }
+
+  /**
+   * 查"原文偏移 k 对应的渲染下标"。
+   *
+   * ⚠️ 两个边界都要处理：
+   *  - `k` 落在页面末尾之后（划线终点超出本页）→ 取 `renderedLength`，
+   *    表示"一直到本页结束都高亮"；
+   *  - 表里没有记录（该偏移对应的字符被插入字符挤掉、没走到）→
+   *    向前找最近一个有效值；找不到就用 0。**不能返回 undefined**，
+   *    否则切分时会出现 `NaN` 下标、`substring` 静默返回错内容。
+   */
+  private static lookupRendered(table: number[], k: number, renderedLength: number): number {
+    if (k >= table.length) {
+      return renderedLength;
+    }
+    for (let idx = k; idx >= 0; idx--) {
+      const v: number | undefined = table[idx];
+      if (v !== undefined) {
+        return v;
+      }
+    }
+    return 0;
   }
 
   /** 找当前章、当前偏移处是否已有书签；没有返回 null */
