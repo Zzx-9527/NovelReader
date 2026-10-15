@@ -14,16 +14,15 @@ const RECENT_DAYS: number = 7;
  * 于是"最高的一天"正好顶到绘图区顶边，不会超出。
  */
 const PLOT_HEIGHT: number = 96;
-/** 柱子宽度与圆角（vp）。
- *
- * ⚠️ 14 → 11：粗柱无网格像仪表盘，细柱带网格像账簿（见 buildRecentBars）。
- */
+/** 柱子宽度与圆角（vp）。细柱带网格像账簿（效果稿的样式）。 */
 const BAR_WIDTH: number = 11;
 const BAR_RADIUS: number = 2.5;
 /** 柱间距（vp），必须与标签行的间距一致，否则柱与标签对不齐 */
 const BAR_GAP: number = 8;
-/** 绘图区顶部往下画几道水平网格线（含基线之外的参考线） */
+/** 绘图区顶部往下画几道水平网格线（基线之外的参考线） */
 const GRID_LINES: number = 3;
+const WEEKDAY_NAMES: string[] = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
 /**
  * 统计页（书架底部 Tab 第 2 页）。
  *
@@ -36,19 +35,25 @@ const GRID_LINES: number = 3;
  *    每次落库成功都会 `AppState.bumpStats()`，阅读页回到前台/退出时版本号变化，
  *    这里自动重查 —— 与书架的 `ShelfRefreshRegistry` 同源不同通道，互不干扰。
  *
- * ## 本次改动：一块账页 → 一个主数值 + 账目行
+ * ## 版面（与效果稿逐元素对齐）
  *
- * 上一版把四项收成"一块面板 + 四行"，判断是对的（数值右对齐、纵向可比）。
- * 这一版再进一步，把**层级**做出来：
- *  - 「今天」是用户打开这一页最想看的数 —— 把它**拎出来**做 54vp 的
- *    衬线主数值，单位（时/分）用衬线小字缀在后面；
- *  - 其余三项（最近 7 天 / 连续阅读 / 累计阅读）退成**账目行**：
- *    无卡片、只有发丝线，左标签右数值 —— "账"的意象；
- *  - 柱状图收细（14→11vp）并加**水平网格线**：粗柱无网格像仪表盘，
- *    细柱带网格像账簿；柱顶补数值，不用心算柱高。
+ * ```
+ * 统计
+ * 2025 年 6 月 12 日 · 星期四          ← 日期副标题
+ * ──────────────────────────────
+ * 1时 24 分              今 日
+ *                     比昨天多 12 分   ← 主数值 + 右侧两行眉标
  *
- * ⚠️ 主数值不放卡片、不铺底：它本身就是版面的主角，
- * 套一层卡反而把"这是最重要的一件事"稀释成"又一个面板"。
+ * 最近七日                共 6 时 08 分  ← 段标题行（右端七天合计）
+ *  ▁ ▂ ▃ ▅ ▆ █            （无卡片、带网格线与柱顶数值）
+ * 周五 周六 …                今天
+ *
+ * 最近 7 天            6 时 08 分    ← 账目行：发丝线分隔、无卡片
+ * 连续阅读                 17 天
+ * 累计阅读              42 时 18 分
+ * 有记录的天数              63 天
+ * ──────────────────────────────
+ * ```
  */
 @Component
 export struct StatsPage {
@@ -95,21 +100,26 @@ export struct StatsPage {
   build() {
     Column() {
       /**
-       * 标题区。
+       * 标题区：标题 + **日期副标题**（效果稿元素，"今天是哪天"的环境信息）。
        *
        * ⚠️ 标题与下面那条线**都带左右内边距**，而线是**通栏**的 ——
-       * 所以它们不能共处一个带内边距的容器里：本 `build` 分了三段，
-       * 标题自己带内边距、通栏线不带、内容区再自己带。
-       * 这与书架页头部是同一套结构，三个主 Tab 的分隔线因此完全对齐。
+       * 所以它们不能共处一个带内边距的容器里：本 `build` 分了三段。
        */
-      Column() {
+      Column({ space: 5 }) {
         Text('统计')
           .fontSize(AppTheme.FONT_TITLE)
           .fontWeight(FontWeight.Bold)
           .fontColor(AppColor.textPrimary)
           .letterSpacing(AppTheme.TRACK_TITLE)
           .width('100%')
+
+        Text(this.todayCaption())
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .letterSpacing(0.5)
+          .width('100%')
       }
+      .alignItems(HorizontalAlign.Start)
       .width('100%')
       .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_L })
 
@@ -144,8 +154,9 @@ export struct StatsPage {
         .justifyContent(FlexAlign.Center)
       } else {
         Scroll() {
-          Column({ space: AppTheme.GAP_L }) {
+          Column() {
             this.buildLede()
+            this.buildSectionTitle()
             this.buildRecentBars()
             this.buildLedger()
           }
@@ -156,7 +167,7 @@ export struct StatsPage {
         .padding({
           left: AppTheme.PAGE_PADDING,
           right: AppTheme.PAGE_PADDING,
-          top: AppTheme.GAP_M,
+          top: AppTheme.GAP_L,
           bottom: AppTheme.GAP_L
         })
         .scrollBar(BarState.Off)
@@ -168,96 +179,145 @@ export struct StatsPage {
     .backgroundColor(AppColor.bgPage)
   }
 
+  /** 页头日期副标题："2025 年 6 月 12 日 · 星期四" */
+  private todayCaption(): string {
+    const d: Date = new Date();
+    return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日 · ${WEEKDAY_NAMES[d.getDay()]}`;
+  }
+
   /**
-   * 主数值：今天读了多久。
+   * 主数值 + 右侧两行眉标（效果稿的 lede 结构）。
    *
-   * ⚠️ 数字与单位分开渲染：数字 54vp、单位衬线 17vp 各自取色，
-   * 比"塞在一个字符串里靠字号统一"干净 —— 单位小一号是排印惯例。
-   * `humanizeDuration` 的输出格式（"X时Y分"）在这里拆开。
+   * ⚠️ 数字与单位**交替渲染**："1时 24 分" = 数字(大) + 单位(小) + 数字(大) + 单位(小)，
+   * 四个 `Text` 底部对齐 —— 效果稿里"时/分"小一号缀在数字后是排印惯例。
+   * ⚠️ 右侧两行：「今 日」眉标 + 「比昨天多/少 X 分」（无昨日数据时只留眉标）。
    */
   @Builder
   buildLede() {
     Row() {
-      Column({ space: 6 }) {
+      // ── 左：1时 24 分 ──────────────────────────────
+      Row({ space: 2 }) {
+        if (this.ledeHours() >= 1) {
+          Text(`${this.ledeHours()}`)
+            .fontSize(54)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppColor.textPrimary)
+            .fontFeature(AppFont.TABULAR)
+            .fontFamily(AppFont.titleFamily())
+          Text('时')
+            .fontSize(17)
+            .fontColor(AppColor.textSecondary)
+            .fontFamily(AppFont.titleFamily())
+            .margin({ left: 2, right: 4, bottom: 8 })
+        }
+
+        Text(`${this.ledeMinutes()}`)
+          .fontSize(54)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(AppColor.textPrimary)
+          .fontFeature(AppFont.TABULAR)
+          .fontFamily(AppFont.titleFamily())
+
+        Text('分')
+          .fontSize(17)
+          .fontColor(AppColor.textSecondary)
+          .fontFamily(AppFont.titleFamily())
+          .margin({ left: 2, bottom: 8 })
+      }
+      .alignItems(VerticalAlign.Bottom)
+      .layoutWeight(1)
+
+      // ── 右：今日 / 比昨天多 X 分 ────────────────────
+      Column({ space: 5 }) {
         Text('今 日')
           .fontSize(11)
           .letterSpacing(2.6)
           .fontColor(AppColor.textHint)
 
-        Row({ space: 2 }) {
-          Text(this.ledeNumber())
-            .fontSize(54)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(AppColor.textPrimary)
+        if (this.diffFromYesterdayText().length > 0) {
+          Text(this.diffFromYesterdayText())
+            .fontSize(AppTheme.FONT_CAPTION)
+            .fontColor(AppColor.accent)
             .fontFeature(AppFont.TABULAR)
-            // 大数字配衬线才有"刊头"的味道；取不到衬线自动回退系统字体
-            .fontFamily(AppFont.titleFamily())
-
-          Text(this.ledeUnit())
-            .fontSize(17)
-            .fontColor(AppColor.textSecondary)
-            .fontFamily(AppFont.titleFamily())
-            .margin({ left: 4, bottom: 8 })
         }
-        .alignItems(VerticalAlign.Bottom)
       }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-
-      // 右下角缀连续天数：今天这一格"读没读"的第二个信号
-      Text(`连续 ${this.summary.continuousDays} 天`)
-        .fontSize(AppTheme.FONT_CAPTION)
-        .fontColor(AppColor.accent)
-        .fontFeature(AppFont.TABULAR)
-        .alignSelf(ItemAlign.End)
-        .padding({ bottom: 10 })
+      .alignItems(HorizontalAlign.End)
     }
     .width('100%')
     .alignItems(VerticalAlign.Bottom)
   }
 
-  /** 主数值的数字部分（"1时24分" → "1:24" 不好读，直接拆"时/分"两段取主段） */
-  private ledeNumber(): string {
-    return `${this.summary.todaySeconds / 3600 >= 1
-      ? Math.floor(this.summary.todaySeconds / 3600)
-      : Math.floor(this.summary.todaySeconds / 60)}`;
+  /** 段标题行：「最近七日 …… 共 6 时 08 分」（效果稿的 sec-title） */
+  @Builder
+  buildSectionTitle() {
+    Row() {
+      Text('最近七日')
+        .fontSize(AppTheme.FONT_SUBTITLE)
+        .fontWeight(FontWeight.Medium)
+        // 段标题落衬线（探测到才有）—— 与全 app 的题字同一套语汇
+        .fontFamily(AppFont.titleFamily())
+        .letterSpacing(1)
+        .fontColor(AppColor.textPrimary)
+        // ⚠️ 标签吃掉剩余宽度，右侧合计才会被顶到右缘
+        .layoutWeight(1)
+
+      Text(`共 ${DateUtil.humanizeDuration(this.summary.weekSeconds)}`)
+        .fontSize(AppTheme.FONT_CAPTION)
+        .fontColor(AppColor.textHint)
+        .fontFeature(AppFont.TABULAR)
+    }
+    .width('100%')
+    .margin({ top: AppTheme.GAP_L, bottom: AppTheme.GAP_M })
+    .alignItems(VerticalAlign.Bottom)
   }
 
-  /** 主数值的单位部分（时 / 分） */
-  private ledeUnit(): string {
-    return this.summary.todaySeconds / 3600 >= 1 ? '时' : '分';
+  // ── 主数值的拆解 ────────────────────────────────────
+
+  private ledeHours(): number {
+    return Math.floor(this.summary.todaySeconds / 3600);
+  }
+
+  private ledeMinutes(): number {
+    return Math.floor((this.summary.todaySeconds % 3600) / 60);
   }
 
   /**
-   * 账目行：最近 7 天 / 连续阅读 / 累计阅读 / 有记录天数。
+   * 与昨天的差值文案（"比昨天多 12 分" / "比昨天少 5 分"）。
+   *
+   * ⚠️ 昨天 = 柱状数组的倒数第二根（bars 按日期升序、最后一根是今天）。
+   * 没有昨天数据（数组不足两根）时返回空串 —— 右侧只留「今 日」眉标，
+   * 不显示"比昨天多 0 分"这种没信息的话。
+   */
+  private diffFromYesterdayText(): string {
+    if (this.bars.length < 2) {
+      return '';
+    }
+    const yesterday: DayBar = this.bars[this.bars.length - 2];
+    const diff: number = this.summary.todaySeconds - yesterday.seconds;
+    if (diff === 0) {
+      return '与昨天持平';
+    }
+    const mins: number = Math.round(Math.abs(diff) / 60);
+    return diff > 0 ? `比昨天多 ${mins} 分` : `比昨天少 ${mins} 分`;
+  }
+
+  /**
+   * 账目行：连续阅读 / 累计阅读 / 有记录天数。
+   *
+   * ⚠️ 「最近 7 天」一项已删（用户要求）：七天合计已经显示在
+   * 段标题「最近七日」的右端，图表也把每天的量画了出来 ——
+   * 再列一行是同一信息第三次出现。
    *
    * ⚠️ 三行**内联写死**，不抽带参 `@Builder` ——
    * 设计文档第 15/41 条：带参 `@Builder` 在同一处 `build()` 里被调多次时
    * 参数会串位；"结构相同、文字不同"的小单元必须逐个内联。
    *
-   * ⚠️ 无卡片、无底色：账目行不需要容器，只有发丝线 ——
+   * ⚠️ 无卡片、无底色：账目行不需要容器，只有发丝线（效果稿如此）——
    * 主数值已经承担了版面重量，这里越轻越好。
    */
   @Builder
   buildLedger() {
     Column() {
-      Row() {
-        Text('最近 7 天')
-          .fontSize(13)
-          .fontColor(AppColor.textSecondary)
-          // ⚠️ 标签必须吃掉剩余宽度，数值才会被顶到右边缘
-          .layoutWeight(1)
-        Text(DateUtil.humanizeDuration(this.summary.weekSeconds))
-          .fontSize(19)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(AppColor.textPrimary)
-          .fontFeature(AppFont.TABULAR)
-      }
-      .width('100%')
-      .padding({ top: 14, bottom: 14 })
-      .alignItems(VerticalAlign.Bottom)
-      .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
-
       Row() {
         Text('连续阅读')
           .fontSize(13)
@@ -313,39 +373,25 @@ export struct StatsPage {
   }
 
   /**
-   * 最近 7 天柱状图。
+   * 最近 7 天柱状图 —— **无卡片包裹**（效果稿：图直接长在纸面上）。
    *
-   * 版面分两段：**绘图区**（含水平网格线与基线）与**标签行**。
+   * 版面分两段：**绘图区**（水平网格线 + 基线 + 柱顶数值）与**标签行**。
    *
    * ⚠️ 为什么把标签拆到绘图区外面：基线必须落在绘图区下沿，
-   * "柱子从这条线长起来"的语义才对（拆开的理由上一版已论证，保留）。
+   * "柱子从这条线长起来"的语义才对。
    *
    * ⚠️ 两段用**同一个 `layoutWeight(1)` 等分方式**，柱与标签因此天然对齐。
-   *
-   * ## 本次改动：加水平网格线 + 柱顶数值
-   *
-   *  - 三道淡网格线（`rule-soft` 用 `divider` 低不透明度近似）把绘图区分成
-   *    四档，柱高有参照 —— 账簿的意象，而不是仪表盘；
-   *  - 柱顶补数值（分钟数，0 显示 "0"）：不用心算柱高。
-   *    数值用 9.5vp 的 hint 色，不与柱子抢；
-   *  - 柱宽 14 → 11。
    */
   @Builder
   buildRecentBars() {
     Column({ space: 6 }) {
-      Text('最近 7 天')
-        .fontSize(AppTheme.FONT_BODY)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(AppColor.textPrimary)
-        .width('100%')
-
       /**
        * 绘图区：网格线画在**柱子之下**（先画）——
        * 网格是背景参照，柱子是数据；反过来柱子会被线"切"。
-       * 基线仍画在**柱子之后**（叠在柱子上），保证是连续的一条。
+       * 基线画在**柱子之后**（叠在柱子上），保证是连续的一条。
        */
       Stack({ alignContent: Alignment.Bottom }) {
-        // ① 水平网格线：三道淡线 + 底部基线位置留空（基线单独画）
+        // ① 水平网格线
         Column() {
           ForEach(this.gridLineKeys(), (_: string, idx: number) => {
             Row()
@@ -373,8 +419,8 @@ export struct StatsPage {
                 .margin({ bottom: 4 })
 
               /**
-               * ⚠️ 今天那根柱子把圆点**挖在柱子内部**（柱顶 = 圆点，`bgCard` 色）：
-               * 兄弟节点写法会把矮柱子顶高、柱底离开基线（上一版论证过，保留）。
+               * ⚠️ 今天那根柱子把圆点**挖在柱子内部**（柱顶 = 圆点，纸面色）：
+               * 兄弟节点写法会把矮柱子顶高、柱底离开基线。
                */
               if (bar.isToday && bar.seconds > 0) {
                 Column() {
@@ -401,7 +447,7 @@ export struct StatsPage {
             .layoutWeight(1)
             .height(PLOT_HEIGHT)
             /**
-             * ⚠️ 柱列改成"数值在柱上方"的纵排：
+             * ⚠️ 柱列"数值在柱上方"的纵排：
              * justifyContent(End) 把"数值 + 柱"压到底部，数值自然浮在柱顶。
              */
             .justifyContent(FlexAlign.End)
@@ -420,10 +466,12 @@ export struct StatsPage {
       .width('100%')
       .height(PLOT_HEIGHT)
 
-      // 标签行：与绘图区同一套等分，因此与柱子逐列对齐
+      // 标签行：与绘图区同一套等分，因此与柱子逐列对齐。
+      // ⚠️ x 轴显示**周几**（用户要求：七天刚好一周，按周算）——
+      // 由日期键现算星期几，今天仍显示朱色「今天」。
       Row({ space: BAR_GAP }) {
         ForEach(this.bars, (bar: DayBar) => {
-          Text(bar.label)
+          Text(bar.isToday ? '今天' : this.weekdayLabel(bar.label))
             .fontSize(10)
             .fontColor(bar.isToday ? AppColor.accent : AppColor.textHint)
             .fontWeight(bar.isToday ? FontWeight.Medium : FontWeight.Normal)
@@ -433,17 +481,29 @@ export struct StatsPage {
         }, (bar: DayBar) => `label_${bar.label}`)
       }
       .width('100%')
-
-      Text(this.barsHint())
-        .fontSize(AppTheme.FONT_CAPTION)
-        .fontColor(AppColor.textHint)
-        .fontFeature(AppFont.TABULAR)
-        .width('100%')
     }
     .width('100%')
-    .padding(AppTheme.GAP_M)
-    .backgroundColor(AppColor.bgCard)
-    .borderRadius(AppTheme.CARD_RADIUS)
+  }
+
+  /**
+   * 日期键（"MM-DD"）→ 周几标签（"周五"）。
+   *
+   * ⚠️ 键只有月和日，补上当前年份拼回完整日期再取 `getDay()`。
+   * 跨年的一周（12-31 → 01-01）里旧年份会算错星期 —— 七天窗口
+   * 最多跨一天，误差仅出现在 12 月最后几天，且只是"周几"的装饰
+   * 信息，可接受；不做跨年特判是为了不把简单的事做复杂。
+   */
+  private weekdayLabel(dateKeyShort: string): string {
+    const parts: string[] = dateKeyShort.split('-');
+    if (parts.length !== 2) {
+      return dateKeyShort;
+    }
+    const year: number = new Date().getFullYear();
+    const date: Date = new Date(year, Number.parseInt(parts[0], 10) - 1, Number.parseInt(parts[1], 10));
+    if (Number.isNaN(date.getTime())) {
+      return dateKeyShort;
+    }
+    return WEEKDAY_NAMES[date.getDay()];
   }
 
   /**
@@ -465,9 +525,17 @@ export struct StatsPage {
    *
    * ⚠️ 0 秒画一根 **2vp 的短横**而不是不画：不画的话那一天在图上就是"空"，
    * 用户分不清"那天没读"与"数据缺失"。一根贴地的短横明确表达"有这一天，值是 0"。
-   * 它的颜色跟柱子一样（今天用 accent），所以"今天还没读"也一眼可见。
+   *
+   * ⚠️ **必须给满格柱留出数值区**（真机实测的溢出）：
+   * 柱列 = 柱顶数值(约 14vp 含间距) + 柱体，而列高只有 `PLOT_HEIGHT`。
+   * 最高一天的柱高若等于 `PLOT_HEIGHT`，"数值 + 柱"就超出容器 ——
+   * `justifyContent(End)` 会把超出的部分从**顶部**裁，柱底被顶到基线以下，
+   * 盖住下方的标签（正是"今天的红柱压住『今天』二字"的原因）。
+   * 满格高度因此封顶为 `PLOT_HEIGHT - 22`（数值 + 间距的预留）。
    */
   private barHeight(seconds: number): number {
+    // 数值文本(9.5vp 行高) + margin(4) 的预留，另加安全余量
+    const maxBarHeight: number = PLOT_HEIGHT - 22;
     if (seconds <= 0) {
       return 2;
     }
@@ -481,17 +549,6 @@ export struct StatsPage {
       return 2;
     }
     // 至少 6vp，让"读过但很少"的日子肉眼可见
-    return Math.max(6, Math.round(seconds / max * PLOT_HEIGHT));
-  }
-
-  private barsHint(): string {
-    let total: number = 0;
-    for (const b of this.bars) {
-      total += b.seconds;
-    }
-    if (total <= 0) {
-      return '最近 7 天还没有阅读记录，去读一会儿吧';
-    }
-    return `7 天共 ${DateUtil.humanizeDuration(total)}（累计 ${this.summary.readingDays} 天有阅读记录）`;
+    return Math.min(maxBarHeight, Math.max(6, Math.round(seconds / max * maxBarHeight)));
   }
 }
