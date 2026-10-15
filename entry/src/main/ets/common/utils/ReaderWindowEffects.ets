@@ -50,19 +50,4 @@ export class ReaderWindowEffects {
       Logger.warn(LogTag.READ, `设置亮度失败（可能被系统策略拒绝）: ${Logger.errText(e as Object)}`);
     }
   }
-
-  /**
-   * 设置是否保持屏幕常亮。
-   *
-   * 阅读时锁屏是真实痛点（读一页想一下就走神、屏幕黑掉），
-   * 所以这是一个"默认关、但很值得开"的选项。
-   */
-  static async applyKeepScreenOn(context: common.Context, keepOn: boolean): Promise<void> {
-    try {
-      const win: window.Window = await window.getLastWindow(context);
-      await win.setWindowKeepScreenOn(keepOn);
-    } catch (e) {
-      Logger.warn(LogTag.READ, `设置常亮失败: ${Logger.errText(e as Object)}`);
-    }
-  }
 }

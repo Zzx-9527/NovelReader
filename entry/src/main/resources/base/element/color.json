@@ -10,31 +10,31 @@
     },
     {
       "name": "accent",
-      "value": "#35597F"
+      "value": "#A8342A"
     },
     {
       "name": "primary",
-      "value": "#1F1F1F"
+      "value": "#191713"
     },
     {
       "name": "on_primary",
-      "value": "#FFFFFF"
+      "value": "#FFF6F0"
     },
     {
       "name": "bg_page",
-      "value": "#FAFAFA"
+      "value": "#F6F2EA"
     },
     {
       "name": "bg_card",
-      "value": "#FFFFFF"
+      "value": "#FFFDF9"
     },
     {
       "name": "cover_bg",
-      "value": "#F0F0F0"
+      "value": "#EFE8D9"
     },
     {
       "name": "cover_text",
-      "value": "#6B6B6B"
+      "value": "#4A4034"
     },
     {
       "name": "on_scrim",
@@ -42,27 +42,27 @@
     },
     {
       "name": "text_primary",
-      "value": "#1F1F1F"
+      "value": "#191713"
     },
     {
       "name": "text_secondary",
-      "value": "#555555"
+      "value": "#514A40"
     },
     {
       "name": "text_hint",
-      "value": "#767676"
+      "value": "#8A8175"
     },
     {
       "name": "divider",
-      "value": "#EAEAEA"
+      "value": "#E2DACB"
     },
     {
       "name": "danger",
-      "value": "#B4432F"
+      "value": "#A8342A"
     },
     {
       "name": "success",
-      "value": "#3D7A4E"
+      "value": "#5A7A5E"
     },
     {
       "name": "mask",

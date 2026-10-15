@@ -16,13 +16,6 @@ import { BookmarkDialog } from '../views/reader/BookmarkDialog';
 import { ReaderSettings } from '../model/ReaderSettings';
 import { TextRun } from '../model/TextRun';
 import { ReaderWindowEffects } from '../common/utils/ReaderWindowEffects';
-/**
- * ⚠️ `KeyCode` **不是全局枚举**，必须显式导入（查 SDK：
- * 它声明在 `@ohos.multimodalInput.keyCode.d.ts`，而 `KeyType` 才是全局的、
- * 在 `component/enums.d.ts` 里）。漏了这一行会编译不过 ——
- * 与 `KeyType` 那种"看着像内置、其实要导入"的情况正好相反。
- */
-import { KeyCode } from '@kit.InputKit';
 
 /**
  * 阅读页（全屏，不显示底部 Tab）。
@@ -820,19 +813,6 @@ struct ReaderPage {
      * （`setWindowLayoutFullScreen(true)`）—— 没有那一步，这里写什么都没用。
      */
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-    /**
-     * 音量键翻页。
-     *
-     * ⚠️ 挂在**根节点**上：`onKeyEvent` 需要节点在焦点链上才能收到按键。
-     * 根节点覆盖整页、一定在链上；挂在某个子节点（比如正文 `Text`）上
-     * 则会因为焦点在别处而**收不到按键** —— 表现是"开了开关也没反应"。
-     *
-     * ⚠️ 处理逻辑里对"菜单已弹出 / 滚动模式 / 开关关闭"一律返回 `false`，
-     * 把事件交回系统 —— 详见 `onReaderKeyEvent` 的三条约束。
-     */
-    .onKeyEvent((event: KeyEvent) => {
-      return this.onReaderKeyEvent(event);
-    })
   }
 
   /**
@@ -1070,63 +1050,6 @@ struct ReaderPage {
     ReaderWindowEffects.applyBrightness(context, settings.brightness).catch(() => {
       // 内部已记日志，这里只是把 Promise 收干净，避免未处理的拒绝
     });
-    ReaderWindowEffects.applyKeepScreenOn(context, settings.keepScreenOn).catch(() => {
-    });
-  }
-
-  /**
-   * 音量键翻页。
-   *
-   * ## 为什么需要它
-   *
-   * `ReaderSettings.volumeKeyPage` 这个开关**早就存在、也早就落盘了**
-   * （见 `SettingsKeys.VOLUME_KEY_PAGE`），但全项目没有任何地方监听按键 ——
-   * 于是它是个"存了但从不生效"的死设置。这里把消费端补上。
-   *
-   * ## 三条约束
-   *
-   * 1. **只在 `volumeKeyPage` 打开、且菜单/设置面板都没弹出时生效**。
-   *    菜单弹出时音量键应该走系统默认行为（调音量），
-   *    否则用户想调音量却翻了页，非常容易误触。
-   * 2. **只在分页模式生效**。滚动模式没有"翻页"这个概念（整章连续滚动），
-   *    按下音量键什么都不该发生，而不是莫名其妙跳一屏。
-   * 3. **返回 true 表示已消费**，阻止事件继续冒泡到系统 ——
-   *    不消费的话会一边翻页一边把系统音量调小，那是双重副作用。
-   *
-   * ⚠️ 键值只认 `KEYCODE_VOLUME_UP` / `KEYCODE_VOLUME_DOWN`；
-   * 其它键一律返回 false，保证返回键、电源键等行为完全不变。
-   */
-  private onReaderKeyEvent(event: KeyEvent): boolean {
-    if (!this.state.settings.volumeKeyPage) {
-      return false;
-    }
-    if (this.state.menuVisible || this.state.settingsVisible) {
-      return false;
-    }
-    if (this.state.settings.pageMode === 'scroll') {
-      return false;
-    }
-    // 只处理按下，避免"抬起"再触发一次（一次按键翻两页）
-    if (event.type !== KeyType.Down) {
-      return false;
-    }
-    const code: number = event.keyCode;
-    /**
-     * ⚠️ 翻页走 `vm.prevPage()` / `vm.nextPage()`，与**左右滑动翻页**
-     * （`buildPageControls` 的 PanGesture）用的是同一对方法：
-     * 它们内部已经处理了"翻到本章首/末页时自动跨章"的逻辑。
-     * 若在这里自己判断页码再跳章，就等于把跨章规则抄第二份 ——
-     * 两处迟早不一致（本项目反复记过这类坑）。
-     */
-    if (code === KeyCode.KEYCODE_VOLUME_UP) {
-      this.vm.prevPage();
-      return true;
-    }
-    if (code === KeyCode.KEYCODE_VOLUME_DOWN) {
-      this.vm.nextPage();
-      return true;
-    }
-    return false;
   }
 
   /**

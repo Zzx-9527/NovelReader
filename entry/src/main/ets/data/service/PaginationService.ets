@@ -34,8 +34,13 @@ export class PaginationService {
    * 修完段间距算法后第一次运行仍是 `cache=HIT`，跑的还是旧结果）。
    *
    * 这与 §4.5 `SCHEMA_BUILD` 是同一类规矩：**算法/结构变了，指纹必须跟着变**。
+   *
+   * 版本史（只记会改变断点结果的）：
+   *  - 11 → **12**：段距设置移除，空白行从"占 0 行"回到"占 1 行"。
+   *    同一份排版参数算出的断点与 11 不同，不提版本号会命中旧缓存，
+   *    表现是"升级后段间距还是旧样子，换个字号才正常"。
    */
-  private static readonly ALGO_VERSION: number = 11;
+  private static readonly ALGO_VERSION: number = 12;
 
   /**
    * 实测分页允许处理的**正文字符数上限**。
@@ -99,9 +104,23 @@ export class PaginationService {
     // 用原始值会算出三个不同的 key、把同一份断点缓存三遍
     // （切字体时白算两次，还多占缓存）。
     const fontFamily: string = ReaderSettings.resolveFontFamily(settings.fontFamily);
+    /**
+     * ⚠️ 指纹里**去掉了 `paragraphSpacing`**（段距设置已移除）。
+     *
+     * 它必须去掉，而且这一条很关键：`layoutKey` 的用途是"排版参数变了才
+     * 重算分页"。留着一个**不再影响排版**的参数在 key 里，
+     * 会让旧缓存全部作废一次（升级后第一次打开每一章都要重排），
+     * 而且此后用户动任何与它相关的东西都会白清一次缓存。
+     *
+     * ⚠️ 同时把 `ALGO_VERSION` 提了一版（见该常量）：分页算法本身
+     * 从"空行占 0 行 + 设置段距"改回"空行占 1 行"，
+     * **同一份排版参数算出的断点与旧版不同** —— 不提版本号会让
+     * 老缓存被当成有效结果直接命中，表现是"升级后段落间距还是旧样子，
+     * 换个字号才正常"。
+     */
     return `v${PaginationService.ALGO_VERSION}_w${w}_h${h}_hx${hx}`
       + `_fs${settings.fontSize}_lh${settings.lineHeight}_`
-      + `ps${settings.paragraphSpacing}_ls${settings.letterSpacing}_`
+      + `ls${settings.letterSpacing}_`
       + `pm${settings.pageMargin}_`
       + `fi${settings.firstLineIndent}_ff${fontFamily}`;
   }
@@ -293,8 +312,6 @@ export class PaginationService {
     const charWidth: number = Math.max(1,
       settings.fontSize * CJK_WIDTH_RATIO + Math.max(0, settings.letterSpacing));
     const charsPerLine: number = Math.max(1, Math.floor(usableWidth / charWidth));
-    // 段落前后的空行（用段距折算成行）
-    const spacingLines: number = Math.max(0, Math.round(settings.paragraphSpacing * 2));
 
     let lineCount: number = 0;
     /**
@@ -338,19 +355,19 @@ export class PaginationService {
      */
     let prevLineOpen: boolean = false;
     /**
-     * 上一行是否是纯空白行。
+     * 段距的语义史（**别再走回头路**）：
      *
-     * ⚠️ 它决定"要不要再补段间距"：**原文已经用空行表达过段间距了，
-     * 就不能再叠加设置里的 paragraphSpacing**。
+     * 1. 原版：`paragraphSpacing` 只在原文**没有**空行时才生效。
+     * 2. 中间版：改成覆盖 —— 空行不占行，段距一律由设置决定。
+     *    失败原因是**量化**：段距只能插整数个空行（`round(ps × 2)`），
+     *    滑块上只有 0.25 一档的有效位置，中间全是死区；
+     *    而 ArkUI 没有段落间距属性（无 `leadingMargin`），做不出连续值。
+     * 3. 现在：**段距设置整个移除**，段落之间的空隙由**原文空行**承担
+     *    （它自己占 1 行，见下面 `wrappedLines`）。
      *
-     * 本项目实测根因：这本 TXT 每段之间本就有空行（渲染时占 1 行），
-     * 而算法又按 `paragraphSpacing` 每段补 1 行 ⇒ 每段凭空多算 1 行。
-     * 图 1 有 8 段，26 − 8 = 18 行，与实测"屏幕只放得下 19 行"几乎完全吻合 ⇒
-     * 算法以为排满了 26 行，其实只用了 18 行，底部于是空一大块。
-     *
-     * 正确语义：**原文有间距就用原文的，原文没有才用设置补**。
+     * 所以 `paragraphSpacing` / `seenContent` 这些中间产物都已删除；
+     * `prevLineOpen` 保留，因为它还服务于**缩进**的"是否段首"判断。
      */
-    let prevLineBlank: boolean = false;
     /**
      * 诊断计数器：记录前若干个物理行的"行数账"。
      *
@@ -368,29 +385,31 @@ export class PaginationService {
 
       const isBlank: boolean = PaginationService.isBlankLine(lineText);
       /**
-       * 纯空白行**占 1 行**（它渲染出来就是一行空白），但**不额外补段距**。
+       * 纯空白行**占 1 行**（渲染出来就是一次实打实的换行）。
        *
-       * ⚠️ 这里纠正过一次判断：曾把空白行算成 0 行，理由是"伪行几乎不占高"。
-       * 但那与渲染事实不符 —— `Text` 里一个 `\n` 就是实打实的一次换行，
-       * 空白行在屏幕上占满一整行。算法少算它，就会以为还能多放，
-       * 结果切给这一页的字超出屏幕、末尾被裁。
+       * ## 语义变过两次，最终回到这里
        *
-       * 现在两侧一致：**空白行 = 1 行，且它就是段间距本身**，
-       * 于是 `paragraphSpacing` 只在"原文没有空行"时才补（见 `needsSpacing`）。
+       * 1. **原版**：空行占 1 行，且"它本身就是段间距"——
+       *    于是设置里的 `paragraphSpacing` 只在原文**没有**空行时才生效。
+       * 2. **中间版（已废弃）**：改成"空行占 0 行、段距一律由设置决定"（覆盖）。
+       *    但段距只能插入**整数**个空行（`round(ps × 2)`），滑块上只有
+       *    0.25 一档的有效位置，**中间全是死区**（用户实测："0~0.2 不变、
+       *    0.2~0.7 不变"）。ArkUI 也没有段落间距属性可用来做连续值。
+       * 3. **现在**：段距设置**整个移除**，空行回到占 1 行 ——
+       *    原文的空行就是段落间距，简单、可见、不需要调。
+       *
+       * ⚠️ 两侧必须一致：渲染端（`ReaderViewModel.indentParagraphHeads`）
+       * 也不再吃掉空行、不再插段距空行。
        */
       const wrappedLines: number = isBlank
         ? 1
         : Math.max(1, Math.ceil(lineText.length / charsPerLine));
       // 新段落的起点 = 本行有内容、且上一行**没有**开着段落。
       // 空白行自己不开段落，因此它前后的两段会被正确识别为两个段首。
+      //
+      // ⚠️ 它现在只服务于**首行缩进**的宽度计算（首行少放两个字），
+      // 不再与段距有关（段距设置已移除）。
       const startsNewParagraph: boolean = !isBlank && !prevLineOpen;
-      /**
-       * 是否要为本段补"设置里的段间距"。
-       *
-       * ⚠️ **原文自带空行时不再补** —— 见 `prevLineBlank` 的说明。
-       * 这是"每页填不满"的直接原因：每段多算 1 行，8 段就少放 8 行。
-       */
-      const needsSpacing: boolean = startsNewParagraph && !prevLineBlank;
 
       if (diagLines < 14) {
         // 把首字符码点也打出来：本项目实测遇到过"字=1 却看不见"的行，
@@ -401,7 +420,6 @@ export class PaginationService {
           : '-';
         diag.push(`[#${diagLines} 字=${lineText.length}${isBlank ? '(空)' : ''}`
           + ` 码=${code} 视觉行=${wrappedLines}`
-          + `${needsSpacing ? '+段距' : ''}`
           + ` 入页前行数=${lineCount} 容量=${capacity()}]`);
         diagLines++;
       }
@@ -421,26 +439,19 @@ export class PaginationService {
       //   于是同一段文字可以横跨两页 —— 页与页之间是"字符偏移"的切分，
       //   而不是"段落边界"的切分，每页也因此能真正填满。
       //
-      // 段间距（spacingLines）作为"额外的空行"参与同一套装箱，
-      // 它同样可以在页边界处被切开 —— 这正是"填满"的必要条件。
-
-      // 段首前要插入的空行数（只在"原文没自带间距"时非 0）
-      let pendingSpacing: number = needsSpacing ? spacingLines : 0;
-
-      // 先消化段距：它本身也可能跨页
-      while (pendingSpacing > 0) {
-        if (lineCount + 1 > capacity()) {
-          // 当前页已满：段距留在下一页头顶，切页点就是本行的起点
-          startNewPage(lineStart);
-        }
-        lineCount += 1;
-        pendingSpacing -= 1;
-      }
+      // ⚠️ **不再有"段距空行"这一步**：段距设置已整个移除，
+      // 段落之间的空隙由**原文的空行**承担（它自己占 1 行，见下）。
 
       if (isBlank) {
-        // 空白行：渲染时占满 1 行，这里也必须算 1 行（两侧口径一致）。
-        // 它同样是"可被页边界切开"的单位 —— 放不下就整体挪到下一页，
-        // 不能让它悬在页尾把正文挤出去。
+        /**
+         * 空白行：**占 1 行**。
+         *
+         * 它渲染出来就是一次实打实的换行、在屏幕上占满一行 ——
+         * 两侧口径必须一致，少算就会以为还能多放，末行被裁。
+         *
+         * 它同时是**可被页边界切开**的单位：放不下就整体挪到下一页，
+         * 不让它悬在页尾把正文挤出去。
+         */
         if (lineCount + 1 > capacity()) {
           startNewPage(lineStart);
         }
@@ -483,8 +494,13 @@ export class PaginationService {
         }
       }
 
+      /**
+       * ⚠️ `prevLineOpen = !isBlank` 保留：`startsNewParagraph` 仍要用它
+       * 判断"上一行有没有开着段落"。空行（`isBlank`）把段落**关掉**，
+       * 于是它后面那行会被识别成新段首 —— 这服务于**首行缩进**的
+       * 宽度计算（首行少放两个字），与段距无关（段距设置已移除）。
+       */
       prevLineOpen = !isBlank;
-      prevLineBlank = isBlank;
       if (isLast) {
         break;
       }
@@ -498,7 +514,7 @@ export class PaginationService {
       `分页算账: 收到w=${contentWidth.toFixed(1)} h=${contentHeight.toFixed(1)}`
         + ` 首页让位=${firstPageExtraHeight.toFixed(1)}`
         + ` | 行高=${lineHeight.toFixed(1)} 每页行数=${linesPerPage}`
-        + ` 首页行数=${firstPageLines} 每行字数=${charsPerLine} 段距行数=${spacingLines}`
+        + ` 首页行数=${firstPageLines} 每行字数=${charsPerLine}`
         + ` | 正文长度=${text.length} 页数=${breaks.length}`
         + ` 首页字数=${breaks.length > 1 ? breaks[1] - breaks[0] : -1}`);
     Logger.info(LogTag.PAGINATION, `分页逐行: ${diag.join(' ')}`);

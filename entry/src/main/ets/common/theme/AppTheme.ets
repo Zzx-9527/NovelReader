@@ -105,7 +105,7 @@ export class AppColor {
  */
 export class AppColorLiteral {
   /** 与 `app.color.text_primary` 的浅色档一致（ActionMenu 只收 string） */
-  static readonly textPrimary: string = '#1F1F1F';
+  static readonly textPrimary: string = '#191713';
   /**
    * 点缀色的字面量形式（值与 `app.color.accent` 的浅色档一致）。
    *
@@ -113,8 +113,8 @@ export class AppColorLiteral {
    * 两处不同步的话，ActionMenu 里的"开始阅读"会和界面上的点缀色对不上。
    * 之所以无法避免这份重复：`Button.color` 只收 `string`，资源引用塞不进去。
    */
-  static readonly accent: string = '#35597F';
-  static readonly danger: string = '#B4432F';
+  static readonly accent: string = '#A8342A';
+  static readonly danger: string = '#A8342A';
 }
 
 /**
@@ -374,22 +374,23 @@ export class ReaderTheme {
     // 全局夜间优先
     const effective: string = appDark ? 'dark' : theme;
     if (effective === 'dark') {
-      t.bg = '#111111';
-      // 正文用 #C8C8C8 而不是纯白：纯白在暗背景上对比过强，长时间阅读刺眼
-      t.text = '#C8C8C8';
-      t.secondary = '#777777';
-      t.barBg = '#F2202020';
+      // 暖黑而不是纯黑：#111111 偏冷，#14110D 与书架的暗色底是同一个家族；
+      // 正文用暖白而不是纯白：纯白在暗背景上对比过强，长时间阅读刺眼
+      t.bg = '#14110D';
+      t.text = '#C8BFAF';
+      t.secondary = '#7A7264';
+      t.barBg = '#F21D1813';
     } else if (effective === 'sepia') {
-      t.bg = '#F5EDE0';
-      t.text = '#3E3226';
+      t.bg = '#F3E9D6';
+      t.text = '#3B2F20';
       t.secondary = '#8A7A66';
-      t.barBg = '#F2F5EDE0';
+      t.barBg = '#F2F3E9D6';
     } else if (effective === 'eye_care') {
       // 低饱和绿：饱和度高的绿反而更累眼
-      t.bg = '#CCE8CF';
-      t.text = '#2B3A2E';
+      t.bg = '#D8E6D4';
+      t.text = '#2A3830';
       t.secondary = '#5F7563';
-      t.barBg = '#F2CCE8CF';
+      t.barBg = '#F2D8E6D4';
     }
     return t;
   }

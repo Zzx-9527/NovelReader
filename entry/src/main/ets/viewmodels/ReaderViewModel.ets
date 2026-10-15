@@ -467,7 +467,7 @@ export class ReaderViewModel {
           + ` 容器=${this.contentWidth.toFixed(0)}x${this.contentHeight.toFixed(0)}`
           + ` 首页让位=${this.firstPageExtraHeight.toFixed(1)}`
           + ` 字号=${this.state.settings.fontSize} 行距=${this.state.settings.lineHeight}`
-          + ` 段距=${this.state.settings.paragraphSpacing}`
+          + ` 字距=${this.state.settings.letterSpacing}`
           + ` 总字数=${fullText.length}`
           + ` 页数=${breaks.length} 首页字数=${firstPageChars}`);
     } finally {
@@ -581,17 +581,48 @@ export class ReaderViewModel {
    */
   private static indentParagraphHeads(pageText: string, indentChars: number,
     startsMidParagraph: boolean): string {
-    if (indentChars <= 0 || pageText.length === 0) {
+    /**
+     * ⚠️ 快路径：没有换行就无事可做（既没有段首、也没有空行）。
+     *
+     * ⚠️ 判据**不能**写成"缩进为 0 就返回"：本函数同时负责**逐行**判断
+     * 段首（跳过空行、跳过续行、跳过已带前导空白的行），
+     * 缩进为 0 只是"补 0 个空格"，但仍然要走一遍逐行逻辑 ——
+     * 否则将来任何"逐行"的装饰都会被这个提前返回静默吃掉。
+     */
+    if (pageText.length === 0 || pageText.indexOf('\n') < 0) {
       return pageText;
     }
-    // 用全角空格拼缩进；不用 String.repeat，避免不同版本的行为差异
-    const indentCount: number = Math.max(1, Math.round(indentChars));
+    /**
+     * 缩进字符数。
+     *
+     * ⚠️ 必须是 `Math.max(0, ...)` 而**不是** `Math.max(1, ...)`：
+     * 后者会把"缩进 0"强行变成 1 个全角空格，**用户把滑块拖到 0 却没反应**
+     * （这正是用户实测反馈的问题之一）。0 是合法值，表示"段首不缩进"。
+     *
+     * ⚠️ 但 `pad` 为空串时不能让 `shouldIndent` 真的生效去拼一个空串 ——
+     * 那虽然结果一样（拼空串等于没拼），却会白走一遍字符串拼接。
+     * 所以下面用 `indentCount > 0` 一并把它挡住。
+     */
+    const indentCount: number = Math.max(0, Math.round(indentChars));
     let pad: string = '';
     for (let i = 0; i < indentCount; i++) {
       pad += '　';
     }
     let out: string = '';
     let lineStart: number = 0;
+    /**
+     * 上一行是否"开着段落"（有内容的行）。
+     *
+     * ⚠️ 与 `PaginationService.prevLineOpen` 同义：段首的判据是
+     * "本行有内容、且上一行没有开着段落"。
+     *
+     * ⚠️ **段距设置已整个移除**（见 `SettingsPanel` 的说明：ArkUI 没有
+     * 段落间距属性，段距只能插整数个空行 ⇒ 滑块上只有 0.25 一档有效，
+     * 中间全是死区）。所以本函数**不再插入任何段距空行**、
+     * 也**不再吃掉**原文空行 —— 空行原样输出、自己占 1 行，
+     * 段落之间的空隙就由它承担。见下面 `isBlank` 分支的说明。
+     */
+    let prevLineOpen: boolean = false;
     while (lineStart <= pageText.length) {
       const nl: number = pageText.indexOf('\n', lineStart);
       const isLast: boolean = nl < 0;
@@ -600,7 +631,7 @@ export class ReaderViewModel {
       const isFirstLine: boolean = lineStart === 0;
       const isBlank: boolean = ReaderViewModel.isBlankLine(line);
       /**
-       * 三个"不补"条件，都来自实测踩坑：
+       * 三个"不补缩进"条件，都来自实测踩坑：
        *
        * 1. **本页第一行若是续行，不补**。
        *    本页从段落中间开始时，第一行是上一段没写完的部分 ——
@@ -620,8 +651,21 @@ export class ReaderViewModel {
       const skipFirst: boolean = isFirstLine && startsMidParagraph;
       const hasLeadingSpace: boolean = line.length > 0
         && ReaderViewModel.isSpaceChar(line.charCodeAt(0));
-      const shouldIndent: boolean = !isBlank && !skipFirst && !hasLeadingSpace;
+      const shouldIndent: boolean = !isBlank && !skipFirst && !hasLeadingSpace
+        && indentCount > 0;
+
+      /**
+       * ⚠️ **不再有段距逻辑**：段距设置已移除。
+       *
+       * 空行**原样输出**（它自己就是一次换行、占满一行），
+       * 段落之间的空隙因此由**原文的空行**承担 ——
+       * 与 `PaginationService` 的 `wrappedLines = 1`（空行占 1 行）
+       * 严格对应。两侧口径一致是硬要求：不一致就会裁掉正文末尾。
+       */
       out += shouldIndent ? pad + line : line;
+
+      prevLineOpen = !isBlank;
+
       if (isLast) {
         break;
       }
@@ -1090,7 +1134,8 @@ export class ReaderViewModel {
    * 把**渲染文本（`renderedText`）的下标**换算成**原文偏移**。
    *
    * ⚠️ 为什么必须换算：长按选中回调给的 `TextRange` 下标是相对
-   * **渲染出来的那段文字**的，而渲染前做过两步装饰（见 `renderAt`）：
+   * **渲染出来的那段文字**的，而渲染前做过**两步**装饰（见 `renderAt`
+   * 与 `indentParagraphHeads`）：
    *   1. 剥掉页首换行；
    *   2. 给段首补了 `firstLineIndent` 个全角空格。
    * 书签与进度一律以**原文偏移**为准（设计文档铁律 5.1）。
@@ -1278,8 +1323,18 @@ export class ReaderViewModel {
 
     /**
      * 单趟双游标对齐。与 `toOriginalOffset` 是**同一个算法、同一个方向假设**：
-     * 渲染文本只比原文**多**插入字符（段首缩进），从不改写或删除，
+     * 渲染文本只比原文**多**插入字符（段首缩进 + 段距空行），从不改写或删除，
      * 所以两游标字符不同时，一定是渲染侧那个字符是插入的 —— 只推渲染游标。
+     *
+     * ⚠️ 段距空行（`indentParagraphHeads` 插入的 `\n`）会不会被误配成原文的 `\n`？
+     * 不会 —— 但这是**依赖插入位置**的，值得写清楚为什么：
+     * 插入发生在"某个段落的**第一行之前**"，而此刻游标已经走过了上一行末尾那个
+     * `\n`（它在上一轮就被消费掉了），于是插入的 `\n` 面对的是该段的**首字符**
+     * （不是 `\n`），必然判为不同 ⇒ 被正确识别成插入字符。
+     *
+     * 反过来说：**若将来把段距改成插在"行尾之后"**，插入的 `\n` 就会撞上原文
+     * 那个 `\n` 而被判成"匹配"，两个游标从此错位一格、整页高亮全部偏一位。
+     * 改插入位置时**必须**回来重看这一条。
      *
      * ⚠️ 循环条件写成两个独立的 `while` 边界判断、不用 `break`：
      * 用 `break` 时"最后一次相等推进"可能来不及记账，

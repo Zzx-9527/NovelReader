@@ -18,9 +18,36 @@ export class ReaderSettings {
    */
   fontFamily: string = 'system';
   lineHeight: number = AppConstants.DEFAULT_LINE_HEIGHT;
-  paragraphSpacing: number = AppConstants.DEFAULT_PARAGRAPH_SPACING;
+  /**
+   * ⚠️ **段间距字段已删除**（原 `paragraphSpacing`）。
+   *
+   * 原因不是"不重要"，而是**做不出可用的连续值**：ArkUI 没有段落间距属性
+   * （无 `leadingMargin` / `paragraphSpacing`，`Span` 也没有 margin/padding），
+   * 段距只能靠"插入整数个空行"实现 ⇒ 滑块上只有 `round(ps × 2)` 个
+   * 有效档位（0.25 一档），中间全是**死区**（用户实测：
+   * "0~0.2 不变、0.2~0.7 不变"，就是量化造成的）。
+   *
+   * 所以段落之间的空隙**回到由原文空行承担**：它自己占 1 行，
+   * 简单、可见，不需要也不该有一个调不动的旋钮。
+   *
+   * ⚠️ 与 `firstLineIndent` 的区别值得注意：那个字段**保留**了，
+   * 因为它仍在参与分页与渲染；而段距**不再参与任何计算**，
+   * 留着它只会让人以为还有这个设置。**判据：字段是否还有消费者。**
+   */
   pageMargin: number = AppConstants.DEFAULT_PAGE_MARGIN;
   letterSpacing: number = 0;
+  /**
+   * 段首缩进（字）。
+   *
+   * ⚠️ **已不是可调设置**（用户要求移除）：中文正文的段首缩进几乎总是两个字，
+   * 做一个永远不会被动的滑块只是占地方。现在它**固定为默认值**，
+   * 但仍参与三处计算（分页的每行字数、渲染补缩进、`layoutKey` 指纹），
+   * 所以字段**必须保留** —— 删掉它这三处就都失去依据了。
+   *
+   * ⚠️ 也**不再从 Preferences 读/写**（见 `SettingsService`）：
+   * 它现在是个常量，落盘一个永远不会变的值没有意义，
+   * 还会让"改了哪里、为什么没生效"变得难查。
+   */
   firstLineIndent: number = AppConstants.DEFAULT_FIRST_LINE_INDENT;
 
   /**
@@ -58,20 +85,6 @@ export class ReaderSettings {
   pageMode: string = 'scroll';
   /** 'light' | 'dark' | 'sepia' | 'eye_care' */
   theme: string = 'light';
-  /**
-   * 阅读时保持屏幕常亮。
-   *
-   * ⚠️ 它由阅读页在**进入页面**与**每次改动**时应用到窗口
-   * （见 `ReaderWindowEffects.applyKeepScreenOn`）。
-   */
-  keepScreenOn: boolean = false;
-  /**
-   * 音量键翻页。
-   *
-   * ⚠️ 只在**分页模式**、且菜单未弹出时生效（见 `ReaderPage.onReaderKeyEvent`）。
-   * 滚动模式没有"翻页"概念，按音量键应走系统默认行为。
-   */
-  volumeKeyPage: boolean = false;
   /**
    * 屏幕亮度：**-1 表示跟随系统**，0~1 为手动值。
    *

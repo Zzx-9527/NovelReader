@@ -255,6 +255,8 @@ export struct BookShelfPage {
             .fontSize(AppTheme.FONT_TITLE)
             .fontWeight(FontWeight.Bold)
             .fontColor(AppColor.textPrimary)
+            // 标题落衬线（探测到才有）：与书名、分组名同一套题字语汇
+            .fontFamily(AppFont.titleFamily())
             .letterSpacing(AppTheme.TRACK_TITLE)
 
           if (this.shelfCountText().length > 0) {
@@ -270,17 +272,19 @@ export struct BookShelfPage {
         .layoutWeight(1)
 
         /**
-         * 「导入」按钮：**中性填充**，不是点缀色。
+         * 「导入」：**朱色文字动作**，不是实心按钮。
          *
-         * ⚠️ `fontColor` 必须显式设成 `onPrimary`：`Button` 默认字色是白色，
-         * 深色模式下 `primary` 接近白色，不设就"白底白字"看不见。
+         * ⚠️ 从实心 `primary` 按钮降级为文字动作的理由：操作行改成
+         * 朱色文字语汇后（见②），「导入」再保留实心底就是这一屏
+         * 最重的元素 —— 而导入是低频动作，不该比"继续阅读"更重。
+         * 三个动作统一"朱色文字 + 8vp 热区"，主次交给「继续阅读」卡。
          */
-        Button('导入')
+        Text('导入')
           .fontSize(AppTheme.FONT_CAPTION)
-          .height(32)
-          .backgroundColor(AppColor.primary)
-          .fontColor(AppColor.onPrimary)
+          .fontColor(AppColor.accent)
+          .padding({ left: 8, right: 8, top: 8, bottom: 8 })
           .enabled(!this.state.importing)
+          .opacity(this.state.importing ? 0.4 : 1)
           .onClick(() => {
             this.doImport();
           })
@@ -293,61 +297,36 @@ export struct BookShelfPage {
         top: AppTheme.GAP_M
       })
 
-      // ② 操作行：三个**发丝描边胶囊**
-      Row({ space: AppTheme.GAP_S }) {
-        /**
-         * 三个文字操作都是**小面积点缀**，保留主题色。
-         *
-         * ⚠️ 从"裸文字 + 8vp 内边距"改成**1vp 描边胶囊**（30 高、圆角走
-         * `CHIP_RADIUS`）：裸文字没有边界，用户看不出可点范围，
-         * 三个并排时也辨不出是三个独立控件还是一个词组。
-         * 胶囊用 `divider` 描边而不是实心填充 —— 实心会与「导入」抢主次，
-         * 而「导入」才是这一屏的主操作。
-         *
-         * ⚠️ 描边粗细走 `AppTheme.HAIRLINE`：与全局所有线条同源。
-         */
+      /**
+       * ② 操作行：**朱色文字动作**，不再是描边胶囊。
+       *
+       * ⚠️ 从"1vp 描边胶囊"改成裸文字的理由：三个胶囊 + 导入按钮
+       * 把标题区下缘挤成一条"控件带"，描边让每个动作都带着一圈框，
+       * 视觉重量全在框上而不是字上。改成文字动作后，
+       * "可点"由**颜色**（accent，全页唯一彩色）表达，边界由 8vp 热区承担 ——
+       * 与"朱砂只用于小面积"的纪律一致，也更安静。
+       */
+      Row({ space: AppTheme.GAP_L }) {
         Text(this.state.gridMode ? '列表' : '网格')
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(AppColor.accent)
-          .height(AppTheme.CHIP_H)
-          .padding({ left: 12, right: 12 })
-          .border({ width: AppTheme.HAIRLINE, color: AppColor.divider })
-          .borderRadius(AppTheme.CHIP_RADIUS)
+          .padding({ left: 2, right: 8, top: 8, bottom: 8 })
           .onClick(() => {
             this.vm.toggleGridMode();
           })
 
-        Text('排序')
+        Text('排列')
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(AppColor.accent)
-          .height(AppTheme.CHIP_H)
-          .padding({ left: 12, right: 12 })
-          .border({ width: AppTheme.HAIRLINE, color: AppColor.divider })
-          .borderRadius(AppTheme.CHIP_RADIUS)
+          .padding({ left: 2, right: 8, top: 8, bottom: 8 })
           .onClick(() => {
             this.showSortMenu();
           })
 
-        /**
-         * 「＋分组」：新建分组。
-         *
-         * ⚠️ 它必须留在**标题区**这个常驻位置。
-         *
-         * 早期分组入口藏在"分组标签行末尾的「＋ 管理」"里，而那一行现在已经
-         * 整个取消（分组不再作为筛选标签，而是像书一样显示在书架里）——
-         * 如果这里不补上，用户就**没有任何途径新建分组**了。
-         *
-         * ⚠️ 点它直接进"新建"弹窗，不再套一层菜单：
-         * 从标题行进来时用户的意图就是"我要建一个组"，
-         * 中间夹一个「新建/管理」的选择纯属多一步（管理已有分组走长按分组条目）。
-         */
-        Text('＋分组')
+        Text('＋ 新建分组')
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(AppColor.accent)
-          .height(AppTheme.CHIP_H)
-          .padding({ left: 12, right: 12 })
-          .border({ width: AppTheme.HAIRLINE, color: AppColor.divider })
-          .borderRadius(AppTheme.CHIP_RADIUS)
+          .padding({ left: 2, right: 8, top: 8, bottom: 8 })
           .onClick(() => {
             this.openCreateGroupDialog();
           })
@@ -356,8 +335,8 @@ export struct BookShelfPage {
       .padding({
         left: AppTheme.PAGE_PADDING,
         right: AppTheme.PAGE_PADDING,
-        top: AppTheme.GAP_M,
-        bottom: AppTheme.GAP_M
+        top: 0,
+        bottom: AppTheme.GAP_S
       })
 
       // ③ 通栏发丝线

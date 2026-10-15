@@ -47,6 +47,18 @@ export class AppConstants {
    */
   static readonly HIGHLIGHT_RADIUS: number = 2;
 
+  /**
+   * 从「跟随系统」切到「手动」亮度时的起始值（0~1）。
+   *
+   * ⚠️ 必须有这么一个值：`ReaderSettings.brightness` 用 `-1` 表示跟随系统，
+   * 而滑块只能表达 0~1。切到手动时若沿用 `-1`，滑块会拿到一个非法值。
+   *
+   * 取 0.5 而不是 1.0 或 0.0：**切换那一瞬间屏幕观感不该突变** ——
+   * 0.5 接近多数设备的默认亮度，用户切过去只觉得"可以调了"，
+   * 而不是"屏幕怎么突然这么亮/这么暗"。
+   */
+  static readonly DEFAULT_MANUAL_BRIGHTNESS: number = 0.5;
+
   // ---------------------------------------------------------------- 书籍格式
   static readonly FORMAT_TXT: string = 'txt';
   static readonly FORMAT_EPUB: string = 'epub';
@@ -203,10 +215,45 @@ export class AppConstants {
 
   // ---------------------------------------------------------------- 默认排版
   static readonly DEFAULT_FONT_SIZE: number = 18;
-  static readonly DEFAULT_LINE_HEIGHT: number = 1.6;
+  /**
+   * 默认行距。
+   *
+   * ⚠️ 1.6 → 2.0（本次重构）：中文正文在手机窄栏（约 18 字/行）里，
+   * 1.6 的行间呼吸不足，连续读几页容易串行；2.0 一屏少一行
+   * 但连续性明显更好。上限 `MAX_LINE_HEIGHT`(2.4) 仍留有再调大的空间。
+   */
+  static readonly DEFAULT_LINE_HEIGHT: number = 2.0;
   static readonly DEFAULT_PARAGRAPH_SPACING: number = 0.5;
   static readonly DEFAULT_PAGE_MARGIN: number = 16;
+  /**
+   * 段首缩进（字）。
+   *
+   * ⚠️ **它已经不是可调设置**（用户要求移除）：中文正文的段首缩进
+   * 几乎总是两个字，做成滑块只是多一个永远不会被动的控件。
+   * 现在把它**写死成默认值**，但**保留机制** —— `firstLineIndent`
+   * 仍然参与三处：分页的每行字数（首行少放两个字）、渲染时补缩进字符、
+   * 以及 `layoutKey` 指纹。删掉字段本身会让这三处全部失去依据。
+   *
+   * 判据：**移除的是"可调性"，不是"能力"**。将来若要重新开放，
+   * 把 `ReaderSettings` 里那个字段接回界面即可。
+   */
   static readonly DEFAULT_FIRST_LINE_INDENT: number = 2;
+
+  // ---------------------------------------------------------------- 字号范围
+  /**
+   * 正文字号的可调范围（vp）与步长。
+   *
+   * ⚠️ 从"8 个离散档位"改成滑块后，必须给出连续范围：
+   *  - 下限 14：再小读不动（也是原档位的最小值）；
+   *  - 上限 30：再大一屏放不下几个字（原档位的最大值）；
+   *  - 步长 **1**：字号每变 1vp 都会触发一次重排 + 重新分页，
+   *    步长太小（如 0.5）会让拖动过程中疯狂重算。
+   *    但真正防抖动的是"松手才提交"（见 `SettingsPanel`），
+   *    步长只决定可选的粒度。
+   */
+  static readonly MIN_FONT_SIZE: number = 14;
+  static readonly MAX_FONT_SIZE: number = 30;
+  static readonly FONT_SIZE_STEP: number = 1;
 
   // ---------------------------------------------------------------- 排版可调范围
   /**

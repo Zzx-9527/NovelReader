@@ -28,8 +28,7 @@ import { FileUtil } from '../../common/utils/FileUtil';
  *
  * ⚠️ 本组件**不决定自己的尺寸**：它一律 `width('100%').height('100%')`，
  * 由外层容器给尺寸。这样网格（`aspectRatio(3/4)`）、列表（48×64）、
- * 继续阅读卡（56×76）三种尺寸共用同一份实现，不需要为尺寸传参 ——
- * 传参版本会立刻遇到"同一个 `@Builder` 在一处 build 里被多尺寸调用"的坑。
+ * 继续阅读卡（56×76）三种尺寸共用同一份实现，不需要为尺寸传参。
  */
 @Component
 export struct BookCover {
@@ -45,6 +44,23 @@ export struct BookCover {
    * 封面再显示一次是重复信息（而这正是设计文档禁止的"两处显示同一信息"）。
    */
   @Prop compact: boolean = false;
+  /**
+   * 首字字号的**显式覆盖**；0 表示用默认（网格 27 / 紧凑 20）。
+   *
+   * ⚠️ 只有分组封面（`GroupCover`）用它：格子只有约 50×70，
+   * 默认的 20~27vp 大字会把格子撑满（真机实测"两个大字顶满格子"），
+   * 14vp 才是格子里的合适量级。书架上的正常封面**不要传**这个参数 ——
+   * 字号口径仍由 compact 推导，避免出现第三套默认值。
+   */
+  @Prop glyphSize: number = 0;
+
+  /** 首字实际字号：显式覆盖优先，否则按 compact 推导 */
+  private glyphFontSize(): number {
+    if (this.glyphSize > 0) {
+      return this.glyphSize;
+    }
+    return this.compact ? 20 : 27;
+  }
 
   /** 进度百分比文本；0% 时返回空串，调用方不渲染 */
   private percentText(): string {
@@ -70,8 +86,7 @@ export struct BookCover {
        *
        * ⚠️ 用 `Row`（书脊 + 内容两列）而**不是**把书脊做成 `Stack` 里
        * 一个 `position` 定位的浮层：`Row` 让"内容区 = 封面宽 − 3vp"由布局
-       * 自动算出，首字因此真正居中于**可见的书面**；用绝对定位则要自己
-       * 减那 3vp，一旦书脊宽度变了就会偏。
+       * 自动算出，首字因此真正居中于**可见的书面**。
        */
       Row() {
         // ① 书脊：低不透明度的点缀色，读作"书的厚度"
@@ -87,13 +102,12 @@ export struct BookCover {
          * ⚠️ `Stack({ alignContent: Alignment.TopEnd })` 是刻意选的：
          * 内层的 `Column` 铺满 100%×100% 并**自己**居中首字，
          * 所以 `alignContent` 对它不起作用；真正受它影响的只有右上角
-         * 那个百分比文本 —— 用 `TopEnd` 一句话就把它钉在右上角，
-         * 不必写 `position({ x: 封面宽 − 文字宽 })` 这种必须知道尺寸的定位。
+         * 那个百分比文本 —— 用 `TopEnd` 一句话就把它钉在右上角。
          */
         Stack({ alignContent: Alignment.TopEnd }) {
           Column({ space: this.compact ? 0 : 5 }) {
             Text(this.label)
-              .fontSize(this.compact ? 20 : 27)
+              .fontSize(this.glyphFontSize())
               .fontWeight(FontWeight.Bold)
               .fontColor(AppColor.coverText)
               // 衬线（探测到才有）+ 字距 —— "书卷气"的两个来源，见 AppFont 说明

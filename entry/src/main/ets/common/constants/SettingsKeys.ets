@@ -17,10 +17,29 @@ export class SettingsKeys {
   static readonly FONT_SIZE: string = 'font_size';
   static readonly FONT_FAMILY: string = 'font_family';
   static readonly LINE_HEIGHT: string = 'line_height';
-  static readonly PARAGRAPH_SPACING: string = 'paragraph_spacing';
+  /**
+   * ⚠️ 已废弃、**刻意保留**的键名：`paragraph_spacing`。
+   *
+   * 段距设置已整个移除（原因见 `SettingsPanel`：ArkUI 没有段落间距属性，
+   * 段距只能插整数个空行 ⇒ 滑块上只有 0.25 一档有效、中间全是死区）。
+   * 段落之间的空隙现在由**原文空行**承担。
+   *
+   * **不要删这一行、也不要复用这个名字**：老用户的 Preferences 里可能
+   * 还留着这个键，将来拿它做别的设置会与历史数据撞车。
+   */
+  static readonly PARAGRAPH_SPACING_DEPRECATED: string = 'paragraph_spacing';
   static readonly PAGE_MARGIN: string = 'page_margin';
   static readonly LETTER_SPACING: string = 'letter_spacing';
-  static readonly FIRST_LINE_INDENT: string = 'first_line_indent';
+  /**
+   * ⚠️ 已废弃、**刻意保留**的键名：`first_line_indent`。
+   *
+   * 段首缩进已改成固定值（见 `AppConstants.DEFAULT_FIRST_LINE_INDENT`），
+   * 不再读写。**但不要删这一行** —— 老用户的 Preferences 里可能还留着
+   * 这个键，删掉常量只是让新代码不再引用它，不影响旧数据；
+   * 保留注释是为了**下一个人知道"这个名字被用过"**，
+   * 免得将来又拿它做别的设置，与历史数据撞车。
+   */
+  static readonly FIRST_LINE_INDENT_DEPRECATED: string = 'first_line_indent';
 
   // ---------------------------------------------------------------- 显示
   static readonly PAGE_MODE: string = 'page_mode';
@@ -38,8 +57,6 @@ export class SettingsKeys {
    * 由菜单底栏的"夜间"按钮切换（见 `ThemeApplier`）。
    */
   static readonly APP_THEME_MODE: string = 'app_theme_mode';
-  static readonly KEEP_SCREEN_ON: string = 'keep_screen_on';
-  static readonly VOLUME_KEY_PAGE: string = 'volume_key_page';
   static readonly BRIGHTNESS: string = 'brightness';
 
   // ---------------------------------------------------------------- 书架

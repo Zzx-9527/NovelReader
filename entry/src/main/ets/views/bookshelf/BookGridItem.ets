@@ -55,6 +55,10 @@ export struct BookGridItem {
       .clip(true)
       .backgroundColor(AppColor.coverBg)
 
+      /**
+       * 书名：**居中**（用户要求）—— 与封面的居中首字同一条中轴，
+       * 网格里三列的名字都落在各自列的中心，扫读时是对齐的。
+       */
       Text(this.book.title)
         .fontSize(AppTheme.FONT_CAPTION)
         .fontColor(AppColor.textPrimary)
@@ -63,6 +67,7 @@ export struct BookGridItem {
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
+        .textAlign(TextAlign.Center)
     }
     .width('100%')
     .onClick(() => {

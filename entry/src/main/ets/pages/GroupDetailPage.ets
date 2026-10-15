@@ -5,6 +5,7 @@ import { RouteName, RouteParam } from '../model/RouteParam';
 import { BookShelfViewModel } from '../viewmodels/BookShelfViewModel';
 import { ShelfRefreshRegistry } from '../viewmodels/ShelfRefreshRegistry';
 import { AppColor, AppColorLiteral, AppTheme } from '../common/theme/AppTheme';
+import { AppFont } from '../common/theme/AppFont';
 import { Logger } from '../common/utils/Logger';
 import { LoadingView } from '../views/common/LoadingView';
 import { EmptyView } from '../views/common/EmptyView';
@@ -422,6 +423,19 @@ struct GroupDetailPage {
           })
 
         Blank()
+
+        /**
+         * 「N 本」计数：**贴在头部右侧**（用户要求移到右边）。
+         *
+         * ⚠️ 放在「更多」按钮左侧而不是标题下面：标题保持单行居中，
+         * 计数作为一个安静的数字靠右，与返回/更多两个控件同排 ——
+         * 头部一行说完"这里有什么、有多少"。
+         */
+        Text(`${this.books.length} 本`)
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .fontFeature(AppFont.TABULAR)
+          .padding({ left: 4, right: 2 })
 
         /**
          * 「更多」：用 `more.svg`（三点竖排），`fillColor` 染色跟随主题。

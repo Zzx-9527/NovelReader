@@ -1,8 +1,10 @@
 import { AppColor, AppTheme } from '../common/theme/AppTheme';
 import { AppFont } from '../common/theme/AppFont';
+import { AppThemeMode, ThemeApplier } from '../common/theme/ThemeApplier';
 import { RouteName } from '../model/RouteParam';
 import { PageCacheRepository } from '../data/repository/PageCacheRepository';
 import { BookRepository } from '../data/repository/BookRepository';
+import { SettingsService } from '../data/service/SettingsService';
 import { IconChevron } from '../views/common/Marks';
 
 /**
@@ -28,9 +30,22 @@ import { IconChevron } from '../views/common/Marks';
 export struct ProfilePage {
   @State cacheCount: number = 0;
   @State clearing: boolean = false;
+  /**
+   * 应用级主题模式（0 跟随系统 / 1 浅色 / 2 夜间）。
+   *
+   * ⚠️ 与阅读页的 `ReaderTheme`（阅读设置面板里的四档背景）是两件独立的事。
+   * 这里只是给「外观」分段控件一个高亮来源；切换动作见 `onThemeModePick`。
+   */
+  @State themeMode: number = AppThemeMode.FOLLOW_SYSTEM;
 
   aboutToAppear(): void {
     this.loadCacheInfo();
+    // 同步读一次持久化值做高亮（失败按跟随系统 —— 与 ThemeApplier 的降级一致）
+    try {
+      this.themeMode = SettingsService.getInstance().getAppThemeMode();
+    } catch (e) {
+      this.themeMode = AppThemeMode.FOLLOW_SYSTEM;
+    }
   }
 
   private async loadCacheInfo(): Promise<void> {
@@ -109,6 +124,77 @@ export struct ProfilePage {
                   .showToast({ message: '设置页尚未实现' });
               });
           })
+
+          /**
+           * 「外观」行：应用级深浅色的**常驻入口**。
+           *
+           * ⚠️ 为什么加这一行：现在切深浅色只有阅读页菜单底栏里那个
+           * 「夜间」按钮一条路 —— 用户不进书、不点屏幕中间，
+           * 在"我的"里找不到任何入口。三档分段控件
+           * （跟随系统 / 浅色 / 夜间）把这件事放到它该在的地方。
+           *
+           * ⚠️ 分段控件**内联两个 Text**，不抽带参 `@Builder`：
+           * 设计文档第 15/41 条（串位）。
+           */
+          Row() {
+            Column({ space: 2 }) {
+              Text('外观')
+                .fontSize(AppTheme.FONT_BODY)
+                .fontColor(AppColor.textPrimary)
+                .width('100%')
+              Text('跟随系统 / 常亮浅色 / 常亮夜间')
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(AppColor.textHint)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Row() {
+              Text('系统')
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(this.themeMode === AppThemeMode.FOLLOW_SYSTEM
+                  ? AppColor.onPrimary : AppColor.textHint)
+                .backgroundColor(this.themeMode === AppThemeMode.FOLLOW_SYSTEM
+                  ? AppColor.primary : Color.Transparent)
+                .textAlign(TextAlign.Center)
+                .padding({ left: 12, right: 12, top: 5, bottom: 5 })
+                .borderRadius(AppTheme.CHIP_RADIUS - 2)
+                .onClick(() => {
+                  this.onThemeModePick(AppThemeMode.FOLLOW_SYSTEM);
+                })
+
+              Text('浅色')
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(this.themeMode === AppThemeMode.LIGHT
+                  ? AppColor.onPrimary : AppColor.textHint)
+                .backgroundColor(this.themeMode === AppThemeMode.LIGHT
+                  ? AppColor.primary : Color.Transparent)
+                .textAlign(TextAlign.Center)
+                .padding({ left: 12, right: 12, top: 5, bottom: 5 })
+                .borderRadius(AppTheme.CHIP_RADIUS - 2)
+                .onClick(() => {
+                  this.onThemeModePick(AppThemeMode.LIGHT);
+                })
+
+              Text('夜间')
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(this.themeMode === AppThemeMode.DARK
+                  ? AppColor.onPrimary : AppColor.textHint)
+                .backgroundColor(this.themeMode === AppThemeMode.DARK
+                  ? AppColor.primary : Color.Transparent)
+                .textAlign(TextAlign.Center)
+                .padding({ left: 12, right: 12, top: 5, bottom: 5 })
+                .borderRadius(AppTheme.CHIP_RADIUS - 2)
+                .onClick(() => {
+                  this.onThemeModePick(AppThemeMode.DARK);
+                })
+            }
+          }
+          .width('100%')
+          .padding(14)
+          .alignItems(VerticalAlign.Center)
+          .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
 
           Row() {
             Column({ space: 2 }) {
@@ -218,10 +304,13 @@ export struct ProfilePage {
       Blank()
 
       /**
-       * 页脚落款。
+       * 页脚落款 —— 版权页的意象。
        *
        * ⚠️ 文案口径与 `SplashPage` 的 `APP_NAME` / `SLOGAN` **必须一致** ——
        * 同一个 App 不能有两种自我描述（见 `SplashPage` 顶部注释）。
+       *
+       * ⚠️ 承诺文案拆成两行居中：压成一行的 21 个字在窄屏上会顶满整宽，
+       * 两行 + 行距比一行 + 字距更好读。
        */
       Column({ space: 9 }) {
         Text('静读')
@@ -243,10 +332,16 @@ export struct ProfilePage {
           .backgroundColor(AppColor.accent)
           .opacity(0.75)
 
-        Text('本地导入 · 离线阅读 · 无广告 · 不上传任何内容')
+        Text('本地导入 · 离线阅读 · 无广告')
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(AppColor.textHint)
           .textAlign(TextAlign.Center)
+
+        Text('不上传任何内容')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+          .textAlign(TextAlign.Center)
+          .margin({ top: -5 })
       }
       .width('100%')
       .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, bottom: 28 })
@@ -255,6 +350,34 @@ export struct ProfilePage {
     .width('100%')
     .height('100%')
     .backgroundColor(AppColor.bgPage)
+  }
+
+  /**
+   * 「外观」分段控件的选择处理。
+   *
+   * ⚠️ 顺序铁律（`ThemeApplier.applyMode` 的注释）：**先 apply 成功、再落盘**。
+   * 反过来会出现"设置存了但没生效，下次启动才变"。
+   *
+   * ⚠️ 失败时高亮**回滚**到原值 —— 状态 UI 必须反映真实生效的状态，
+   * 否则分段控件会停在用户没选中的那一档上。
+   */
+  private onThemeModePick(mode: number): void {
+    if (mode === this.themeMode) {
+      return;
+    }
+    const previous: number = this.themeMode;
+    const ok: boolean = ThemeApplier.applyMode(mode);
+    if (!ok) {
+      this.themeMode = previous;
+      this.getUIContext().getPromptAction().showToast({ message: '切换失败' });
+      return;
+    }
+    this.themeMode = mode;
+    try {
+      SettingsService.getInstance().putAppThemeMode(mode);
+    } catch (e) {
+      // 落盘失败不阻塞：本次会话已生效，下次启动回退到旧值
+    }
   }
 
   private async clearCache(): Promise<void> {

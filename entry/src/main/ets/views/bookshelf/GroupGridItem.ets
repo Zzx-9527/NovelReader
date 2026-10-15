@@ -22,21 +22,15 @@ import { GroupCover } from './GroupCover';
  * 普通成员只在创建时快照，复用时就拿不到新的 `BookGroup` ——
  * 组名改了、数量变了、封面里的书换了都不会更新。
  *
- * ## 本次改动：数量从"黑角标"改成"标签板"
+ * ## 关于「N 本」计数的位置（用户明确要求）
  *
- * 原实现把「3 本」做成右下角的黑底角标（`mask` + `onScrim`）压在 2×2 封面上。
- * 两个问题：① 它是**压在内容上的深色块**，一屏出现两三次之后整片网格变脏；
- * ② 它和书籍封面上的进度角标是同一个视觉元素，于是"分组"和"书"在缩略图上
- * 分不出来 —— 而这两者恰恰是最需要区分的。
- *
- * 现在改成封面**底边的一条标签板**：蓝色（`coverBg`）底 + `coverText` 文字。
- * 于是封面内部天然出现"内容区 / 标签区"两段，与书籍封面（整片纸 + 书脊）
- * 一眼可分。这条板只占 18vp，2×2 的格子从 43×60 变成 43×52 ——
- * 首字字号仍是 14，实测这个尺寸下不会撑爆。
+ * 计数**不在**网格封面上显示（历史版本试过黑角标、底边标签板两种，
+ * 都已移除）：它与组名重复表达"这个组里有什么"，且 9.5vp 的小字
+ * 在网格里几乎读不清。数量的展示职责在**分组详情页**的头部副标题 ——
+ * 那里有整行宽度，一个 13vp 的「N 本」清清楚楚。
  *
  * ⚠️ 刻意**不加描边**：给整格加 `border` 会让它比同一行的书籍格高 2vp，
- * 网格行高取最大值，于是整行会错开 2vp。用"底色分段"而不是"线条"
- * 来表达结构，正好绕开这个几何问题，也不需要新增颜色（`coverBg` 是既有令牌）。
+ * 网格行高取最大值，于是整行会错开 2vp。
  */
 @Component
 export struct GroupGridItem {
@@ -47,34 +41,21 @@ export struct GroupGridItem {
   build() {
     Column({ space: 6 }) {
       Column() {
-        // 上半：2×2 封面格。四边内边距让格子不贴边，读作"文件夹里露出几张封面"
+        /**
+         * 2×2 封面格。
+         *
+         * ⚠️ 四边内边距**均匀 6vp**（原来底部 4 是给标签板让位，板已移除）：
+         * 格子不贴边，读作"文件夹里露出几张封面"。
+         * 「N 本」的计数已挪到**分组详情页**的副标题 —— 封面上的数字
+         * 与组名重复表达同一件事，且 9.5vp 的字在网格里几乎读不清。
+         */
         Column() {
           GroupCover({ books: this.group.coverBooks })
         }
         .width('100%')
-        .layoutWeight(1)
-        .padding({ left: 6, right: 6, top: 6, bottom: 4 })
+        .height('100%')
+        .padding(6)
         .backgroundColor(AppColor.bgCard)
-
-        /**
-         * 下半：标签板。
-         *
-         * ⚠️ 外面套 `Row` 而不是给 `Text` 写 `height` + `textAlign`：
-         * `Text` 在自己被撑高之后文字靠上对齐，看起来是"顶在板上"；
-         * `Row` + `justifyContent/alignItems` 才是确定的垂直居中。
-         */
-        Row() {
-          Text(`${this.group.bookCount} 本`)
-            .fontSize(9.5)
-            .fontColor(AppColor.coverText)
-            // 数量会随整理变化，等宽数字让它在刷新时不会左右微跳
-            .fontFeature(AppFont.TABULAR)
-        }
-        .width('100%')
-        .height(18)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
-        .backgroundColor(AppColor.coverBg)
       }
       .width('100%')
       .aspectRatio(3 / 4)
@@ -82,14 +63,19 @@ export struct GroupGridItem {
       .clip(true)
       .backgroundColor(AppColor.bgCard)
 
-      // 名称：与书名同一位置与字号，保持网格的整齐
+      /**
+       * 名称：与书名同一位置与字号，保持网格的整齐；**居中**（用户要求，
+       * 与 BookGridItem 的书名同一条中轴）；衬线（探测到才有）+ 字距。
+       */
       Text(this.group.name)
         .fontSize(AppTheme.FONT_CAPTION)
         .fontColor(AppColor.textPrimary)
+        .fontFamily(AppFont.titleFamily())
         .letterSpacing(AppTheme.TRACK_NAME)
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
+        .textAlign(TextAlign.Center)
     }
     .width('100%')
     .onClick(() => {

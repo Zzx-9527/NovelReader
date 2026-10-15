@@ -61,6 +61,8 @@ export struct GroupListItem {
           Text(this.group.name)
             .fontSize(AppTheme.FONT_SUBTITLE)
             .fontColor(AppColor.textPrimary)
+            // 衬线（探测到才有）—— 与 BookListItem 的书名同一套题字语汇
+            .fontFamily(AppFont.titleFamily())
             .letterSpacing(AppTheme.TRACK_NAME)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })

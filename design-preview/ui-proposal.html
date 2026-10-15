@@ -1,0 +1,1941 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>静读 · UI 重构效果稿</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   静读 · 界面重构效果稿
+   设计方向：宣纸与朱印（Paper & Vermilion）
+
+   与现版本的区别，一句话：把「安全的灰 + 一个偏冷的蓝」换成
+   「暖宣纸 + 墨 + 一点朱砂」，并让标题一律落到衬线上。
+   主题色从 #35597F（冷钢蓝）改为 #A8342A（朱砂/印泥），
+   底色从 #FAFAFA（冷灰）改为 #F6F2EA（宣纸），
+   正文色从 #1F1F1F（纯灰黑）改为 #191713（带一点暖的墨）。
+
+   这一稿是**静态效果稿**，不是要交付的代码 —— 确认方向后再落到 ArkTS。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── 纸与墨（浅色档）──────────────────────────────────────────── */
+  --paper:      #F6F2EA;   /* 页面底：宣纸 */
+  --paper-deep: #EDE7DC;   /* 下沉区：书脊、槽位 */
+  --card:       #FFFDF9;   /* 卡片：近白，但带一丝暖 */
+  --ink:        #191713;   /* 正文墨色 */
+  --ink-2:      #514A40;   /* 次级文字 */
+  --ink-3:      #8A8175;   /* 提示文字 */
+  --rule:       #E2DACB;   /* 发丝线：暖灰 */
+  --rule-soft:  #EFE9DD;   /* 更轻的分组线 */
+  --seal:       #A8342A;   /* 朱砂：印泥色，唯一的彩色 */
+  --seal-soft:  #C4553F;
+  --seal-wash:  rgba(168, 52, 42, .08);
+  --danger:     #A8342A;
+  --scrim:      rgba(20, 16, 12, .55);
+
+  /* ── 字体 ────────────────────────────────────────────────────────
+     中文衬线在手机上取不到（AppFont.ets 已经论证过，PingFang 没有衬线族），
+     所以真机上「书卷气」靠字距 + 字重 + 题花线；这份效果稿在桌面浏览器里
+     能拿到 Noto Serif SC / 思源宋体，所以衬线的效果会比真机更足一点 ——
+     请按"这是上限"来看。 */
+  --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong",
+           "SimSun", Georgia, serif;
+  --sans:  "HarmonyOS Sans SC", "PingFang SC", "Noto Sans SC",
+           "Microsoft YaHei", sans-serif;
+  --num:   "Iowan Old Style", "Palatino Linotype", Georgia, var(--serif);
+
+  /* ── 版式节奏 ─────────────────────────────────────────────────── */
+  --gap-s: 8px;
+  --gap-m: 12px;
+  --gap-l: 16px;
+  --pad: 18px;
+  --r-card: 14px;
+  --r-item: 9px;
+  --hair: 1px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--sans);
+  background: #E8E2D6;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  padding: 48px 40px 80px;
+  min-height: 100vh;
+  /* 展台本身的底纹：细斜纹，与手机内的宣纸区分开 */
+  background-image:
+    repeating-linear-gradient(45deg, rgba(0,0,0,.014) 0 1px, transparent 1px 7px),
+    radial-gradient(circle at 20% 0%, #F2EDE3 0%, #E4DDD0 60%, #DED6C7 100%);
+}
+
+/* ═══════════════════════════ 展台头部 ═══════════════════════════ */
+
+.stage-head { max-width: 1480px; margin: 0 auto 44px; }
+
+.stage-head .kicker {
+  font-size: 11px;
+  letter-spacing: .34em;
+  text-transform: uppercase;
+  color: #8E8474;
+  margin-bottom: 14px;
+}
+
+.stage-head h1 {
+  font-family: var(--serif);
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  line-height: 1.25;
+  color: #1A1712;
+}
+
+.stage-head h1 em {
+  font-style: normal;
+  color: var(--seal);
+}
+
+.stage-head p {
+  margin-top: 16px;
+  max-width: 760px;
+  font-size: 14px;
+  line-height: 1.85;
+  color: #5E564A;
+}
+
+.stage-head p b { color: #2B2620; font-weight: 600; }
+
+/* 色卡 */
+.swatches {
+  display: flex;
+  gap: 0;
+  margin-top: 28px;
+  border: var(--hair) solid #D5CCBB;
+  border-radius: 10px;
+  overflow: hidden;
+  width: fit-content;
+  background: #FFFDF9;
+}
+.swatch { padding: 12px 18px 13px; border-right: var(--hair) solid #E5DDCE; min-width: 116px; }
+.swatch:last-child { border-right: none; }
+.swatch i {
+  display: block;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  margin-bottom: 9px;
+  border: var(--hair) solid rgba(0,0,0,.12);
+}
+.swatch span { display: block; font-size: 10.5px; letter-spacing: .1em; color: #8E8474; }
+.swatch b { display: block; font-family: var(--num); font-size: 12px; color: #2B2620; margin-top: 3px; letter-spacing: .04em; }
+
+/* ═══════════════════════════ 手机展台 ═══════════════════════════ */
+
+.stage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 56px 48px;
+  align-items: flex-start;
+  justify-content: center;
+  max-width: 1480px;
+  margin: 0 auto;
+}
+
+.slot { width: 390px; }
+
+.slot-label {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-left: 4px;
+}
+.slot-label .n {
+  font-family: var(--num);
+  font-size: 12px;
+  color: var(--seal);
+  letter-spacing: .08em;
+}
+.slot-label .t { font-size: 14.5px; font-weight: 600; color: #2B2620; letter-spacing: .02em; }
+.slot-label .s { font-size: 11.5px; color: #8E8474; }
+
+/* 手机外框 */
+.phone {
+  position: relative;
+  width: 390px;
+  height: 844px;
+  border-radius: 40px;
+  overflow: hidden;
+  background: var(--paper);
+  box-shadow:
+    0 0 0 9px #17140F,
+    0 0 0 10px #3A342A,
+    0 30px 60px -18px rgba(40, 32, 20, .5);
+  display: flex;
+  flex-direction: column;
+  isolation: isolate;
+}
+
+/* 宣纸纹理：极淡的斜向纤维 + 颗粒。真机上不需要（会用纯色），这里只为气氛 */
+.phone::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  opacity: .5;
+  background-image:
+    repeating-linear-gradient(94deg, rgba(120,100,70,.028) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(4deg, rgba(120,100,70,.02) 0 1px, transparent 1px 6px);
+}
+
+/* 状态栏 */
+.statusbar {
+  height: 46px;
+  flex: 0 0 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 26px 0 30px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--ink);
+  position: relative;
+  z-index: 20;
+}
+.statusbar .icons { display: flex; align-items: center; gap: 5px; font-size: 11px; letter-spacing: -.06em; }
+.statusbar .bat {
+  width: 22px; height: 11px;
+  border: 1.4px solid currentColor;
+  border-radius: 3px;
+  position: relative;
+  opacity: .85;
+}
+.statusbar .bat::before {
+  content: ""; position: absolute; left: 1.6px; top: 1.6px; bottom: 1.6px;
+  width: 12px; background: currentColor; border-radius: 1px;
+}
+.statusbar .bat::after {
+  content: ""; position: absolute; right: -3.4px; top: 3px;
+  width: 2px; height: 4px; background: currentColor; border-radius: 0 1px 1px 0;
+}
+
+/* 手势条 */
+.gesture {
+  height: 22px;
+  flex: 0 0 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gesture i { width: 132px; height: 4.5px; border-radius: 3px; background: var(--ink); opacity: .28; }
+
+/* 内容区 */
+.screen { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; z-index: 10; }
+
+/* 页面标题（三个主 Tab 共用：标题 → 通栏发丝线） */
+.page-head { padding: 2px var(--pad) 0; }
+.page-head h2 {
+  font-family: var(--serif);
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  color: var(--ink);
+  line-height: 1.2;
+}
+.page-head .sub {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  letter-spacing: .06em;
+  font-variant-numeric: tabular-nums;
+}
+.full-rule { height: var(--hair); background: var(--rule); margin-top: 14px; flex: 0 0 var(--hair); }
+
+/* 底部 Tab 栏（三个主 Tab 共用）：栏顶发丝线 + 选中短横 + 图标文字 */
+.tabbar {
+  flex: 0 0 auto;
+  display: flex;
+  border-top: var(--hair) solid var(--rule);
+  background: var(--card);
+  padding-bottom: 6px;
+}
+.tab { flex: 1; cursor: pointer; padding-top: 0; }
+.tab .mark { height: 3px; width: 100%; display: flex; justify-content: center; }
+.tab .mark::before { content: ""; width: 18px; height: 2px; border-radius: 1px; background: transparent; margin-top: 0; }
+.tab.on .mark::before { background: var(--seal); }
+.tab .ti {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding-top: 4px;
+  color: var(--ink-3);
+  transition: color .18s;
+}
+.tab .ti svg { width: 20px; height: 20px; }
+.tab .ti span { font-size: 10.5px; letter-spacing: .14em; }
+.tab.on .ti { color: var(--seal); }
+.tab.on .ti span { font-weight: 600; }
+
+/* ═════════════════════ ① 书架 · 网格 ═════════════════════ */
+
+.shelf-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 13px var(--pad) 15px;
+}
+.txt-btn {
+  font-size: 12.5px;
+  letter-spacing: .08em;
+  color: var(--seal);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 0;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: border-color .18s;
+}
+.txt-btn:hover { border-bottom-color: rgba(168,52,42,.4); }
+.txt-btn .plus { font-size: 14px; line-height: 1; margin-top: -1px; }
+.shelf-actions .spacer { flex: 1; }
+
+/* 继续阅读：一条书签 */
+.continue {
+  margin: 0 var(--pad) 20px;
+  padding: 15px 16px 14px;
+  background: var(--card);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-card);
+  display: flex;
+  gap: 14px;
+  position: relative;
+  box-shadow: 0 1px 0 rgba(120,100,70,.05), 0 8px 20px -14px rgba(80,64,40,.5);
+}
+/* 左侧朱色标线：说"这是当前在读" */
+.continue::before {
+  content: "";
+  position: absolute; left: 0; top: 14px; bottom: 14px;
+  width: 2.5px;
+  background: var(--seal);
+  border-radius: 0 2px 2px 0;
+}
+.continue .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.continue .eyebrow {
+  font-size: 10px;
+  letter-spacing: .26em;
+  color: var(--seal);
+  margin-bottom: 7px;
+}
+.continue .t {
+  font-family: var(--serif);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.continue .c {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.continue .railrow {
+  margin-top: 13px;
+  display: flex; align-items: center; gap: 10px;
+}
+.rail { flex: 1; height: 2px; background: var(--rule); position: relative; border-radius: 2px; }
+.rail i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--seal); border-radius: 2px; }
+.rail i::after {
+  content: ""; position: absolute; right: -3px; top: 50%; transform: translateY(-50%);
+  width: 6px; height: 6px; border-radius: 50%; background: var(--seal);
+}
+.continue .pct { font-family: var(--num); font-size: 11px; color: var(--ink-3); }
+.continue .btn {
+  align-self: center;
+  flex: 0 0 auto;
+  background: var(--seal);
+  color: #FFF6F0;
+  font-size: 12.5px;
+  letter-spacing: .16em;
+  padding: 9px 15px 9px 17px;
+  border-radius: 4px;
+  border: none;
+  font-family: var(--sans);
+  cursor: pointer;
+  box-shadow: 0 6px 14px -8px rgba(168,52,42,.85);
+}
+.continue .foot {
+  margin-top: 10px; font-size: 10.5px; color: var(--ink-3);
+  display: flex; align-items: center; gap: 6px;
+}
+
+/* 书格 */
+.grid-wrap { flex: 1; min-height: 0; overflow: hidden; padding: 0 var(--pad); }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 22px 14px;
+}
+.book { display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
+
+/* ── 封面：仿「线装书」封面 ──────────────────────────────────────
+   四层：① 左侧书脊（朱砂细线）② 内圈双线框 ③ 居中的书名首字 ④ 底部进度发丝
+   这是整个界面性格的主要来源 —— 一屏九格，它必须同时"安静"和"有辨识度"。 */
+.cover {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  background: linear-gradient(160deg, #F2ECE0 0%, #E9E1D2 100%);
+  border-radius: 3px 9px 9px 3px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    0 1px 2px rgba(90,72,44,.10),
+    0 10px 22px -14px rgba(90,72,44,.7);
+}
+/* ① 书脊 */
+.cover::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3.5px;
+  background: linear-gradient(180deg, var(--seal) 0%, #8E2A22 100%);
+  opacity: .78;
+}
+/* 内圈双线框 */
+.cover .frame {
+  position: absolute;
+  inset: 12px 11px 12px 15px;
+  border: var(--hair) solid rgba(90,72,44,.24);
+  border-radius: 1px;
+}
+.cover .frame::after {
+  content: "";
+  position: absolute; inset: 3px;
+  border: var(--hair) solid rgba(90,72,44,.13);
+}
+.cover .glyph {
+  position: relative;
+  font-family: var(--serif);
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  color: #4A4034;
+  text-indent: .1em; /* 补掉字距在末字后留的空隙，视觉居中 */
+  line-height: 1;
+}
+.cover .glyph.small { font-size: 30px; }
+/* 题花线 */
+.cover .glyph::after {
+  content: "";
+  display: block;
+  width: 18px; height: 1px;
+  background: rgba(90,72,44,.4);
+  margin: 8px auto 0;
+}
+/* 底部进度发丝 */
+.cover .crail {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 2px; background: rgba(90,72,44,.14);
+}
+.cover .crail i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--seal); opacity: .9; }
+/* 未读：不画轨道 */
+
+/* 分组封面：另一套语汇 —— 中性、无朱线，左上角一个"册"标记 */
+.cover.group {
+  background: linear-gradient(160deg, #E7E0D2 0%, #DCD4C4 100%);
+}
+.cover.group::before { background: linear-gradient(180deg, #6E6555 0%, #4E463A 100%); opacity: .5; }
+.cover.group .glyph { color: #3E382E; font-size: 27px; }
+.cover .count {
+  position: absolute; left: 0; right: 0; bottom: 9px;
+  text-align: center;
+  font-size: 9.5px; letter-spacing: .14em; color: rgba(74,64,52,.62);
+  font-variant-numeric: tabular-nums;
+}
+/* 右上角百分比 */
+.cover .pctc {
+  position: absolute; top: 9px; right: 10px;
+  font-family: var(--num); font-size: 9.5px; color: rgba(74,64,52,.62);
+  letter-spacing: .02em;
+}
+.cover .sealbox {
+  position: absolute; top: 8px; left: 8px;
+  font-family: var(--serif); font-size: 8.5px; line-height: 1;
+  color: #FFF3EC; background: var(--seal);
+  padding: 3px 3.5px 3px 4.5px; border-radius: 2px;
+  letter-spacing: .06em;
+}
+
+.book .name {
+  font-family: var(--serif);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: .04em;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 36px;
+}
+.book .sub { font-size: 10px; color: var(--ink-3); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+
+/* ═════════════════════ ② 书架 · 列表 ═════════════════════ */
+
+.listcard {
+  margin: 20px var(--pad) 0;
+  background: var(--card);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+.lrow { display: flex; gap: 14px; padding: 14px 15px; align-items: center; position: relative; }
+.lrow + .lrow::before {
+  content: ""; position: absolute; left: 15px; right: 0; top: 0;
+  height: var(--hair); background: var(--rule-soft);
+}
+.lrow .cover { flex: 0 0 50px; width: 50px; height: 67px; aspect-ratio: auto; border-radius: 2px 7px 7px 2px; }
+.lrow .cover .frame { inset: 8px 7px 8px 11px; }
+.lrow .cover .glyph { font-size: 21px; }
+.lrow .cover .glyph::after { width: 12px; margin-top: 5px; }
+.lrow .cover::before { width: 3px; }
+.lrow .info { flex: 1; min-width: 0; }
+.lrow .t {
+  font-family: var(--serif); font-size: 16px; font-weight: 600;
+  letter-spacing: .045em; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lrow .meta {
+  margin-top: 4px; font-size: 11px; color: var(--ink-3);
+  letter-spacing: .02em; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lrow .railrow { margin-top: 9px; display: flex; align-items: center; gap: 10px; }
+.lrow .railrow .pct { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+.lrow .when { flex: 0 0 auto; font-size: 10.5px; color: var(--ink-3); align-self: flex-start; padding-top: 3px; }
+
+/* 分组行：左侧封面换成"册"字方块 */
+.gcover {
+  flex: 0 0 50px; height: 67px; border-radius: 2px 7px 7px 2px;
+  background: linear-gradient(160deg, #E7E0D2 0%, #DCD4C4 100%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; position: relative; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(90,72,44,.10);
+}
+.gcover::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: #6E6555; opacity: .5;
+}
+.gcover .g { font-family: var(--serif); font-size: 20px; color: #3E382E; line-height: 1; }
+.gcover .n { font-size: 9px; letter-spacing: .1em; color: rgba(74,64,52,.66); font-variant-numeric: tabular-nums; }
+
+/* ═════════════════════ ③ 统计 ═════════════════════ */
+
+.stat-scroll { flex: 1; min-height: 0; overflow: hidden; padding: 22px var(--pad) 0; }
+
+.lede { display: flex; align-items: flex-end; gap: 12px; }
+.lede .big {
+  font-family: var(--serif);
+  font-size: 54px;
+  font-weight: 600;
+  line-height: .92;
+  letter-spacing: -.01em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.lede .unit { font-family: var(--serif); font-size: 17px; color: var(--ink-2); padding-bottom: 6px; letter-spacing: .06em; }
+.lede .cap { margin-left: auto; text-align: right; padding-bottom: 5px; }
+.lede .cap b { display: block; font-size: 11px; letter-spacing: .24em; color: var(--ink-3); font-weight: 400; }
+.lede .cap span { display: block; font-size: 11px; color: var(--seal); margin-top: 5px; letter-spacing: .06em; }
+
+.sec-title {
+  margin: 30px 0 16px;
+  display: flex; align-items: baseline; gap: 10px;
+}
+.sec-title .l { font-family: var(--serif); font-size: 14px; font-weight: 600; letter-spacing: .16em; color: var(--ink); }
+.sec-title .r { margin-left: auto; font-size: 10.5px; color: var(--ink-3); letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+
+/* 柱状：细柱 + 水平网格线（像账簿，不像仪表盘） */
+.chart { position: relative; height: 132px; }
+.chart .grid-lines { position: absolute; inset: 0 0 22px 0; display: flex; flex-direction: column; justify-content: space-between; }
+.chart .grid-lines i { height: var(--hair); background: var(--rule-soft); display: block; }
+.chart .grid-lines i:last-child { background: var(--rule); }
+.chart .cols { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 6px; }
+.chart .col { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 7px; }
+.chart .bar { width: 11px; border-radius: 2.5px 2.5px 0 0; background: #CFC6B4; }
+.chart .col.today .bar { background: var(--seal); position: relative; }
+.chart .col.today .bar::after {
+  content: ""; position: absolute; left: 50%; top: 5px; transform: translateX(-50%);
+  width: 3.5px; height: 3.5px; border-radius: 50%; background: var(--card);
+}
+.chart .lbl { font-size: 10px; color: var(--ink-3); letter-spacing: .04em; height: 15px; line-height: 15px; }
+.chart .col.today .lbl { color: var(--seal); font-weight: 600; }
+.chart .val { font-family: var(--num); font-size: 9.5px; color: var(--ink-3); height: 11px; line-height: 11px; }
+.chart .col.today .val { color: var(--seal); }
+
+/* 账目行 */
+.ledger { margin-top: 4px; }
+.ledger .row {
+  display: flex; align-items: baseline;
+  padding: 13px 0;
+  border-top: var(--hair) solid var(--rule-soft);
+}
+.ledger .row:first-child { border-top: none; }
+.ledger .k { font-size: 13px; color: var(--ink-2); letter-spacing: .04em; flex: 1; }
+.ledger .v {
+  font-family: var(--num); font-size: 19px; font-weight: 500; color: var(--ink);
+  letter-spacing: .01em; font-variant-numeric: tabular-nums;
+}
+.ledger .v u { text-decoration: none; font-family: var(--serif); font-size: 12px; color: var(--ink-2); margin-left: 3px; }
+
+/* ═════════════════════ ④ 我的 ═════════════════════ */
+
+.prof-scroll { flex: 1; min-height: 0; overflow: hidden; padding: 20px var(--pad) 0; }
+
+.group-label {
+  font-size: 10.5px; letter-spacing: .26em; color: var(--ink-3);
+  margin: 0 2px 10px;
+}
+.card {
+  background: var(--card);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-card);
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+.prow { display: flex; align-items: center; gap: 14px; padding: 15px 16px; position: relative; cursor: pointer; }
+.prow + .prow::before {
+  content: ""; position: absolute; left: 16px; right: 0; top: 0;
+  height: var(--hair); background: var(--rule-soft);
+}
+.prow .pi { flex: 1; min-width: 0; }
+.prow .pt { font-size: 14.5px; color: var(--ink); letter-spacing: .05em; display: flex; align-items: center; gap: 8px; }
+.prow .ps { margin-top: 4px; font-size: 11px; color: var(--ink-3); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.prow .chev { color: var(--ink-3); font-size: 15px; line-height: 1; opacity: .75; }
+.prow.danger .pt { color: var(--danger); }
+.tag {
+  font-size: 9.5px; letter-spacing: .14em; color: var(--ink-3);
+  border: var(--hair) solid var(--rule); border-radius: 3px;
+  padding: 2px 5px 2px 6px;
+}
+
+/* 深浅色：分段控件 */
+.seg { display: flex; border: var(--hair) solid var(--rule); border-radius: 7px; overflow: hidden; flex: 0 0 auto; }
+.seg b {
+  font-size: 11.5px; font-weight: 400; letter-spacing: .1em;
+  padding: 6px 13px; color: var(--ink-3); cursor: pointer;
+  background: transparent; transition: all .18s;
+}
+.seg b.on { background: var(--ink); color: var(--card); }
+
+/* 落款 */
+.colophon {
+  margin-top: auto;
+  padding: 0 0 26px;
+  display: flex; flex-direction: column; align-items: center; gap: 11px;
+}
+.colophon .mark {
+  font-family: var(--serif);
+  font-size: 19px; font-weight: 600; letter-spacing: .42em;
+  color: var(--ink);
+  text-indent: .42em;
+}
+.colophon .rule { width: 24px; height: 1px; background: var(--seal); opacity: .8; }
+.colophon .promise { font-size: 10.5px; letter-spacing: .1em; color: var(--ink-3); text-align: center; line-height: 1.7; }
+
+/* ═════════════════════ ⑤ 阅读页 ═════════════════════ */
+
+.reader { background: #FFFDF8; }
+.reader .statusbar { color: #3A342A; }
+.reader .gesture i { background: #3A342A; }
+
+.r-top {
+  flex: 0 0 50px;
+  display: flex; align-items: center;
+  padding: 0 12px;
+  position: relative;
+}
+.r-top .bk {
+  font-size: 15px; color: var(--ink); letter-spacing: .06em;
+  padding: 8px 6px; cursor: pointer;
+  display: flex; align-items: center; gap: 3px;
+}
+.r-top .bk .arw { font-size: 19px; line-height: 1; margin-top: -2px; }
+.r-top .ti {
+  position: absolute; left: 0; right: 0;
+  text-align: center;
+  font-family: var(--serif);
+  font-size: 15px; letter-spacing: .08em; color: #3A342A;
+  padding: 0 78px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+.r-top .rf { margin-left: auto; font-size: 19px; color: var(--ink); padding: 6px 8px; cursor: pointer; display: flex; }
+.r-top .rf svg { transform: rotate(90deg); }
+.r-top::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0;
+  height: var(--hair); background: rgba(58,52,42,.16);
+}
+
+/* 正文 */
+.r-body {
+  flex: 1; min-height: 0; overflow: hidden;
+  padding: 30px 26px 8px;
+}
+.r-body h3 {
+  font-family: var(--serif);
+  font-size: 22px; font-weight: 600;
+  letter-spacing: .12em;
+  color: #262119;
+  text-align: center;
+  margin-bottom: 10px;
+}
+.r-body .ch-rule {
+  width: 26px; height: 1.5px; background: var(--seal); opacity: .7;
+  margin: 0 auto 30px;
+}
+.r-body p {
+  font-family: var(--serif);
+  font-size: 17.5px;
+  line-height: 2.0;
+  letter-spacing: .035em;
+  color: #221E17;
+  text-indent: 2em;
+  text-align: justify;
+  margin-bottom: 4px;
+}
+
+/* 常驻底栏：章节名 / 页码 */
+.r-foot {
+  flex: 0 0 32px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 26px;
+  font-size: 11px; color: #8A8175; letter-spacing: .06em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 菜单浮层（盖住下半屏） */
+.r-menu {
+  position: absolute; left: 0; right: 0; bottom: 22px;
+  background: #FFFDF8;
+  z-index: 40;
+  display: flex; flex-direction: column;
+  box-shadow: 0 -18px 40px -22px rgba(60,48,30,.55);
+  animation: rise .34s cubic-bezier(.22,.9,.24,1) both;
+}
+@keyframes rise { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+.r-menu::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0;
+  height: var(--hair); background: rgba(58,52,42,.2);
+}
+.r-menu .m1 { display: flex; align-items: center; gap: 4px; padding: 10px 16px 6px; }
+.r-menu .m1 .mv { font-size: 14.5px; color: var(--ink); letter-spacing: .08em; padding: 6px 8px; cursor: pointer; }
+.r-menu .slider { flex: 1; position: relative; height: 26px; display: flex; align-items: center; }
+.r-menu .slider .tr { position: absolute; left: 0; right: 0; height: 2px; background: rgba(58,52,42,.22); border-radius: 2px; }
+.r-menu .slider .fl { position: absolute; left: 0; height: 2px; background: var(--ink); border-radius: 2px; }
+.r-menu .slider .kn {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 13px; height: 13px; border-radius: 50%; background: var(--ink);
+  box-shadow: 0 2px 5px rgba(0,0,0,.25);
+}
+.r-menu .rule { height: var(--hair); background: rgba(58,52,42,.13); margin: 0; }
+.r-menu .m2 { display: flex; padding: 12px 0 12px; }
+.r-menu .m2 .it {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  cursor: pointer; padding: 2px 0;
+}
+.r-menu .m2 .it svg { width: 20px; height: 20px; }
+.r-menu .m2 .it span { font-size: 11.5px; color: var(--ink); letter-spacing: .1em; }
+
+/* 进度信息（浮层内的页脚） */
+.r-menu .minfo {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0 16px 10px;
+  font-size: 10.5px; color: var(--ink-3); letter-spacing: .05em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ═════════════════════ ⑥ 设置面板 ═════════════════════ */
+
+.panel-scrim { position: absolute; inset: 0; background: rgba(30,24,16,.35); z-index: 40; }
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 22px;
+  background: #FFFDF8;
+  border-radius: 18px 18px 0 0;
+  z-index: 45;
+  padding: 8px 18px 22px;
+  box-shadow: 0 -20px 50px -22px rgba(50,40,24,.6);
+  animation: rise .34s cubic-bezier(.22,.9,.24,1) both;
+  max-height: 88%;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.sheet .grab { width: 34px; height: 4px; border-radius: 3px; background: var(--rule); margin: 0 auto 14px; }
+.sheet .head { display: flex; align-items: center; margin-bottom: 18px; }
+.sheet .head h4 { font-family: var(--serif); font-size: 17px; font-weight: 600; letter-spacing: .14em; }
+.sheet .head .done { margin-left: auto; font-size: 13px; color: var(--seal); letter-spacing: .1em; cursor: pointer; }
+
+.setrow { margin-bottom: 17px; }
+.setrow .lab { display: flex; align-items: baseline; font-size: 13px; color: var(--ink-2); letter-spacing: .05em; margin-bottom: 9px; }
+.setrow .lab b { margin-left: auto; font-family: var(--num); font-size: 11.5px; font-weight: 400; color: var(--ink-3); }
+.sk { position: relative; height: 22px; display: flex; align-items: center; }
+.sk .tr { position: absolute; left: 0; right: 0; height: 2px; background: var(--rule); border-radius: 2px; }
+.sk .fl { position: absolute; left: 0; height: 2px; background: var(--ink); border-radius: 2px; }
+.sk .kn { position: absolute; top: 50%; transform: translate(-50%,-50%); width: 15px; height: 15px; border-radius: 50%; background: var(--card); border: 2px solid var(--ink); box-shadow: 0 2px 5px rgba(0,0,0,.13); }
+.sk.dim { opacity: .38; }
+
+.seg2 { display: flex; border: var(--hair) solid var(--rule); border-radius: 8px; padding: 3px; background: var(--paper); }
+.seg2 b {
+  flex: 1; text-align: center; font-size: 12.5px; font-weight: 400; letter-spacing: .08em;
+  padding: 8px 0; border-radius: 6px; color: var(--ink-2); cursor: pointer;
+}
+.seg2 b.on { background: var(--ink); color: var(--card); }
+
+.themes { display: flex; gap: 10px; }
+.themes .th { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 7px; cursor: pointer; }
+.themes .sw {
+  width: 100%; height: 44px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--serif); font-size: 15px;
+  border: var(--hair) solid var(--rule);
+  position: relative;
+}
+.themes .th.on .sw { border: 1.5px solid var(--seal); }
+.themes .th.on .sw::after {
+  content: ""; position: absolute; right: -1px; bottom: -1px;
+  width: 0; height: 0; border: 7px solid transparent;
+  border-right-color: var(--seal); border-bottom-color: var(--seal);
+  border-radius: 0 0 7px 0;
+}
+.themes .nm { font-size: 10.5px; color: var(--ink-3); letter-spacing: .1em; }
+.themes .th.on .nm { color: var(--seal); }
+
+/* ═════════════════════ ⑦ 导入确认 ═════════════════════ */
+
+.imp { padding: 22px var(--pad) 0; flex: 1; min-height: 0; overflow: hidden; }
+.imp .hd { font-family: var(--serif); font-size: 26px; font-weight: 600; letter-spacing: .1em; }
+.imp .hint { margin-top: 8px; font-size: 11.5px; line-height: 1.8; color: var(--ink-3); letter-spacing: .03em; }
+
+.imp-card {
+  margin-top: 20px;
+  background: var(--card); border: var(--hair) solid var(--rule);
+  border-radius: var(--r-card); overflow: hidden;
+}
+.imp-row { display: flex; align-items: center; padding: 14px 16px; position: relative; gap: 12px; }
+.imp-row + .imp-row::before { content: ""; position: absolute; left: 16px; right: 0; top: 0; height: var(--hair); background: var(--rule-soft); }
+.imp-row .k { font-size: 12.5px; color: var(--ink-3); letter-spacing: .1em; flex: 0 0 68px; }
+.imp-row .v { font-size: 14px; color: var(--ink); letter-spacing: .04em; flex: 1; }
+.imp-row .v.mono { font-family: var(--num); font-variant-numeric: tabular-nums; }
+.imp-row .chg { font-size: 12px; color: var(--seal); letter-spacing: .1em; }
+.imp-row .v .em { color: var(--ink-3); font-size: 11.5px; margin-left: 6px; letter-spacing: .02em; }
+
+/* 置信度提示：不弹 toast，直接摊在卡片里 */
+.warn {
+  margin-top: 14px;
+  border-left: 3px solid var(--seal);
+  background: var(--seal-wash);
+  padding: 12px 14px 13px;
+  border-radius: 0 8px 8px 0;
+}
+.warn .wt { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--seal); letter-spacing: .06em; margin-bottom: 5px; }
+.warn .wd { font-size: 11.5px; line-height: 1.75; color: #6A5344; letter-spacing: .02em; }
+
+.preview {
+  margin-top: 20px;
+  background: var(--card); border: var(--hair) solid var(--rule);
+  border-radius: var(--r-card); overflow: hidden;
+}
+.preview .ph {
+  padding: 13px 16px 12px;
+  font-size: 11px; letter-spacing: .22em; color: var(--ink-3);
+  border-bottom: var(--hair) solid var(--rule-soft);
+  display: flex; align-items: center;
+}
+.preview .ph b { margin-left: auto; font-weight: 400; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+.preview .prow2 {
+  padding: 11px 16px; display: flex; gap: 12px; align-items: baseline;
+  position: relative;
+}
+.preview .prow2 + .prow2::before { content: ""; position: absolute; left: 16px; right: 0; top: 0; height: var(--hair); background: var(--rule-soft); }
+.preview .prow2 .idx { font-family: var(--num); font-size: 11px; color: var(--ink-3); flex: 0 0 22px; font-variant-numeric: tabular-nums; }
+.preview .prow2 .ct { font-family: var(--serif); font-size: 13.5px; color: var(--ink-2); letter-spacing: .05em; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preview .prow2 .cn { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+
+.imp-foot {
+  flex: 0 0 auto; padding: 14px var(--pad) 6px;
+  display: flex; gap: 12px;
+  border-top: var(--hair) solid var(--rule-soft);
+  margin-top: 18px;
+}
+.btn-ghost {
+  flex: 0 0 auto; padding: 12px 22px;
+  border: var(--hair) solid var(--rule); border-radius: 7px;
+  background: transparent; color: var(--ink-2);
+  font-size: 14px; font-family: var(--sans); letter-spacing: .12em; cursor: pointer;
+}
+.btn-fill {
+  flex: 1; padding: 12px 22px;
+  border: none; border-radius: 7px;
+  background: var(--seal); color: #FFF6F0;
+  font-size: 14px; font-family: var(--sans); letter-spacing: .16em; cursor: pointer;
+  box-shadow: 0 8px 18px -10px rgba(168,52,42,.9);
+}
+
+/* ── 说明卡（每个手机下面的一段注解）────────────────────────── */
+.notes {
+  margin-top: 18px; padding: 0 4px;
+  font-size: 11.5px; line-height: 1.9; color: #6B6255;
+}
+.notes b { color: #2B2620; font-weight: 600; }
+.notes code {
+  font-family: var(--num); font-size: 10.5px;
+  background: rgba(120,100,70,.09); padding: 1px 5px; border-radius: 3px;
+  color: #4A4034;
+}
+
+/* ═════════════════════ 暗色模式（.phone.dark）═════════════════════
+   原则与浅色同一套：不是把颜色反转，而是「暖黑 + 暖白」——
+   底色带一点棕（不是纯黑 #000，OLED 上纯黑与内容区的层次反而糊），
+   文字用暖白而不是纯白（纯白在暗底上刺眼）。
+   朱砂在暗色下提亮一档（#C4553F）：#A8342A 在暗底上发闷。
+   对应到工程：resources/dark/element/color.json 同名令牌换这一组值即可。 */
+.phone.dark {
+  --paper:      #17140F;   /* 页面底：暖黑 */
+  --paper-deep: #1E1913;
+  --card:       #211C15;   /* 卡片：比页面底亮半档 */
+  --ink:        #EAE4D8;   /* 正文：暖白 */
+  --ink-2:      #B3AA9A;
+  --ink-3:      #857C6D;
+  --rule:       #3A342B;   /* 发丝线：暗色下比浅色更亮一档才看得见 */
+  --rule-soft:  #2C2720;
+  --seal:       #C4553F;   /* 朱砂提亮 */
+  --seal-wash:  rgba(196,85,63,.14);
+  --scrim:      rgba(0,0,0,.6);
+  background: var(--paper);
+}
+.phone.dark::after {
+  opacity: .3; /* 暗色下纹理更淡，避免脏 */
+}
+.dark .cover { background: linear-gradient(160deg, #262019 0%, #1E1913 100%); box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 22px -14px rgba(0,0,0,.9); }
+.dark .cover::before { background: linear-gradient(180deg, var(--seal) 0%, #9E3E2E 100%); opacity: .8; }
+.dark .cover .frame { border-color: rgba(234,228,216,.16); }
+.dark .cover .frame::after { border-color: rgba(234,228,216,.08); }
+.dark .cover .glyph { color: #CFC6B4; }
+.dark .cover .glyph::after { background: rgba(207,198,180,.4); }
+.dark .cover .pctc, .dark .cover .count { color: rgba(207,198,180,.55); }
+.dark .cover .crail { background: rgba(207,198,180,.14); }
+.dark .cover.group { background: linear-gradient(160deg, #23201A 0%, #1B1813 100%); }
+.dark .cover.group::before { background: #857C6D; }
+.dark .cover.group .glyph { color: #A89E8C; }
+.dark .gcover { background: linear-gradient(160deg, #23201A 0%, #1B1813 100%); box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+.dark .gcover::before { background: #857C6D; }
+.dark .gcover .g { color: #A89E8C; }
+.dark .gcover .n { color: rgba(168,158,140,.6); }
+.dark .continue .btn { box-shadow: 0 6px 14px -8px rgba(0,0,0,.9); }
+.dark .chart .bar { background: #453E33; }
+.dark .lede .big, .dark .ledger .v { color: var(--ink); }
+.dark .lede .unit, .dark .ledger .v u { color: var(--ink-2); }
+.dark .seg b.on { background: var(--ink); color: var(--paper); }
+.dark .seg2 { background: var(--paper-deep); }
+.dark .seg2 b.on { background: var(--ink); color: var(--paper); }
+.dark .themes .sw { border-color: var(--rule); }
+.dark .sk .kn { background: var(--card); border-color: var(--ink); }
+.dark .btn-fill { box-shadow: 0 8px 18px -10px rgba(0,0,0,.9); }
+.dark .txt-btn:hover { border-bottom-color: rgba(196,85,63,.5); }
+
+/* ── 阅读页 · 夜间主题（.phone.night）────────────────────────────
+   对应 ReaderTheme.of('dark')：bg #14110D（原来的 #111111 偏冷，
+   挪到暖黑后与书架的暗色底是同一个家族）、text #C8BFAF。 */
+.phone.night { background: #14110D; }
+.night .statusbar { color: #CFC6B4; }
+.night .gesture i { background: #CFC6B4; }
+.night .r-top .bk { color: #CFC6B4; }
+.night .r-top .ti { color: #B3AA9A; }
+.night .r-top .rf { color: #CFC6B4; }
+.night .r-top::after { background: rgba(207,198,180,.16); }
+.night .r-body h3 { color: #E2DACB; }
+.night .r-body p { color: #C8BFAF; }
+.night .r-foot { color: #7A7264; }
+.night .r-menu { background: #1D1813; box-shadow: 0 -18px 40px -22px rgba(0,0,0,.9); }
+.night .r-menu::before { background: rgba(207,198,180,.18); }
+.night .r-menu .mv { color: #E2DACB; }
+.night .r-menu .slider .tr { background: rgba(207,198,180,.22); }
+.night .r-menu .slider .fl { background: #E2DACB; }
+.night .r-menu .slider .kn { background: #E2DACB; }
+.night .r-menu .rule { background: rgba(207,198,180,.12); }
+.night .r-menu .minfo { color: #857C6D; }
+.night .r-menu .m2 .it span { color: #E2DACB; }
+
+/* ═════════════════════ 封面方案对比 ═════════════════════ */
+
+.cover-lab {
+  display: flex;
+  gap: 34px;
+  flex-wrap: wrap;
+}
+.copt { width: 128px; cursor: pointer; }
+.copt .cover { width: 128px; }
+.copt .cname { margin-top: 12px; font-size: 13px; font-weight: 600; color: #2B2620; letter-spacing: .04em; }
+.copt .cname b { color: var(--seal); font-family: var(--num); margin-right: 6px; font-weight: 600; }
+.copt .cdesc { margin-top: 5px; font-size: 11px; line-height: 1.7; color: #6B6255; }
+.copt.sel .cname::after { content: "✓"; color: var(--seal); margin-left: 6px; font-size: 12px; }
+
+/* ── 方案 B「题签」：左侧竖排书名条 ──────────────────────────────
+   传统书封的「题签」：一条略深的纸色竖条贴着书脊，书名竖排其上。
+   没有框线，靠题签自己的色块成形 —— 更素、更旧。 */
+.cover.v2 { background: linear-gradient(160deg, #F4EFE4 0%, #E7E0D0 100%); }
+.cover.v2::before { width: 5px; background: linear-gradient(180deg, #D8CDB6, #C4B79C); opacity: 1; }
+.cover.v2 .frame { display: none; }
+.cover.v2 .spine-title {
+  position: absolute; left: 5px; top: 0; bottom: 0; width: 26px;
+  background: rgba(120, 100, 70, .10);
+  border-left: 1px solid rgba(90,72,44,.22);
+  display: flex; align-items: center; justify-content: center;
+}
+.cover.v2 .spine-title i {
+  writing-mode: vertical-rl;
+  font-family: var(--serif);
+  font-size: 10.5px; letter-spacing: .3em;
+  color: #6E6555;
+  white-space: nowrap; overflow: hidden;
+  max-height: 82%;
+}
+.cover.v2 .glyph { font-size: 36px; color: #4A4034; }
+.cover.v2 .pctc { top: 10px; right: 10px; }
+/* 暗色 */
+.dark .cover.v2 { background: linear-gradient(160deg, #262019 0%, #1E1913 100%); }
+.dark .cover.v2::before { background: linear-gradient(180deg, #3A342B, #2C2720); }
+.dark .cover.v2 .spine-title { background: rgba(207,198,180,.07); border-left-color: rgba(207,198,180,.2); }
+.dark .cover.v2 .spine-title i { color: #A89E8C; }
+.dark .cover.v2 .glyph { color: #CFC6B4; }
+
+/* ── 方案 C「纸色」：每本书一种纸色 + 白字 ──────────────────────
+   像真实书封：五套低饱和「纸色」按书的 id 轮换（茶 / 苔 / 藕 / 黛 / 米），
+   首字用纸白反白大字，右下角一枚小方印（朱砂「静」）。
+   一屏九格因此有节奏，但全部颜色都从同一套低饱和色卷里出，不吵。 */
+.cover.v3 { border-radius: 4px 9px 9px 4px; }
+.cover.v3::before, .cover.v3 .frame { display: none; }
+.cover.v3 .glyph { font-size: 42px; color: #FBF8F1; letter-spacing: 0; text-indent: 0; }
+.cover.v3 .glyph::after { display: none; }
+.cover.v3 .pctc { color: rgba(255,251,244,.8); }
+.cover.v3 .seal-stamp {
+  position: absolute; right: 9px; bottom: 12px;
+  width: 15px; height: 15px;
+  background: var(--seal);
+  border-radius: 2.5px;
+  color: #FFF3EC;
+  font-family: var(--serif); font-size: 9.5px; line-height: 15px; text-align: center;
+  opacity: .92;
+}
+.cover.v3 .crail { background: rgba(0,0,0,.14); }
+.cover.v3 .crail i { background: #FBF8F1; opacity: .95; }
+/* 五套纸色（对应工程里按 book.id % 5 取色，两套色卷各出一份浅/深色档） */
+.cover.v3.t1 { background: linear-gradient(160deg, #D9CBB0 0%, #CDBD9E 100%); }  /* 茶 */
+.cover.v3.t2 { background: linear-gradient(160deg, #C7D1BD 0%, #B8C4AC 100%); }  /* 苔 */
+.cover.v3.t3 { background: linear-gradient(160deg, #D9C4BF 0%, #CCB5B0 100%); }  /* 藕 */
+.cover.v3.t4 { background: linear-gradient(160deg, #C3CBD6 0%, #B2BCC9 100%); }  /* 黛 */
+.cover.v3.t5 { background: linear-gradient(160deg, #E0D7C3 0%, #D4C9B2 100%); }  /* 米 */
+/* 暗色：同样的五色压暗 */
+.dark .cover.v3.t1 { background: linear-gradient(160deg, #4A4030 0%, #3E3527 100%); }
+.dark .cover.v3.t2 { background: linear-gradient(160deg, #3E463A 0%, #333B30 100%); }
+.dark .cover.v3.t3 { background: linear-gradient(160deg, #4A3A38 0%, #3D302E 100%); }
+.dark .cover.v3.t4 { background: linear-gradient(160deg, #3A414C 0%, #303641 100%); }
+.dark .cover.v3.t5 { background: linear-gradient(160deg, #4A453A 0%, #3E392F 100%); }
+.dark .cover.v3 .glyph { color: rgba(250, 246, 238, .92); }
+.dark .cover.v3 .crail { background: rgba(0,0,0,.3); }
+
+/* 方案选择器行为 */
+.copt { opacity: .82; transition: opacity .18s, transform .18s; }
+.copt:hover { opacity: 1; }
+.copt.sel { opacity: 1; }
+
+@media (max-width: 900px) {
+  body { padding: 28px 14px 60px; }
+  .stage { gap: 40px; }
+  .stage-head h1 { font-size: 29px; }
+  .swatches { flex-wrap: wrap; width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════ 展台头部 ══════════════════════════ -->
+<header class="stage-head">
+  <div class="kicker">NovelReader · UI Proposal</div>
+  <h1>静读 · 界面重构效果稿<br><em>宣纸与朱印</em></h1>
+  <p>
+    现在这版的底子是好的（<code>AppTheme.ets</code> 里的令牌纪律、封面的书脊、三个 Tab 的通栏发丝线都很扎实），
+    问题出在<b>性格</b>上：底色 <code>#FAFAFA</code> 是冷灰、正文 <code>#1F1F1F</code> 是纯灰黑、
+    主题色 <code>#35597F</code> 是冷钢蓝 —— 三样加起来的观感是「系统中立」，而不是一个读书的地方。
+    这一稿把配色整体挪到<b>暖宣纸 + 墨 + 一点朱砂</b>，并让所有标题落到衬线上。
+    <b>暗色模式</b>是同一套「纸与墨」换成暖黑 + 暖白（第 08 / 09 台），不是简单反转。
+    下面每台手机下方都注明了具体改了什么、对应哪个文件；
+    页首可以<b>点选封面方案 A / B / C</b>。
+  </p>
+
+  <div class="swatches">
+    <div class="swatch"><i style="background:#F6F2EA"></i><span>宣纸 · 页面底</span><b>#F6F2EA</b></div>
+    <div class="swatch"><i style="background:#FFFDF9"></i><span>纸白 · 卡片</span><b>#FFFDF9</b></div>
+    <div class="swatch"><i style="background:#191713"></i><span>墨 · 正文</span><b>#191713</b></div>
+    <div class="swatch"><i style="background:#A8342A"></i><span>朱砂 · 主题色</span><b>#A8342A</b></div>
+    <div class="swatch"><i style="background:#E2DACB"></i><span>发丝线</span><b>#E2DACB</b></div>
+    <div class="swatch"><i style="background:#8A8175"></i><span>提示文字</span><b>#8A8175</b></div>
+  </div>
+
+  <p style="margin-top:26px">
+    <b>暗色模式</b>不是把颜色反转，而是同一套「纸与墨」换成<b>暖黑 + 暖白</b>：底色 <code>#17140F</code>（带棕的黑，
+    不是 OLED 纯黑——纯黑与卡片层次反而糊）、文字 <code>#EAE4D8</code> 暖白（纯白刺眼）、
+    朱砂提亮到 <code>#C4553F</code>（<code>#A8342A</code> 在暗底上发闷）。工程上对应
+    <code>resources/dark/element/color.json</code> 的同名令牌，页面代码零改动。见下面第 08 / 09 两台。
+  </p>
+
+  <!-- 封面三方案 -->
+  <div class="sec-title" style="margin-top:36px">
+    <div class="l" style="font-size:16px">封面方案 · 点选一个</div>
+    <div class="r">方案 A 已用于本稿全部页面；选定后我按它改 BookCover.ets</div>
+  </div>
+  <div class="cover-lab" id="coverLab">
+    <div class="copt sel" data-plan="A">
+      <div class="cover"><div class="frame"></div><div class="glyph">长</div><div class="pctc">34%</div><div class="crail"><i style="width:34%"></i></div></div>
+      <div class="cname"><b>A</b>双线框 · 书脊</div>
+      <div class="cdesc">内圈双线框 + 朱砂书脊。最"装帧"，结构感强，九格里最整齐。</div>
+    </div>
+    <div class="copt" data-plan="B">
+      <div class="cover v2"><div class="spine-title"><i>长夜将尽</i></div><div class="glyph">长</div><div class="pctc">34%</div><div class="crail"><i style="width:34%"></i></div></div>
+      <div class="cname"><b>B</b>题签 · 竖排书名</div>
+      <div class="cdesc">左侧纸色题签竖排书名，无框线。最"旧书"，素、安静，长书名也能露出。</div>
+    </div>
+    <div class="copt" data-plan="C">
+      <div class="cover v3 t1"><div class="glyph">长</div><div class="seal-stamp">静</div><div class="pctc">34%</div><div class="crail"><i style="width:34%"></i></div></div>
+      <div class="cname"><b>C</b>纸色 · 白字方印</div>
+      <div class="cdesc">五套低饱和纸色按书轮换 + 反白大字 + 朱印。最有"书架的节奏"，但工程量最大。</div>
+    </div>
+    <div class="copt" data-plan="C" style="width:128px">
+      <div class="cover v3 t2"><div class="glyph">山</div><div class="seal-stamp">静</div><div class="crail"></div></div>
+      <div class="cname" style="visibility:hidden">.</div>
+      <div class="cdesc" style="visibility:hidden">.</div>
+    </div>
+  </div>
+</header>
+
+<div class="stage">
+
+<!-- ══════════════════ ① 书架 · 网格 ══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">01</span><span class="t">书架 · 网格</span><span class="s">默认首屏</span></div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="page-head">
+        <h2>书架</h2>
+        <div class="sub">7 本 · 1 组</div>
+      </div>
+      <div class="full-rule"></div>
+
+      <div class="shelf-actions">
+        <div class="txt-btn">排列</div>
+        <div class="txt-btn"><span class="plus">＋</span>新建分组</div>
+        <div class="spacer"></div>
+        <div class="txt-btn">导入</div>
+      </div>
+
+      <!-- 继续阅读 -->
+      <div class="continue">
+        <div class="cover" style="flex:0 0 56px;width:56px;height:76px;aspect-ratio:auto">
+          <div class="frame"></div>
+          <div class="glyph small">长</div>
+          <div class="crail"><i style="width:34%"></i></div>
+        </div>
+        <div class="meta">
+          <div class="eyebrow">续 读</div>
+          <div class="t">长夜将尽</div>
+          <div class="c">读到第 12 章 / 共 35 章</div>
+          <div class="railrow">
+            <div class="rail"><i style="width:34%"></i></div>
+            <div class="pct">34%</div>
+          </div>
+          <div class="foot">上次阅读 · 昨天</div>
+        </div>
+        <button class="btn">继续</button>
+      </div>
+
+      <!-- 书格 -->
+      <div class="grid-wrap">
+        <div class="grid">
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">长</div><div class="pctc">34%</div><div class="crail"><i style="width:34%"></i></div></div>
+            <div class="name">长夜将尽</div>
+            <div class="sub">35 章 · 昨天</div>
+          </div>
+          <div class="book">
+            <div class="cover group">
+              <div class="frame"></div>
+              <div class="glyph">册</div>
+              <div class="count">3 本</div>
+            </div>
+            <div class="name">武侠</div>
+            <div class="sub">分组</div>
+          </div>
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">山</div><div class="pctc">88%</div><div class="crail"><i style="width:88%"></i></div></div>
+            <div class="name">山海拾遗录</div>
+            <div class="sub">120 章 · 3 天前</div>
+          </div>
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">春</div><div class="pctc">7%</div><div class="crail"><i style="width:7%"></i></div></div>
+            <div class="name">春山如笑</div>
+            <div class="sub">48 章 · 上周</div>
+          </div>
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">北</div><div class="crail"></div></div>
+            <div class="name">北归记</div>
+            <div class="sub">62 章 · 未读</div>
+          </div>
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">灯</div><div class="pctc">52%</div><div class="crail"><i style="width:52%"></i></div></div>
+            <div class="name">灯下随笔</div>
+            <div class="sub">24 章 · 前天</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 栏 -->
+      <div class="tabbar">
+        <div class="tab on">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a1.6 1.6 0 0 0-1.6-1.6H4z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a1.6 1.6 0 0 1 1.6-1.6H20z"/></svg>
+            <span>书架</span>
+          </div>
+        </div>
+        <div class="tab">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>
+            <span>统计</span>
+          </div>
+        </div>
+        <div class="tab">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+            <span>我的</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>改了什么：</b><br>
+    · <b>封面重做</b>：左侧朱砂书脊 + 内圈双线框 + 居中书名首字 + 底部进度发丝。原来的封面是「灰底 + 一个居中大字」，一屏九格读起来是九个灰块；双线框给了它「这是一本书的封面」的形。左侧圆角小、右侧圆角大，模拟书脊的厚度（<code>BookCover.ets</code>）。<br>
+    · <b>继续阅读</b>：从「一张卡片 + 一个按钮」改成一条<b>书签</b> —— 左侧一道朱色标线、上方 <code>续读</code> 眉标、书名落衬线。整块不再是一张泛白的卡。<br>
+    · <b>操作入口</b>：三个描边胶囊（排列/排序/＋分组）收成两个<b>朱色文字动作</b>，「导入」不再抢视觉（<code>BookShelfPage.buildHeader</code>）。<br>
+    · <b>标题落衬线</b>：<code>书架</code>、书名、分组名全部走衬线 + 字距。这是「书卷气」在真机上唯一确定能拿到的来源（<code>AppFont.titleFamily()</code> 已经预留了这个口子）。<br>
+    · <b>分组封面</b>：改成「册」字 + 本数，用中性灰而非主题色，与书区分得开又不抢戏。
+  </div>
+</div>
+
+<!-- ══════════════════ ② 书架 · 列表 ══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">02</span><span class="t">书架 · 列表</span><span class="s">切「排列」后</span></div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="page-head">
+        <h2>书架</h2>
+        <div class="sub">7 本 · 1 组</div>
+      </div>
+      <div class="full-rule"></div>
+
+      <div class="shelf-actions">
+        <div class="txt-btn">排列</div>
+        <div class="txt-btn"><span class="plus">＋</span>新建分组</div>
+        <div class="spacer"></div>
+        <div class="txt-btn">导入</div>
+      </div>
+
+      <div class="listcard" style="margin-top:4px">
+        <div class="lrow">
+          <div class="cover"><div class="frame"></div><div class="glyph">长</div><div class="crail"><i style="width:34%"></i></div></div>
+          <div class="info">
+            <div class="t">长夜将尽</div>
+            <div class="meta">佚名 · 35 章 · 412 KB</div>
+            <div class="railrow"><div class="rail"><i style="width:34%"></i></div><div class="pct">34%</div></div>
+          </div>
+          <div class="when">昨天</div>
+        </div>
+        <div class="lrow">
+          <div class="gcover"><div class="g">册</div><div class="n">3 本</div></div>
+          <div class="info">
+            <div class="t">武侠</div>
+            <div class="meta">分组 · 3 本书</div>
+          </div>
+          <div class="when">—</div>
+        </div>
+        <div class="lrow">
+          <div class="cover"><div class="frame"></div><div class="glyph">山</div><div class="crail"><i style="width:88%"></i></div></div>
+          <div class="info">
+            <div class="t">山海拾遗录</div>
+            <div class="meta">佚名 · 120 章 · 1.8 MB</div>
+            <div class="railrow"><div class="rail"><i style="width:88%"></i></div><div class="pct">88%</div></div>
+          </div>
+          <div class="when">3 天前</div>
+        </div>
+        <div class="lrow">
+          <div class="cover"><div class="frame"></div><div class="glyph">春</div><div class="crail"><i style="width:7%"></i></div></div>
+          <div class="info">
+            <div class="t">春山如笑</div>
+            <div class="meta">佚名 · 48 章 · 620 KB</div>
+            <div class="railrow"><div class="rail"><i style="width:7%"></i></div><div class="pct">7%</div></div>
+          </div>
+          <div class="when">上周</div>
+        </div>
+        <div class="lrow">
+          <div class="cover"><div class="frame"></div><div class="glyph">北</div><div class="crail"></div></div>
+          <div class="info">
+            <div class="t">北归记</div>
+            <div class="meta">佚名 · 62 章 · 930 KB</div>
+            <div class="railrow"><div class="rail"><i style="width:0%"></i></div><div class="pct">0%</div></div>
+          </div>
+          <div class="when">未读</div>
+        </div>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>改了什么：</b><br>
+    · 保留「整列一块卡 + 缩进发丝线」这个已经做对的判断，只把<b>边框</b>加上（<code>1px</code> 暖灰），卡片不再是浮在白底上的一块白。<br>
+    · 缩进线的左起点从 <code>72vp</code> 起，正好对齐文字列 —— 封面那一列保持连续，读起来是「一排书」而不是「六张卡」。<br>
+    · <b>右侧加一列时间</b>（昨天 / 3 天前 / 未读）：原来「最近阅读」夹在书名的信息行里，扫读时找不到；单独成列之后，整列书的时间可以纵向比。<br>
+    · 分组行用「册」字方块 + 本数，与网格版同一个语汇。
+  </div>
+</div>
+
+<!-- ══════════════════ ③ 统计 ══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">03</span><span class="t">统计</span><span class="s">从「四张卡」改成「一页账」</span></div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="page-head">
+        <h2>统计</h2>
+        <div class="sub">2025 年 6 月 12 日 · 星期四</div>
+      </div>
+      <div class="full-rule"></div>
+
+      <div class="stat-scroll">
+        <!-- 主数值 -->
+        <div class="lede">
+          <div class="big">1<u style="font-size:24px;text-decoration:none;font-family:var(--serif);color:var(--ink-2);margin:0 2px 0 1px">时</u>24</div>
+          <div class="unit">分</div>
+          <div class="cap"><b>今 日</b><span>比昨天多 12 分</span></div>
+        </div>
+
+        <div class="sec-title">
+          <div class="l">最近七日</div>
+          <div class="r">共 6 时 08 分</div>
+        </div>
+
+        <!-- 柱状 -->
+        <div class="chart">
+          <div class="grid-lines"><i></i><i></i><i></i><i></i></div>
+          <div class="cols">
+            <div class="col"><div class="val">28</div><div class="bar" style="height:26px"></div><div class="lbl">周五</div></div>
+            <div class="col"><div class="val">45</div><div class="bar" style="height:42px"></div><div class="lbl">周六</div></div>
+            <div class="col"><div class="val">12</div><div class="bar" style="height:11px"></div><div class="lbl">周日</div></div>
+            <div class="col"><div class="val">0</div><div class="bar" style="height:2px"></div><div class="lbl">周一</div></div>
+            <div class="col"><div class="val">63</div><div class="bar" style="height:59px"></div><div class="lbl">周二</div></div>
+            <div class="col"><div class="val">37</div><div class="bar" style="height:35px"></div><div class="lbl">周三</div></div>
+            <div class="col today"><div class="val">84</div><div class="bar" style="height:79px"></div><div class="lbl">今天</div></div>
+          </div>
+        </div>
+
+        <!-- 账目 -->
+        <div class="ledger">
+          <div class="row"><div class="k">连续阅读</div><div class="v">17<u>天</u></div></div>
+          <div class="row"><div class="k">累计阅读</div><div class="v">42<u>时</u>18<u>分</u></div></div>
+          <div class="row"><div class="k">有记录的天数</div><div class="v">63<u>天</u></div></div>
+        </div>
+      </div>
+
+      <div class="tabbar">
+        <div class="tab">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a1.6 1.6 0 0 0-1.6-1.6H4z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a1.6 1.6 0 0 1 1.6-1.6H20z"/></svg>
+            <span>书架</span>
+          </div>
+        </div>
+        <div class="tab on">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>
+            <span>统计</span>
+          </div>
+        </div>
+        <div class="tab">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+            <span>我的</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>改了什么：</b><br>
+    · 现在这版已经砍掉了 2×2 四张卡，改成了「一块面板 + 四行」，判断是对的。这一稿再往前一步：把<b>第一行拎出来做主数值</b> —— 54px 的衬线数字 + 「今日」眉标，一眼就知道今天读了多久；剩下三项退成<b>账目行</b>（无卡片、只有发丝线）。<br>
+    · <b>柱子做细</b>（14vp → 11vp）并加<b>水平网格线</b>：粗柱 + 无网格像仪表盘，细柱 + 四道淡淡的横线像账簿。<br>
+    · 每根柱子顶上补一个<b>数值</b>（28 / 45 / 12 / 0 / 63 / 37 / 84），不用心算柱高。<br>
+    · 单位（时 / 分 / 天）用衬线小字排在数字后，而不是塞在一个括号里（<code>StatsPage.buildSummaryPanel</code>）。
+  </div>
+</div>
+
+<!-- ══════════════════ ④ 我的 ══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">04</span><span class="t">我的</span><span class="s">落款式页脚</span></div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="page-head">
+        <h2>我的</h2>
+      </div>
+      <div class="full-rule"></div>
+
+      <div class="prof-scroll">
+        <div class="group-label">阅 读</div>
+        <div class="card">
+          <div class="prow">
+            <div class="pi">
+              <div class="pt">阅读设置</div>
+              <div class="ps">字号、行距、背景、翻页方式</div>
+            </div>
+            <div class="chev">›</div>
+          </div>
+          <div class="prow">
+            <div class="pi">
+              <div class="pt">外观</div>
+              <div class="ps">跟随系统 / 常亮日间 / 常亮夜间</div>
+            </div>
+            <div class="seg"><b class="on">系统</b><b>日</b><b>夜</b></div>
+          </div>
+        </div>
+
+        <div class="group-label">数 据</div>
+        <div class="card">
+          <div class="prow">
+            <div class="pi">
+              <div class="pt">清除分页缓存</div>
+              <div class="ps">当前 1 284 条 · 约 3.1 MB</div>
+            </div>
+            <div class="chev">›</div>
+          </div>
+          <div class="prow">
+            <div class="pi">
+              <div class="pt">清空所有数据</div>
+              <div class="ps">书籍、进度、书签与统计；书源文件保留</div>
+            </div>
+            <div class="chev">›</div>
+          </div>
+          <div class="prow">
+            <div class="pi">
+              <div class="pt">自检页 <span class="tag">开 发</span></div>
+              <div class="ps">验证数据库与解析链路</div>
+            </div>
+            <div class="chev">›</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 落款 -->
+      <div class="colophon">
+        <div class="mark">静读</div>
+        <div class="rule"></div>
+        <div class="promise">本地导入 · 离线阅读 · 无广告<br>不上传任何内容</div>
+      </div>
+
+      <div class="tabbar">
+        <div class="tab">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a1.6 1.6 0 0 0-1.6-1.6H4z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a1.6 1.6 0 0 1 1.6-1.6H20z"/></svg>
+            <span>书架</span>
+          </div>
+        </div>
+        <div class="tab">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>
+            <span>统计</span>
+          </div>
+        </div>
+        <div class="tab on">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+            <span>我的</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>改了什么：</b><br>
+    · 四行设置<b>分两组</b>（「阅读」「数据」）并加上眉标，不再是四行平铺的一堆。<br>
+    · <b>外观</b>做成三档分段控件（系统 / 日 / 夜）。现在切深浅色只有阅读页底栏里那个「夜间」按钮一条路，进「我的」之后反而找不到。<br>
+    · <b>页脚落款</b>：<code>静读</code> 用衬线 + <code>0.42em</code> 字距 + 一道朱色短线，像一本书最后一页的版权页。文案拆成两行居中，比压成一行更好读。<br>
+    · 「开发」标签保持描边而不是实心（现在这版做对了，不要改）。
+  </div>
+</div>
+
+<!-- ══════════════════ ⑤ 阅读页 ══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">05</span><span class="t">阅读页</span><span class="s">点屏幕中间，菜单浮起</span></div>
+  <div class="phone reader">
+    <div class="statusbar"><span>9:41</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="r-top">
+        <div class="bk"><span class="arw">‹</span>返回</div>
+        <div class="ti">长夜将尽</div>
+        <div class="rf">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5.5V11h-5.5"/></svg>
+        </div>
+      </div>
+
+      <div class="r-body">
+        <h3>第十二章 · 雪落无声</h3>
+        <div class="ch-rule"></div>
+        <p>雪是从后半夜开始下的。起初只是零星几点，落在窗纸上，像谁在外面轻轻叩门。他醒着，却没有起身。</p>
+        <p>灯已经灭了很久，屋里只剩下炭盆里那一点将熄未熄的红。他数着自己的呼吸，一，二，三，一直数到三百，雪声才渐渐密起来。</p>
+        <p>这样的夜里，什么都不必想。他记得小时候母亲说过，落雪的时候，天与地之间隔着一层棉，人说的话传不远，所以雪夜里可以放心地说真话。</p>
+        <p>他于是很轻地说了一个名字。雪把它接住了，没有还回来。</p>
+        <p>天亮时，院子里已经积了三寸。他推开门，看见廊下那株老梅，枝上压着一层白，却还是有几朵探出来，红得有些莽撞。</p>
+      </div>
+
+      <div class="r-foot">
+        <span>第十二章 · 雪落无声</span>
+        <span>5 / 16 · 34.2%</span>
+      </div>
+
+      <!-- 菜单浮层 -->
+      <div class="r-menu">
+        <div class="m1">
+          <div class="mv" style="opacity:.35">上一章</div>
+          <div class="slider">
+            <div class="tr"></div>
+            <div class="fl" style="width:34%"></div>
+            <div class="kn" style="left:34%"></div>
+          </div>
+          <div class="mv">下一章</div>
+        </div>
+        <div class="minfo">
+          <span>34.2%</span>
+          <span>第 12 / 35 章</span>
+        </div>
+        <div class="rule"></div>
+        <div class="m2">
+          <div class="it">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#191713" stroke-width="1.5" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="18" cy="18" r="1.6" fill="#191713" stroke="none"/></svg>
+            <span>目录</span>
+          </div>
+          <div class="it">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#191713" stroke-width="1.5" stroke-linecap="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
+            <span>夜间</span>
+          </div>
+          <div class="it">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#191713" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/></svg>
+            <span>设置</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>改了什么：</b><br>
+    · <b>正文行高 2.0</b>（现在 <code>ReaderSettings</code> 默认 1.8）：中文正文在手机窄栏里，1.8 偏挤；2.0 的连续性更好，一屏少一行但读得久。<br>
+    · 章标题下那道朱色题花线宽度从 24 收到 26 但改成 <b>1.5px</b>，让它读起来是「一笔」而不是「一条」。<br>
+    · <b>常驻底栏</b>：左「第十二章 · 雪落无声」右「5 / 16 · 34.2%」，中间留空；现在这版把两个值都靠右挤在一起，右端会比左端重。<br>
+    · <b>菜单浮层</b>：顶部加一条 <code>34.2% / 第 12 ⁄ 35 章</code> 的信息行 —— 拖滑块时能看见自己在全书的哪个位置，松手前就有判断。<br>
+    · 三块入口的图标换成细线（<code>1.5px</code>），与整体的发丝线语汇一致；现在的 SVG 偏实。
+  </div>
+</div>
+
+<!-- ══════════════════ ⑥ 设置面板 ══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">06</span><span class="t">阅读设置</span><span class="s">四个背景 + 亮度</span></div>
+  <div class="phone reader">
+    <div class="statusbar"><span>9:41</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="r-top">
+        <div class="bk"><span class="arw">‹</span>返回</div>
+        <div class="ti">长夜将尽</div>
+        <div class="rf">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5.5V11h-5.5"/></svg>
+        </div>
+      </div>
+
+      <div class="r-body" style="padding-top:24px">
+        <h3>第十二章 · 雪落无声</h3>
+        <div class="ch-rule"></div>
+        <p>雪是从后半夜开始下的。起初只是零星几点，落在窗纸上，像谁在外面轻轻叩门。</p>
+        <p>灯已经灭了很久，屋里只剩下炭盆里那一点将熄未熄的红。</p>
+      </div>
+
+      <div class="panel-scrim"></div>
+
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="head">
+          <h4>阅读设置</h4>
+          <div class="done">完成</div>
+        </div>
+
+        <div class="setrow">
+          <div class="lab">字号<b>18</b></div>
+          <div class="sk">
+            <div class="tr"></div><div class="fl" style="width:26%"></div>
+            <div class="kn" style="left:26%"></div>
+          </div>
+        </div>
+
+        <div class="setrow">
+          <div class="lab">行距<b>2.0</b></div>
+          <div class="sk">
+            <div class="tr"></div><div class="fl" style="width:56%"></div>
+            <div class="kn" style="left:56%"></div>
+          </div>
+        </div>
+
+        <div class="setrow">
+          <div class="lab">字间距<b>0.5 vp</b></div>
+          <div class="sk">
+            <div class="tr"></div><div class="fl" style="width:40%"></div>
+            <div class="kn" style="left:40%"></div>
+          </div>
+        </div>
+
+        <div class="setrow">
+          <div class="lab">页边距<b>26 vp</b></div>
+          <div class="sk">
+            <div class="tr"></div><div class="fl" style="width:44%"></div>
+            <div class="kn" style="left:44%"></div>
+          </div>
+        </div>
+
+        <div class="setrow">
+          <div class="lab">翻页方式</div>
+          <div class="seg2"><b>上下滚动</b><b class="on">左右翻页</b></div>
+        </div>
+
+        <div class="setrow">
+          <div class="lab">背景</div>
+          <div class="themes">
+            <div class="th on"><div class="sw" style="background:#FFFDF8;color:#221E17">文</div><div class="nm">浅色</div></div>
+            <div class="th"><div class="sw" style="background:#F3E9D6;color:#3B2F20">文</div><div class="nm">宣纸</div></div>
+            <div class="th"><div class="sw" style="background:#D8E6D4;color:#2A3830">文</div><div class="nm">护眼</div></div>
+            <div class="th"><div class="sw" style="background:#14120F;color:#BFB6A6">文</div><div class="nm">夜间</div></div>
+          </div>
+        </div>
+
+        <div class="setrow" style="margin-bottom:0">
+          <div class="lab">亮度<b>跟随系统</b></div>
+          <div class="seg2"><b class="on">跟随系统</b><b>手动</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>改了什么：</b><br>
+    · <b>加一档「宣纸」</b>背景：<code>#F3E9D6 / #3B2F20</code>。现有四档里，浅色是纯白、羊皮纸偏黄褐，中间缺一个「纸」的感觉；而这一档恰好是整套 UI 的品牌色。<br>
+    · 面板有了<b>圆角顶盖 + 抓手</b>，明确「这是一张从底部升起的纸」，而不是一块方形的白板。<br>
+    · 选中态从「黑边加粗」改成<b>朱色描边 + 右下角折角</b>，四个色块同时出现时不再靠粗细猜哪个是选中。<br>
+    · 「翻页方式」「亮度」两个分段控件的<b>选中段用墨色实心</b>，与未选中的纸色形成对比（现在这版已经这么做了，保留）。<br>
+    · 所有滑块改成「墨色细轨 + 留白圆钮」，与正文的发丝线同一个语汇。
+  </div>
+</div>
+
+<!-- ══════════════════ ⑦ 导入确认 ══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">07</span><span class="t">导入确认</span><span class="s">低置信度编码的提示</span></div>
+  <div class="phone">
+    <div class="statusbar"><span>9:41</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="imp">
+        <div class="hd">导入确认</div>
+        <div class="hint">下面的分章结果由文件内容自动推断。<b style="color:var(--ink)">编码选错会直接变成满屏乱码</b>，请先核对再导入。</div>
+
+        <div class="imp-card">
+          <div class="imp-row">
+            <div class="k">文件</div>
+            <div class="v">长夜将尽.txt</div>
+          </div>
+          <div class="imp-row">
+            <div class="k">大小</div>
+            <div class="v mono">412 KB</div>
+          </div>
+          <div class="imp-row">
+            <div class="k">编码</div>
+            <div class="v">UTF-8 <span class="em">置信度 62%</span></div>
+            <div class="chg">更换</div>
+          </div>
+          <div class="imp-row">
+            <div class="k">章节</div>
+            <div class="v mono">35 章</div>
+          </div>
+        </div>
+
+        <div class="warn">
+          <div class="wt">⚠ 编码识别置信度偏低</div>
+          <div class="wd">请核对下方章节名是否有乱码。若显示异常，点上面的「更换」改选 GB18030 或 GBK。</div>
+        </div>
+
+        <div class="preview">
+          <div class="ph">分章预览<b>前 4 章 / 共 35</b></div>
+          <div class="prow2"><div class="idx">01</div><div class="ct">第一章 · 落雪</div><div class="cn">2 840 字</div></div>
+          <div class="prow2"><div class="idx">02</div><div class="ct">第二章 · 旧信</div><div class="cn">3 120 字</div></div>
+          <div class="prow2"><div class="idx">03</div><div class="ct">第三章 · 城南</div><div class="cn">2 660 字</div></div>
+          <div class="prow2"><div class="idx">04</div><div class="ct">第四章 · 夜行</div><div class="cn">3 480 字</div></div>
+        </div>
+      </div>
+
+      <div class="imp-foot">
+        <button class="btn-ghost">取消</button>
+        <button class="btn-fill">导入书架</button>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>改了什么：</b><br>
+    · 关键信息收成一张卡（文件 / 大小 / 编码 / 章节），标签左对齐、值右对齐 —— 与统计页的账目行是同一套语汇。<br>
+    · <b>置信度不弹 toast</b>，直接做成「编码」行里的一个小注 + 下方一条朱色左边线的提示块。toast 一闪而过，而这一步正需要用户停下来核对。<br>
+    · 章节预览每行补上<b>字数</b>：某一章 8 万字通常说明分章没分对（编码错了），字数是最好的判据。<br>
+    · 主按钮「导入书架」用朱砂实心，取消用描边 —— 现在是两个系统按钮，主次不明。
+  </div>
+</div>
+
+<!-- ══════════════════ ⑧ 暗色 · 书架（网格）══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">08</span><span class="t">暗色 · 书架</span><span class="s">resources/dark/ 色卷，同一家族</span></div>
+  <div class="phone dark">
+    <div class="statusbar"><span>23:17</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="page-head">
+        <h2>书架</h2>
+        <div class="sub">7 本 · 1 组</div>
+      </div>
+      <div class="full-rule"></div>
+
+      <div class="shelf-actions">
+        <div class="txt-btn">排列</div>
+        <div class="txt-btn"><span class="plus">＋</span>新建分组</div>
+        <div class="spacer"></div>
+        <div class="txt-btn">导入</div>
+      </div>
+
+      <div class="continue">
+        <div class="cover" style="flex:0 0 56px;width:56px;height:76px;aspect-ratio:auto">
+          <div class="frame"></div>
+          <div class="glyph small">长</div>
+          <div class="crail"><i style="width:34%"></i></div>
+        </div>
+        <div class="meta">
+          <div class="eyebrow">续 读</div>
+          <div class="t">长夜将尽</div>
+          <div class="c">读到第 12 章 / 共 35 章</div>
+          <div class="railrow">
+            <div class="rail"><i style="width:34%"></i></div>
+            <div class="pct">34%</div>
+          </div>
+          <div class="foot">上次阅读 · 昨天</div>
+        </div>
+        <button class="btn">继续</button>
+      </div>
+
+      <div class="grid-wrap">
+        <div class="grid">
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">长</div><div class="pctc">34%</div><div class="crail"><i style="width:34%"></i></div></div>
+            <div class="name">长夜将尽</div>
+            <div class="sub">35 章 · 昨天</div>
+          </div>
+          <div class="book">
+            <div class="cover group">
+              <div class="frame"></div>
+              <div class="glyph">册</div>
+              <div class="count">3 本</div>
+            </div>
+            <div class="name">武侠</div>
+            <div class="sub">分组</div>
+          </div>
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">山</div><div class="pctc">88%</div><div class="crail"><i style="width:88%"></i></div></div>
+            <div class="name">山海拾遗录</div>
+            <div class="sub">120 章 · 3 天前</div>
+          </div>
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">春</div><div class="pctc">7%</div><div class="crail"><i style="width:7%"></i></div></div>
+            <div class="name">春山如笑</div>
+            <div class="sub">48 章 · 上周</div>
+          </div>
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">北</div><div class="crail"></div></div>
+            <div class="name">北归记</div>
+            <div class="sub">62 章 · 未读</div>
+          </div>
+          <div class="book">
+            <div class="cover"><div class="frame"></div><div class="glyph">灯</div><div class="pctc">52%</div><div class="crail"><i style="width:52%"></i></div></div>
+            <div class="name">灯下随笔</div>
+            <div class="sub">24 章 · 前天</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabbar">
+        <div class="tab on">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a1.6 1.6 0 0 0-1.6-1.6H4z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a1.6 1.6 0 0 1 1.6-1.6H20z"/></svg>
+            <span>书架</span>
+          </div>
+        </div>
+        <div class="tab">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>
+            <span>统计</span>
+          </div>
+        </div>
+        <div class="tab">
+          <div class="mark"></div>
+          <div class="ti">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>
+            <span>我的</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>暗色怎么来的：</b>全部来自同一套变量在 <code>.phone.dark</code> 下的重定义，页面标记与浅色**逐字相同**——
+    这正是工程上的做法：<code>resources/dark/element/color.json</code> 换同名令牌值，ArkTS 代码零改动。<br>
+    <b>几个关键取值：</b>底 <code>#17140F</code> 暖黑（不是纯黑）、卡 <code>#211C15</code>（比底亮半档）、
+    文字 <code>#EAE4D8</code> 暖白、朱砂提亮 <code>#C4553F</code>、发丝线 <code>#3A342B</code>（暗色下线要更亮一档才可见）。
+  </div>
+</div>
+
+<!-- ══════════════════ ⑨ 夜间 · 阅读页 ══════════════════ -->
+<div class="slot">
+  <div class="slot-label"><span class="n">09</span><span class="t">夜间 · 阅读页</span><span class="s">ReaderTheme.of('dark')</span></div>
+  <div class="phone night">
+    <div class="statusbar"><span>23:17</span><span class="icons">▮▮▮ ⌾ <i class="bat"></i></span></div>
+    <div class="screen">
+      <div class="r-top">
+        <div class="bk"><span class="arw">‹</span>返回</div>
+        <div class="ti">长夜将尽</div>
+        <div class="rf">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5.5V11h-5.5"/></svg>
+        </div>
+      </div>
+
+      <div class="r-body">
+        <h3>第十二章 · 雪落无声</h3>
+        <div class="ch-rule"></div>
+        <p>雪是从后半夜开始下的。起初只是零星几点，落在窗纸上，像谁在外面轻轻叩门。他醒着，却没有起身。</p>
+        <p>灯已经灭了很久，屋里只剩下炭盆里那一点将熄未熄的红。他数着自己的呼吸，一，二，三，一直数到三百，雪声才渐渐密起来。</p>
+        <p>这样的夜里，什么都不必想。他记得小时候母亲说过，落雪的时候，天与地之间隔着一层棉，人说的话传不远，所以雪夜里可以放心地说真话。</p>
+        <p>他于是很轻地说了一个名字。雪把它接住了，没有还回来。</p>
+      </div>
+
+      <div class="r-foot">
+        <span>第十二章 · 雪落无声</span>
+        <span>5 / 16 · 34.2%</span>
+      </div>
+
+      <div class="r-menu">
+        <div class="m1">
+          <div class="mv">上一章</div>
+          <div class="slider">
+            <div class="tr"></div>
+            <div class="fl" style="width:34%"></div>
+            <div class="kn" style="left:34%"></div>
+          </div>
+          <div class="mv">下一章</div>
+        </div>
+        <div class="minfo">
+          <span>34.2%</span>
+          <span>第 12 / 35 章</span>
+        </div>
+        <div class="rule"></div>
+        <div class="m2">
+          <div class="it">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#E2DACB" stroke-width="1.5" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="18" cy="18" r="1.6" fill="#E2DACB" stroke="none"/></svg>
+            <span>目录</span>
+          </div>
+          <div class="it">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#E2DACB" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19"/></svg>
+            <span>日间</span>
+          </div>
+          <div class="it">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#E2DACB" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/></svg>
+            <span>设置</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="gesture"><i></i></div>
+  </div>
+
+  <div class="notes">
+    <b>改了什么：</b>对应 <code>ReaderTheme.of('dark')</code> 的四个值 ——
+    bg <code>#111111 → #14110D</code>（与书架暗色同一家族的暖黑）、text <code>#C8C8C8 → #C8BFAF</code>（暖白）。
+    菜单浮层、滑块、图标全部从 <code>theme.text</code> 取色，与现在的实现机制相同，只换值。<br>
+    <b>注意</b>：全局夜间打开时阅读页强制跟随（<code>appDark</code> 优先）的现有逻辑不变。
+  </div>
+</div>
+
+</div><!-- /stage -->
+
+<script>
+/* 效果稿里那点交互：点分段控件 / 色块 / Tab 时切换选中态。
+   只为让人看出「选中态长什么样」，不承载任何业务逻辑。 */
+document.addEventListener('click', function (e) {
+  var b = e.target.closest('.seg b');
+  if (b) { b.parentNode.querySelectorAll('b').forEach(function (x) { x.classList.remove('on'); }); b.classList.add('on'); return; }
+
+  var th = e.target.closest('.themes .th');
+  if (th) { th.parentNode.querySelectorAll('.th').forEach(function (x) { x.classList.remove('on'); }); th.classList.add('on'); return; }
+
+  var s2 = e.target.closest('.seg2 b');
+  if (s2) { s2.parentNode.querySelectorAll('b').forEach(function (x) { x.classList.remove('on'); }); s2.classList.add('on'); return; }
+
+  var tab = e.target.closest('.tab');
+  if (tab) { tab.parentNode.querySelectorAll('.tab').forEach(function (x) { x.classList.remove('on'); }); tab.classList.add('on'); return; }
+
+  /* 封面方案点选：只标记选中，告诉我你选了哪个即可 */
+  var co = e.target.closest('.copt');
+  if (co) { document.querySelectorAll('.copt').forEach(function (x) { x.classList.remove('sel'); }); co.classList.add('sel'); return; }
+});
+</script>
+</body>
+</html>

@@ -48,6 +48,7 @@ export struct BookListItem {
     return parts.join(' · ');
   }
 
+  /** 用书名首字做占位封面的字（`BookCover` 的首字口径） */
   private coverLabel(): string {
     return this.book.title.length > 0 ? this.book.title.substring(0, 1) : '书';
   }
@@ -110,6 +111,8 @@ export struct BookListItem {
           Text(this.book.title)
             .fontSize(AppTheme.FONT_SUBTITLE)
             .fontColor(AppColor.textPrimary)
+            // 衬线（探测到才有）—— 与所有题字同一套语汇
+            .fontFamily(AppFont.titleFamily())
             .letterSpacing(AppTheme.TRACK_NAME)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -126,13 +129,10 @@ export struct BookListItem {
           /**
            * 进度：2vp 发丝轨道 + accent 填充 + 等宽百分比。
            *
-           * ⚠️ 从 4vp 实心块降到 2vp：4vp 在浅色卡片上是一条"色块"，
-           * 会把整行的重量拉到进度条上；2vp 才是"书页上的一条标线"。
-           * 轨道用 `divider` 而不是 `cover_text`：这里是页面卡片，
+           * ⚠️ 轨道用 `divider` 而不是 `cover_text`：这里是页面卡片，
            * 分隔线令牌才是同一个语汇。
            *
-           * ⚠️ 轨道**恒显示**（哪怕 0%），与 `BookCover` 上"0% 不画轨道"不同 ——
-           * 那里是封面上的装饰，这里是数据行：一行书的信息里
+           * ⚠️ 轨道**恒显示**（哪怕 0%）：一行书的信息里
            * "读了多少"必须有位置，否则 0% 的书那一行会缺一块。
            */
           Row({ space: AppTheme.GAP_S }) {
@@ -155,14 +155,23 @@ export struct BookListItem {
               .fontFeature(AppFont.TABULAR)
           }
           .width('100%')
-
-          Text(DateUtil.humanize(this.book.lastReadAt))
-            .fontSize(10)
-            .fontColor(AppColor.textHint)
-            .width('100%')
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
+
+        /**
+         * 右侧时间列：最近阅读时间单列放出。
+         *
+         * ⚠️ 原实现时间挤在进度行下方，整列书的时间无法纵向比；
+         * 单列之后"最近在读哪些"一眼可扫。未读的书显示「未读」，
+         * 与时间占同一个位置 —— 语义相同（"什么时候读的"）。
+         */
+        Text(this.book.hasNoProgress() ? '未读' : DateUtil.humanize(this.book.lastReadAt))
+          .fontSize(10)
+          .fontColor(AppColor.textHint)
+          .maxLines(1)
+          .alignSelf(ItemAlign.Start)
+          .padding({ top: 3 })
       }
       .width('100%')
       .padding(AppTheme.GAP_M)

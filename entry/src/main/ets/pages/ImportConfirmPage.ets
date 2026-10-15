@@ -18,7 +18,7 @@ import { ImportPreparation, ImportResult } from '../data/service/ImportService';
  * ⚠️ **必须是模块级常量，绝不能写成 struct 的 `static` 成员**。
  * ArkTS 的 `@Component struct` **不支持静态成员** ——
  * 写成 `private static readonly` 会让页面无法正常工作（本项目实测踩过）。
- * 全项目惯例都是这样：`SettingsPanel` 的 `FONT_SIZES` / `PAGE_MODES`、
+ * 全项目惯例都是这样：`SettingsPanel` 的 `PAGE_MODES`、
  * `Index` 的 `TAB_LABELS`、`ChapterParser` 的 `HIGH_RULES`、
  * `ReaderCatalogPage` 的 `TAB_CATALOG` —— 一律放模块顶层。
  *

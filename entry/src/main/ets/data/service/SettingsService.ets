@@ -120,15 +120,23 @@ export class SettingsService {
     s.fontSize = this.getNumber(SettingsKeys.FONT_SIZE, s.fontSize);
     s.fontFamily = this.getString(SettingsKeys.FONT_FAMILY, s.fontFamily);
     s.lineHeight = this.getNumber(SettingsKeys.LINE_HEIGHT, s.lineHeight);
-    s.paragraphSpacing = this.getNumber(SettingsKeys.PARAGRAPH_SPACING, s.paragraphSpacing);
+    /**
+     * ⚠️ `paragraphSpacing` **刻意不读也不写**：段距设置已整个移除
+     * （原因见 `SettingsPanel` 的说明：ArkUI 没有段落间距属性，
+     * 段距只能插整数个空行 ⇒ 滑块上只有 0.25 一档有效、中间全是死区）。
+     * 段落之间的空隙现在由**原文空行**承担。
+     */
     s.pageMargin = this.getNumber(SettingsKeys.PAGE_MARGIN, s.pageMargin);
     s.letterSpacing = this.getNumber(SettingsKeys.LETTER_SPACING, s.letterSpacing);
-    s.firstLineIndent = this.getNumber(SettingsKeys.FIRST_LINE_INDENT, s.firstLineIndent);
+    /**
+     * ⚠️ `firstLineIndent` **刻意不读也不写**：它已不是可调设置
+     * （固定为 `AppConstants.DEFAULT_FIRST_LINE_INDENT`），
+     * 落盘一个永远不变的值没有意义。
+     * 它仍参与分页与渲染，但取值只来自模型默认值。
+     */
 
     s.pageMode = this.getString(SettingsKeys.PAGE_MODE, s.pageMode);
     s.theme = this.getString(SettingsKeys.THEME, s.theme);
-    s.keepScreenOn = this.getBoolean(SettingsKeys.KEEP_SCREEN_ON, s.keepScreenOn);
-    s.volumeKeyPage = this.getBoolean(SettingsKeys.VOLUME_KEY_PAGE, s.volumeKeyPage);
     s.brightness = this.getNumber(SettingsKeys.BRIGHTNESS, s.brightness);
 
     s.gridMode = this.getBoolean(SettingsKeys.GRID_MODE, s.gridMode);
@@ -145,15 +153,13 @@ export class SettingsService {
     this.putNumber(SettingsKeys.FONT_SIZE, s.fontSize);
     this.putString(SettingsKeys.FONT_FAMILY, s.fontFamily);
     this.putNumber(SettingsKeys.LINE_HEIGHT, s.lineHeight);
-    this.putNumber(SettingsKeys.PARAGRAPH_SPACING, s.paragraphSpacing);
+    // ⚠️ 不写 `paragraph_spacing`：段距设置已移除（见上面的读取处说明）
     this.putNumber(SettingsKeys.PAGE_MARGIN, s.pageMargin);
     this.putNumber(SettingsKeys.LETTER_SPACING, s.letterSpacing);
-    this.putNumber(SettingsKeys.FIRST_LINE_INDENT, s.firstLineIndent);
+    // ⚠️ 不写 `first_line_indent`：它已不是可调设置（见上面的读取处说明）
 
     this.putString(SettingsKeys.PAGE_MODE, s.pageMode);
     this.putString(SettingsKeys.THEME, s.theme);
-    this.putBoolean(SettingsKeys.KEEP_SCREEN_ON, s.keepScreenOn);
-    this.putBoolean(SettingsKeys.VOLUME_KEY_PAGE, s.volumeKeyPage);
     this.putNumber(SettingsKeys.BRIGHTNESS, s.brightness);
 
     this.putBoolean(SettingsKeys.GRID_MODE, s.gridMode);

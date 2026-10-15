@@ -14,20 +14,16 @@ const RECENT_DAYS: number = 7;
  * 于是"最高的一天"正好顶到绘图区顶边，不会超出。
  */
 const PLOT_HEIGHT: number = 96;
-/** 柱子宽度与圆角（vp） */
-const BAR_WIDTH: number = 14;
-const BAR_RADIUS: number = 3;
+/** 柱子宽度与圆角（vp）。
+ *
+ * ⚠️ 14 → 11：粗柱无网格像仪表盘，细柱带网格像账簿（见 buildRecentBars）。
+ */
+const BAR_WIDTH: number = 11;
+const BAR_RADIUS: number = 2.5;
 /** 柱间距（vp），必须与标签行的间距一致，否则柱与标签对不齐 */
 const BAR_GAP: number = 8;
-/**
- * 汇总面板每行的内边距（vp）。
- *
- * ⚠️ 不用 `AppTheme.GAP_M`(12)：统计行只有"标签 + 数值"两个元素，
- * 12 会让四行加起来显得松散，一行 14 竖着看更成一条账。取 14 而不是
- * 新造一个 16，是为了和 `PAGE_PADDING` 区分开 —— 那是页边距，这是行内边距。
- */
-const STAT_ROW_PADDING: number = 14;
-
+/** 绘图区顶部往下画几道水平网格线（含基线之外的参考线） */
+const GRID_LINES: number = 3;
 /**
  * 统计页（书架底部 Tab 第 2 页）。
  *
@@ -40,21 +36,19 @@ const STAT_ROW_PADDING: number = 14;
  *    每次落库成功都会 `AppState.bumpStats()`，阅读页回到前台/退出时版本号变化，
  *    这里自动重查 —— 与书架的 `ShelfRefreshRegistry` 同源不同通道，互不干扰。
  *
- * ## 本次改动：四张卡片 → 一块账页
+ * ## 本次改动：一块账页 → 一个主数值 + 账目行
  *
- * 原实现把"今天 / 最近 7 天 / 连续阅读 / 累计阅读"做成 **2×2 四张尺寸完全相同
- * 的卡片**。这是产品界面里最典型的一种模板化写法（大数值 + 小标签 + 点缀色），
- * 它的代价很具体：
- *  - 四张卡各自重复一遍"我是卡片"这件事（圆角、底色、内边距），
- *    而它们本来就是**同一组数据**的四个字段；
- *  - 尺寸相同 ⇒ **没有主次**：用户扫一眼分不出"今天读了多久"和"累计读了多久"
- *    哪个更该看；
- *  - 每张卡里标签在上、数值在下，四个数值不在同一条基线上，
- *    于是四个数字**无法纵向比较**——而这恰恰是统计页最该支持的动作。
+ * 上一版把四项收成"一块面板 + 四行"，判断是对的（数值右对齐、纵向可比）。
+ * 这一版再进一步，把**层级**做出来：
+ *  - 「今天」是用户打开这一页最想看的数 —— 把它**拎出来**做 54vp 的
+ *    衬线主数值，单位（时/分）用衬线小字缀在后面；
+ *  - 其余三项（最近 7 天 / 连续阅读 / 累计阅读）退成**账目行**：
+ *    无卡片、只有发丝线，左标签右数值 —— "账"的意象；
+ *  - 柱状图收细（14→11vp）并加**水平网格线**：粗柱无网格像仪表盘，
+ *    细柱带网格像账簿；柱顶补数值，不用心算柱高。
  *
- * 现在收成一块 `bgCard` 面板 + 四行：**左标签、右数值、行间发丝线**。
- * 布局本身就把"标签—数值"的对应关系说清了，四个数值右对齐在同一条基线上，
- * 一眼就能纵向比。这不是"更好看"，是**更好读**。
+ * ⚠️ 主数值不放卡片、不铺底：它本身就是版面的主角，
+ * 套一层卡反而把"这是最重要的一件事"稀释成"又一个面板"。
  */
 @Component
 export struct StatsPage {
@@ -150,9 +144,10 @@ export struct StatsPage {
         .justifyContent(FlexAlign.Center)
       } else {
         Scroll() {
-          Column({ space: AppTheme.GAP_M }) {
-            this.buildSummaryPanel()
+          Column({ space: AppTheme.GAP_L }) {
+            this.buildLede()
             this.buildRecentBars()
+            this.buildLedger()
           }
           .width('100%')
         }
@@ -174,50 +169,93 @@ export struct StatsPage {
   }
 
   /**
-   * 汇总面板：一块卡片 + 四行。
+   * 主数值：今天读了多久。
    *
-   * ⚠️ 四行**内联写死**，不抽带参 `@Builder` ——
-   * 设计文档第 15/41 条：带参 `@Builder` 在同一处 `build()` 里被调多次时
-   * 参数会串位；"结构相同、文字不同"的小单元必须逐个内联。
+   * ⚠️ 数字与单位分开渲染：数字 54vp、单位衬线 17vp 各自取色，
+   * 比"塞在一个字符串里靠字号统一"干净 —— 单位小一号是排印惯例。
+   * `humanizeDuration` 的输出格式（"X时Y分"）在这里拆开。
    */
   @Builder
-  buildSummaryPanel() {
-    Column() {
-      Row() {
-        Text('今天')
-          .fontSize(13)
-          .fontColor(AppColor.textSecondary)
-          // ⚠️ 标签必须吃掉剩余宽度，数值才会被顶到右边缘。
-          // 少了这个 layoutWeight，数值会紧跟在标签后面，
-          // 四行数值就落在四条不同的横坐标上 —— "纵向可比"这件事当场失效。
-          .layoutWeight(1)
-        Text(DateUtil.humanizeDuration(this.summary.todaySeconds))
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(AppColor.textPrimary)
-          // 等宽数字：四个数值右对齐后，逐位对齐才谈得上"纵向比较"
-          .fontFeature(AppFont.TABULAR)
-      }
-      .width('100%')
-      .padding(STAT_ROW_PADDING)
-      .alignItems(VerticalAlign.Bottom)
+  buildLede() {
+    Row() {
+      Column({ space: 6 }) {
+        Text('今 日')
+          .fontSize(11)
+          .letterSpacing(2.6)
+          .fontColor(AppColor.textHint)
 
+        Row({ space: 2 }) {
+          Text(this.ledeNumber())
+            .fontSize(54)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppColor.textPrimary)
+            .fontFeature(AppFont.TABULAR)
+            // 大数字配衬线才有"刊头"的味道；取不到衬线自动回退系统字体
+            .fontFamily(AppFont.titleFamily())
+
+          Text(this.ledeUnit())
+            .fontSize(17)
+            .fontColor(AppColor.textSecondary)
+            .fontFamily(AppFont.titleFamily())
+            .margin({ left: 4, bottom: 8 })
+        }
+        .alignItems(VerticalAlign.Bottom)
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      // 右下角缀连续天数：今天这一格"读没读"的第二个信号
+      Text(`连续 ${this.summary.continuousDays} 天`)
+        .fontSize(AppTheme.FONT_CAPTION)
+        .fontColor(AppColor.accent)
+        .fontFeature(AppFont.TABULAR)
+        .alignSelf(ItemAlign.End)
+        .padding({ bottom: 10 })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Bottom)
+  }
+
+  /** 主数值的数字部分（"1时24分" → "1:24" 不好读，直接拆"时/分"两段取主段） */
+  private ledeNumber(): string {
+    return `${this.summary.todaySeconds / 3600 >= 1
+      ? Math.floor(this.summary.todaySeconds / 3600)
+      : Math.floor(this.summary.todaySeconds / 60)}`;
+  }
+
+  /** 主数值的单位部分（时 / 分） */
+  private ledeUnit(): string {
+    return this.summary.todaySeconds / 3600 >= 1 ? '时' : '分';
+  }
+
+  /**
+   * 账目行：最近 7 天 / 连续阅读 / 累计阅读 / 有记录天数。
+   *
+   * ⚠️ 三行**内联写死**，不抽带参 `@Builder` ——
+   * 设计文档第 15/41 条：带参 `@Builder` 在同一处 `build()` 里被调多次时
+   * 参数会串位；"结构相同、文字不同"的小单元必须逐个内联。
+   *
+   * ⚠️ 无卡片、无底色：账目行不需要容器，只有发丝线 ——
+   * 主数值已经承担了版面重量，这里越轻越好。
+   */
+  @Builder
+  buildLedger() {
+    Column() {
       Row() {
         Text('最近 7 天')
           .fontSize(13)
           .fontColor(AppColor.textSecondary)
+          // ⚠️ 标签必须吃掉剩余宽度，数值才会被顶到右边缘
           .layoutWeight(1)
         Text(DateUtil.humanizeDuration(this.summary.weekSeconds))
-          .fontSize(18)
+          .fontSize(19)
           .fontWeight(FontWeight.Medium)
           .fontColor(AppColor.textPrimary)
           .fontFeature(AppFont.TABULAR)
       }
       .width('100%')
-      .padding(STAT_ROW_PADDING)
+      .padding({ top: 14, bottom: 14 })
       .alignItems(VerticalAlign.Bottom)
-      // 行间发丝线用**上边框**表达：只有第二行起才需要，
-      // 画成"每行都有的下边框"会让最后一行多出一条悬空的线
       .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
 
       Row() {
@@ -226,13 +264,13 @@ export struct StatsPage {
           .fontColor(AppColor.textSecondary)
           .layoutWeight(1)
         Text(`${this.summary.continuousDays} 天`)
-          .fontSize(18)
+          .fontSize(19)
           .fontWeight(FontWeight.Medium)
           .fontColor(AppColor.textPrimary)
           .fontFeature(AppFont.TABULAR)
       }
       .width('100%')
-      .padding(STAT_ROW_PADDING)
+      .padding({ top: 14, bottom: 14 })
       .alignItems(VerticalAlign.Bottom)
       .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
 
@@ -242,34 +280,55 @@ export struct StatsPage {
           .fontColor(AppColor.textSecondary)
           .layoutWeight(1)
         Text(DateUtil.humanizeDuration(this.summary.totalSeconds))
-          .fontSize(18)
+          .fontSize(19)
           .fontWeight(FontWeight.Medium)
           .fontColor(AppColor.textPrimary)
           .fontFeature(AppFont.TABULAR)
       }
       .width('100%')
-      .padding(STAT_ROW_PADDING)
+      .padding({ top: 14, bottom: 14 })
       .alignItems(VerticalAlign.Bottom)
       .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
+
+      Row() {
+        Text('有记录的天数')
+          .fontSize(13)
+          .fontColor(AppColor.textSecondary)
+          .layoutWeight(1)
+        Text(`${this.summary.readingDays} 天`)
+          .fontSize(19)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(AppColor.textPrimary)
+          .fontFeature(AppFont.TABULAR)
+      }
+      .width('100%')
+      .padding({ top: 14, bottom: 14 })
+      .alignItems(VerticalAlign.Bottom)
+      .border({
+        width: { top: AppTheme.HAIRLINE, bottom: AppTheme.HAIRLINE },
+        color: AppColor.divider
+      })
     }
     .width('100%')
-    .backgroundColor(AppColor.bgCard)
-    .borderRadius(AppTheme.CARD_RADIUS)
-    .clip(true)
   }
 
   /**
    * 最近 7 天柱状图。
    *
-   * 版面分两段：**绘图区**（含基线）与**标签行**。
+   * 版面分两段：**绘图区**（含水平网格线与基线）与**标签行**。
    *
-   * ⚠️ 为什么把标签拆到绘图区外面，而不是像原来那样每个柱下面挂一个标签：
-   * 原来基线没处放 —— 若把基线画在"柱 + 标签"整体之下，它就成了
-   * **标签下面的一条横线**（读起来像表格的行线），而不是"柱子从这条线长起来"。
-   * 拆开之后基线落在绘图区下沿，语义才对。
+   * ⚠️ 为什么把标签拆到绘图区外面：基线必须落在绘图区下沿，
+   * "柱子从这条线长起来"的语义才对（拆开的理由上一版已论证，保留）。
    *
-   * ⚠️ 两段用**同一个 `layoutWeight(1)` 等分方式**，柱与标签因此天然对齐 ——
-   * 不靠写宽度，改列数也不会错位。
+   * ⚠️ 两段用**同一个 `layoutWeight(1)` 等分方式**，柱与标签因此天然对齐。
+   *
+   * ## 本次改动：加水平网格线 + 柱顶数值
+   *
+   *  - 三道淡网格线（`rule-soft` 用 `divider` 低不透明度近似）把绘图区分成
+   *    四档，柱高有参照 —— 账簿的意象，而不是仪表盘；
+   *  - 柱顶补数值（分钟数，0 显示 "0"）：不用心算柱高。
+   *    数值用 9.5vp 的 hint 色，不与柱子抢；
+   *  - 柱宽 14 → 11。
    */
   @Builder
   buildRecentBars() {
@@ -281,45 +340,50 @@ export struct StatsPage {
         .width('100%')
 
       /**
-       * 绘图区 + 基线。
-       *
-       * ⚠️ 基线是绘图区的一个**底部对齐兄弟节点**，不参与柱子的高度计算；
-       * 柱子从下往上长（`justifyContent(End)`），最高的一天正好顶到绘图区顶边。
-       *
-       * ⚠️ 基线画在柱子**之后**（即叠在柱子之上）：
-       * `Stack` 的绘制顺序就是子节点顺序，后画的在上层。
-       * 反过来先画基线的话，14vp 宽的柱子会把它在自己那一段盖掉，
-       * 于是基线变成一条**断断续续的虚线** —— 那不是"基线"，
-       * 而是每根柱子下面的一截影子。
+       * 绘图区：网格线画在**柱子之下**（先画）——
+       * 网格是背景参照，柱子是数据；反过来柱子会被线"切"。
+       * 基线仍画在**柱子之后**（叠在柱子上），保证是连续的一条。
        */
       Stack({ alignContent: Alignment.Bottom }) {
+        // ① 水平网格线：三道淡线 + 底部基线位置留空（基线单独画）
+        Column() {
+          ForEach(this.gridLineKeys(), (_: string, idx: number) => {
+            Row()
+              .width('100%')
+              .height(AppTheme.HAIRLINE)
+              .backgroundColor(AppColor.divider)
+              .opacity(0.5)
+              .margin({ bottom: (PLOT_HEIGHT / (GRID_LINES + 1)) - 1 })
+          }, (k: string) => k)
+        }
+        .width('100%')
+        .height(PLOT_HEIGHT - 22)
+        .justifyContent(FlexAlign.Start)
+        .alignItems(HorizontalAlign.Start)
+
+        // ② 柱子
         Row({ space: BAR_GAP }) {
           ForEach(this.bars, (bar: DayBar) => {
             Column() {
+              // 柱顶数值：分钟数（0 也画，"那天没读"本身是信息）
+              Text(`${Math.round(bar.seconds / 60)}`)
+                .fontSize(9.5)
+                .fontColor(bar.isToday ? AppColor.accent : AppColor.textHint)
+                .fontFeature(AppFont.TABULAR)
+                .margin({ bottom: 4 })
+
               /**
-               * ⚠️ 今天那根柱子用 `Column` 包一层，把圆点**挖在柱子内部**
-               * （柱底 = 圆点，`bgCard` 色），而不是在柱子**上面**另起一个兄弟节点。
-               *
-               * 兄弟节点的写法有个隐蔽的几何问题：圆点带 `margin top` 时，
-               * 外层 `Stack` 的高度会变成 `max(柱高, 圆点+边距)` ——
-               * 于是**矮柱子被顶高**，柱底离开基线，看起来像数据不对。
-               * 包在柱子里则高度恒等于柱高，圆点画在柱顶内侧。
-               *
-               * ⚠️ 圆点用 `bgCard` 挖空而不是另加一种颜色：浅色下是
-               * "深蓝柱上一点白"，深色下是"浅蓝柱上一点深灰"，
-               * 两种模式都成立，且不需要新增任何颜色令牌。
-               *
-               * ⚠️ `seconds > 0` 才画圆点：0 秒时柱子只有 2vp，
-               * 一个 5vp 的圆点会从柱子里溢出来、飘到基线下方。
+               * ⚠️ 今天那根柱子把圆点**挖在柱子内部**（柱顶 = 圆点，`bgCard` 色）：
+               * 兄弟节点写法会把矮柱子顶高、柱底离开基线（上一版论证过，保留）。
                */
               if (bar.isToday && bar.seconds > 0) {
                 Column() {
                   Row()
-                    .width(5)
-                    .height(5)
-                    .borderRadius(2.5)
+                    .width(4)
+                    .height(4)
+                    .borderRadius(2)
                     .backgroundColor(AppColor.bgCard)
-                    .margin({ top: 6 })
+                    .margin({ top: 5 })
                 }
                 .width(BAR_WIDTH)
                 .height(this.barHeight(bar.seconds))
@@ -336,6 +400,10 @@ export struct StatsPage {
             }
             .layoutWeight(1)
             .height(PLOT_HEIGHT)
+            /**
+             * ⚠️ 柱列改成"数值在柱上方"的纵排：
+             * justifyContent(End) 把"数值 + 柱"压到底部，数值自然浮在柱顶。
+             */
             .justifyContent(FlexAlign.End)
             .alignItems(HorizontalAlign.Center)
           }, (bar: DayBar) => `bar_${bar.label}`)
@@ -343,7 +411,7 @@ export struct StatsPage {
         .width('100%')
         .height(PLOT_HEIGHT)
 
-        // 基线：画在柱子之后 = 叠在柱子之上，因此是**连续**的一条
+        // ③ 基线：画在柱子之后 = 叠在柱子之上，因此是**连续**的一条
         Row()
           .width('100%')
           .height(AppTheme.HAIRLINE)
@@ -376,6 +444,20 @@ export struct StatsPage {
     .padding(AppTheme.GAP_M)
     .backgroundColor(AppColor.bgCard)
     .borderRadius(AppTheme.CARD_RADIUS)
+  }
+
+  /**
+   * 网格线的 ForEach 键。
+   *
+   * ⚠️ `ForEach` 需要一个数组；网格线是纯装饰、条数固定，
+   * 生成 ["g0","g1","g2"] 这样无意义的键即可，渲染时不用键的内容。
+   */
+  private gridLineKeys(): string[] {
+    const keys: string[] = [];
+    for (let i = 0; i < GRID_LINES; i++) {
+      keys.push(`grid_${i}`);
+    }
+    return keys;
   }
 
   /**

@@ -1,9 +1,6 @@
-import { AppTheme, ReaderTheme } from '../../common/theme/AppTheme';
+import { AppColor, AppTheme, ReaderTheme } from '../../common/theme/AppTheme';
 import { ReaderSettings } from '../../model/ReaderSettings';
 import { AppConstants } from '../../common/constants/AppConstants';
-
-/** 字号档位（vp）。上下限刻意留窄：14 以下读不动，30 以上一屏没几个字 */
-const FONT_SIZES: number[] = [14, 16, 18, 20, 22, 24, 26, 30];
 
 /**
  * 翻页方式：只放已实现的两种。
@@ -82,14 +79,22 @@ export struct SettingsPanel {
     next.fontSize = s.fontSize;
     next.fontFamily = s.fontFamily;
     next.lineHeight = s.lineHeight;
-    next.paragraphSpacing = s.paragraphSpacing;
+    /**
+     * ⚠️ `paragraphSpacing` 与 `firstLineIndent` **都不参与派生**：
+     * 两者都已不是可调设置（段距整个移除、缩进固定为 2）。
+     * `derive()` 出来的新对象用模型默认值，与原值相同 —— 无副作用。
+     * 在这里复制它们反而会让人以为"这个面板还能改这两项"。
+     */
     next.pageMargin = s.pageMargin;
     next.letterSpacing = s.letterSpacing;
-    next.firstLineIndent = s.firstLineIndent;
+    /**
+     * ⚠️ `firstLineIndent` **不参与派生**：它已不是可调设置
+     * （固定为 `AppConstants.DEFAULT_FIRST_LINE_INDENT`）。
+     * 若在这里复制一份，反而会让人以为它还能被这个面板改动。
+     * `derive()` 出来的新对象会用模型默认值，与原值相同 —— 无副作用。
+     */
     next.pageMode = s.pageMode;
     next.theme = s.theme;
-    next.keepScreenOn = s.keepScreenOn;
-    next.volumeKeyPage = s.volumeKeyPage;
     next.brightness = s.brightness;
     next.gridMode = s.gridMode;
     next.bookSort = s.bookSort;
@@ -113,24 +118,34 @@ export struct SettingsPanel {
         Column({ space: AppTheme.GAP_L }) {
           this.buildFontSizeRow()
           this.buildLineHeightRow()
-          this.buildParagraphSpacingRow()
-          this.buildFirstLineIndentRow()
+          /**
+           * ⚠️ **首行缩进已移除**（用户要求）：中文正文的段首缩进几乎
+           * 总是两个字，做一个永远不会被动的滑块只是占地方。
+           * 机制仍在（`ReaderSettings.firstLineIndent` 固定为 2），
+           * 只是不再开放调节。
+           *
+           * ⚠️ **段间距也已移除**（用户要求）：ArkUI 没有"段落间距"属性
+           * （无 `leadingMargin` / `paragraphSpacing`，`Span` 也没有 margin），
+           * 段距只能靠"插入整数个空行"实现 —— 于是滑块上只有
+           * `round(ps × 2)` 个有效档位（0.25 一档），中间全是**死区**
+           * （用户实测："0~0.2 不变、0.2~0.7 不变"，就是这个量化造成的）。
+           *
+           * 现在间距**回到由原文空行决定**：这本书每段之间本就有空行，
+           * 它自己就是最好的段落间距，不需要再叠一个调不动的旋钮。
+           */
           this.buildLetterSpacingRow()
           this.buildPageMarginRow()
           this.buildPageModeRow()
           this.buildThemeRow()
           /**
-           * ⚠️ 亮度与两个开关**排在排版项之后**，顺序是有意的：
-           * 本面板的开头是"调正文"（字号/行距/缩进/边距），
-           * 用户最常动的就是这几项；亮度与常亮是**一次配好就不再动**的项，
-           * 放在最下面才不会挡路。
+           * ⚠️ 亮度排在排版项之后：开头是"调正文"（字号/行距/缩进/边距），
+           * 那是用户最常动的；亮度是**一次配好就不再动**的项，放最后不挡路。
            *
-           * ⚠️ 这三项都是**窗口级**设置（作用于整个阅读界面，不改排版），
+           * ⚠️ 它是**窗口级**设置（作用于整个阅读界面，不改排版），
            * 与上面"改一下就重排正文"的项性质不同 —— 分组排列本身
            * 就在表达这个区别。
            */
           this.buildBrightnessRow()
-          this.buildSwitchRows()
         }
         .width('100%')
         .padding({ bottom: AppTheme.GAP_L })
@@ -188,9 +203,6 @@ export struct SettingsPanel {
   @Builder
   buildFontSizeRow() {
     Column({ space: AppTheme.GAP_S }) {
-      // ⚠️ 这些行标题与按钮一律**内联**，不抽成带参 @Builder：
-      // 设计文档第 15 条 —— 同一个 build() 里把带参 @Builder 调多次，参数会串位
-      // （本面板行标题有 6 处、样式完全相同，最容易踩这个坑）。
       Row() {
         Text('字号')
           .fontSize(AppTheme.FONT_BODY)
@@ -202,79 +214,39 @@ export struct SettingsPanel {
       }
       .width('100%')
 
-      // 用"档位 + A-/A+"而不是滑块：
-      // 字号是离散档位，且每改一次都要重排，连续拖动只会疯狂重算。
-      Row({ space: AppTheme.GAP_M }) {
-        Text('A-')
-          .fontSize(AppTheme.FONT_BODY)
-          .fontColor(this.theme.text)
-          .width(44)
-          .height(32)
-          .textAlign(TextAlign.Center)
-          .borderRadius(AppTheme.ITEM_RADIUS)
-          .backgroundColor(this.theme.bg)
-          .onClick(() => {
-            this.stepFontSize(-1);
-          })
-
-        Row({ space: 4 }) {
-          ForEach(FONT_SIZES, (size: number) => {
-            Text(`${size}`)
-              .fontSize(AppTheme.FONT_CAPTION)
-              .fontColor(this.settings.fontSize === size
-                ? this.theme.bg
-                : this.theme.secondary)
-              .backgroundColor(this.settings.fontSize === size
-                ? this.theme.text
-                : this.theme.barBg)
-              .borderRadius(AppTheme.ITEM_RADIUS)
-              .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-              .onClick(() => {
-                const next: ReaderSettings = this.derive();
-                next.fontSize = size;
-                this.emit(next);
-              })
-          }, (size: number) => `${size}`)
-        }
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.SpaceBetween)
-
-        Text('A+')
-          .fontSize(AppTheme.FONT_SUBTITLE)
-          .fontColor(this.theme.text)
-          .width(44)
-          .height(32)
-          .textAlign(TextAlign.Center)
-          .borderRadius(AppTheme.ITEM_RADIUS)
-          .backgroundColor(this.theme.bg)
-          .onClick(() => {
-            this.stepFontSize(1);
-          })
-      }
-      .width('100%')
+      /**
+       * 字号：**滑块**（原来是 8 个离散档位 + A−/A+ 按钮）。
+       *
+       * ⚠️ 松手才提交（`SliderChangeMode.End` / `Click`），与其它滑块一致：
+       * 字号每变 1vp 都要清分页缓存 + 全章重排，拖动过程中连续提交
+       * 会把主线程压满、界面直接卡住。
+       *
+       * ⚠️ 范围与步长走 `AppConstants.MIN/MAX_FONT_SIZE`、`FONT_SIZE_STEP`：
+       * 上下限与原档位一致（14~30），只是把粒度从"8 档"放开到"每 1vp"。
+       *
+       * ⚠️ **不带 `A−` / `A+` 按钮**（用户要求去掉）：
+       * 滑块已经能覆盖 14~30 的每一档，两个按钮既占宽度又让这一行显得拥挤；
+       * 而且它们与滑块共用同一份范围，属于"同一能力两个入口"。
+       * 判据：**滑块的粒度已经够细时，就不要在旁边再放步进按钮。**
+       */
+      Slider({
+        value: this.settings.fontSize,
+        min: AppConstants.MIN_FONT_SIZE,
+        max: AppConstants.MAX_FONT_SIZE,
+        step: AppConstants.FONT_SIZE_STEP
+      })
+        .selectedColor(this.theme.text)
+        .trackColor(this.theme.secondary)
+        .width('100%')
+        .onChange((value: number, mode: SliderChangeMode) => {
+          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+            const next: ReaderSettings = this.derive();
+            next.fontSize = Math.round(value);
+            this.emit(next);
+          }
+        })
     }
     .width('100%')
-  }
-
-  /** 按档位表步进，而不是 ±1vp：字号在档位之间跳，排版结果才可预期 */
-  private stepFontSize(direction: number): void {
-    const sizes: number[] = FONT_SIZES;
-    const current: number = this.settings.fontSize;
-    let index: number = 0;
-    for (let i = 0; i < sizes.length; i++) {
-      if (sizes[i] <= current) {
-        index = i;
-      }
-    }
-    const target: number = direction > 0
-      ? Math.min(sizes.length - 1, index + 1)
-      : Math.max(0, index - 1);
-    if (sizes[target] === current) {
-      return;
-    }
-    const next: ReaderSettings = this.derive();
-    next.fontSize = sizes[target];
-    this.emit(next);
   }
 
   // ------------------------------------------------------------ 行距
@@ -316,78 +288,6 @@ export struct SettingsPanel {
 
   private lineHeightLabel(): string {
     return this.settings.lineHeight.toFixed(1);
-  }
-
-  // ------------------------------------------------------------ 段距
-
-  @Builder
-  buildParagraphSpacingRow() {
-    Column({ space: AppTheme.GAP_S }) {
-      Row() {
-        Text('段间距')
-          .fontSize(AppTheme.FONT_BODY)
-          .fontColor(this.theme.text)
-          .layoutWeight(1)
-        Text(this.settings.paragraphSpacing.toFixed(1))
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(this.theme.secondary)
-      }
-      .width('100%')
-
-      Slider({
-        value: this.settings.paragraphSpacing * 10,
-        min: 0,
-        max: AppConstants.MAX_PARAGRAPH_SPACING * 10,
-        step: 1
-      })
-        .selectedColor(this.theme.text)
-        .trackColor(this.theme.secondary)
-        .width('100%')
-        .onChange((value: number, mode: SliderChangeMode) => {
-          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-            const next: ReaderSettings = this.derive();
-            next.paragraphSpacing = Math.round(value) / 10;
-            this.emit(next);
-          }
-        })
-    }
-    .width('100%')
-  }
-
-  // ------------------------------------------------------------ 首行缩进
-
-  @Builder
-  buildFirstLineIndentRow() {
-    Column({ space: AppTheme.GAP_S }) {
-      Row() {
-        Text('首行缩进')
-          .fontSize(AppTheme.FONT_BODY)
-          .fontColor(this.theme.text)
-          .layoutWeight(1)
-        Text(`${this.settings.firstLineIndent.toFixed(1)} 字`)
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(this.theme.secondary)
-      }
-      .width('100%')
-
-      Slider({
-        value: this.settings.firstLineIndent * 10,
-        min: 0,
-        max: 40,
-        step: 5
-      })
-        .selectedColor(this.theme.text)
-        .trackColor(this.theme.secondary)
-        .width('100%')
-        .onChange((value: number, mode: SliderChangeMode) => {
-          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-            const next: ReaderSettings = this.derive();
-            next.firstLineIndent = Math.round(value) / 10;
-            this.emit(next);
-          }
-        })
-    }
-    .width('100%')
   }
 
   // ------------------------------------------------------------ 字间距
@@ -479,7 +379,16 @@ export struct SettingsPanel {
   // ------------------------------------------------------------ 翻页方式
 
   /**
-   * 只提供已实现的两种，理由见文件顶部的 `PAGE_MODES` 注释。
+   * 翻页方式：**分段选择器**（segmented control）。
+   *
+   * 与"两颗内容宽度的胶囊"的区别，都是刻意的：
+   *  - **等宽平分**：两段各占一半，选中态是一个**滑块的槽**，
+   *    而不是"哪颗胶囊被点亮"。用户一眼看出这是"二选一"，不是两个按钮；
+   *  - **外框 + 内填充**：外层一条 `secondary` 描边把两段圈成**一个控件**，
+   *    内层用 `theme.bg` 反色表示选中项。原来的两颗独立胶囊
+   *    看起来像两个并列动作，用户得读文案才知道是互斥的。
+   *
+   * ⚠️ 只提供已实现的两种，理由见文件顶部的 `PAGE_MODES` 注释。
    */
   @Builder
   buildPageModeRow() {
@@ -488,7 +397,7 @@ export struct SettingsPanel {
         .fontSize(AppTheme.FONT_BODY)
         .fontColor(this.theme.text)
         .width('100%')
-      Row({ space: AppTheme.GAP_S }) {
+      Row() {
         ForEach(PAGE_MODES, (mode: string) => {
           Text(pageModeLabel(mode))
             .fontSize(AppTheme.FONT_BODY)
@@ -498,8 +407,12 @@ export struct SettingsPanel {
             .backgroundColor(this.settings.pageMode === mode
               ? this.theme.text
               : this.theme.bg)
+            // ⚠️ `layoutWeight(1)` 而不是各自写宽度：等分由容器算，
+            // 改文案/换语言时不会出现"某一段被文字撑宽、另一段被挤窄"
+            .layoutWeight(1)
+            .textAlign(TextAlign.Center)
+            .padding({ top: 8, bottom: 8 })
             .borderRadius(AppTheme.CHIP_RADIUS)
-            .padding({ left: 14, right: 14, top: 6, bottom: 6 })
             .onClick(() => {
               if (this.settings.pageMode === mode) {
                 return;
@@ -511,6 +424,11 @@ export struct SettingsPanel {
         }, (mode: string) => mode)
       }
       .width('100%')
+      .padding(3)
+      // 外框：把两段圈成一个控件
+      .border({ width: 1, color: this.theme.secondary })
+      .borderRadius(AppTheme.CHIP_RADIUS + 3)
+      .backgroundColor(this.theme.barBg)
     }
     .width('100%')
   }
@@ -537,8 +455,16 @@ export struct SettingsPanel {
               .backgroundColor(ReaderTheme.of(name).bg)
               .borderRadius(AppTheme.ITEM_RADIUS)
               .border({
-                width: this.settings.theme === name ? 2 : 1,
-                color: this.settings.theme === name ? this.theme.text : this.theme.secondary
+                /**
+                 * ⚠️ 选中态改用**点缀色描边**（1.5vp）而不是"黑边加粗到 2"：
+                 * 四个色块同时出现时，粗细差 0.5vp 几乎不可辨；
+                 * 一道朱色边在四块中性色里是唯一有颜色的，一眼可辨 ——
+                 * 与"点缀色只用于小面积"的纪律一致（四条 1.5vp 的边）。
+                 */
+                width: this.settings.theme === name ? 1.5 : 1,
+                color: this.settings.theme === name
+                  ? AppColor.accent
+                  : this.theme.secondary
               })
             Text(ReaderTheme.labelOf(name))
               .fontSize(AppTheme.FONT_CAPTION)
@@ -568,9 +494,19 @@ export struct SettingsPanel {
    * 屏幕亮度。
    *
    * ⚠️ 滑块范围是 **0~100**（整数），但设置里存的是 **-1 或 0~1** ——
-   * 转换只在本方法里做一次：`-1` 是"跟随系统"这个哨兵值，
-   * 它在滑块上表现为**最左端之外的一个独立状态**，所以用下面那颗
-   * 「跟随系统」胶囊来切换，滑块本身只表示 0~1 的手动值。
+   * 转换只在本方法里做一次。
+   *
+   * ## 为什么是「两个胶囊 + 一个滑块」而不是「一个胶囊 + 一个滑块」
+   *
+   * 上一版是"一颗「跟随系统」胶囊 + 一个滑块，且跟随系统时滑块被禁用"，
+   * 那是个**死循环式交互**（用户实测反馈"点不动、拖不了"）：
+   *  - 默认值就是 `-1`（跟随系统）⇒ 滑块一进来就是禁用态；
+   *  - 而唯一能解除禁用的，是那颗**看起来正表示当前状态**的胶囊 ——
+   *    它长得像"状态指示"而不是"开关"，用户根本不会想到去点它。
+   *
+   * 现在改成**两个并列胶囊（跟随系统 / 手动）**：二选一的关系一眼可见，
+   * 而且「手动」是一个非常明确的动作承诺 —— 选了它滑块就能拖。
+   * 判据：**当"可操作性"取决于另一个控件的状态时，那个控件必须长得像开关**。
    *
    * ⚠️ 拖动中也只改显示、松手才提交（与本面板其它滑块一致）：
    * 每次改动都会走一遍 `updateSettings` → 重排正文，
@@ -588,16 +524,32 @@ export struct SettingsPanel {
           .fontColor(this.theme.secondary)
           .margin({ left: AppTheme.GAP_S })
         Blank()
-        // 「跟随系统」：把亮度交回系统。选中态用反色胶囊，与翻页方式一致
+      }
+      .width('100%')
+
+      /**
+       * 亮度的来源：**分段选择器**（跟随系统 / 手动）。
+       *
+       * 与「翻页方式」用**完全同一套**写法（等宽分段 + 外框），
+       * 本面板里"二选一"因此只有一种表达 —— 这是刻意的：
+       * 同一面板里出现两种"二选一"长相，用户会以为它们的语义不同。
+       *
+       * ⚠️ 绝不能退回"一颗胶囊 + 禁用滑块"：默认就是跟随系统，
+       * 那样滑块一进来就是禁用态，而唯一能解锁的控件**长得像状态指示**，
+       * 用户不会想到去点它（用户实测反馈过"点不动、拖不了"）。
+       * 判据：**当"可操作性"取决于另一个控件的状态时，那个控件必须长得像开关。**
+       */
+      Row() {
         Text('跟随系统')
           .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(this.settings.brightness < 0 ? this.theme.bg : this.theme.text)
-          .backgroundColor(this.settings.brightness < 0 ? this.theme.text : this.theme.bg)
+          .fontColor(this.isManualBrightness() ? this.theme.text : this.theme.bg)
+          .backgroundColor(this.isManualBrightness() ? this.theme.bg : this.theme.text)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 6, bottom: 6 })
           .borderRadius(AppTheme.CHIP_RADIUS)
-          .border({ width: 1, color: this.theme.secondary })
-          .padding({ left: 12, right: 12, top: 4, bottom: 4 })
           .onClick(() => {
-            if (this.settings.brightness < 0) {
+            if (!this.isManualBrightness()) {
               return;
             }
             const next: ReaderSettings = this.derive();
@@ -609,13 +561,45 @@ export struct SettingsPanel {
             next.brightness = -1;
             this.emit(next);
           })
+
+        Text('手动')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.isManualBrightness() ? this.theme.bg : this.theme.text)
+          .backgroundColor(this.isManualBrightness() ? this.theme.text : this.theme.bg)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 6, bottom: 6 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (this.isManualBrightness()) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            /**
+             * ⚠️ 从「跟随系统」切到「手动」必须给一个**确定的手动值**（0.5），
+             * 不能沿用 -1 —— 那会让滑块拿到一个非法值、拖动手感错乱。
+             * 0.5 是不改变观感的中间档：用户切过去、屏幕不会突然变亮或变暗。
+             */
+            next.brightness = AppConstants.DEFAULT_MANUAL_BRIGHTNESS;
+            this.emit(next);
+          })
       }
       .width('100%')
-      .alignItems(VerticalAlign.Center)
+      .padding(3)
+      // 外框：把两段圈成一个控件（与「翻页方式」同一套写法）
+      .border({ width: 1, color: this.theme.secondary })
+      .borderRadius(AppTheme.CHIP_RADIUS + 3)
+      .backgroundColor(this.theme.barBg)
 
       Slider({
-        // 跟随系统（-1）时滑块归位到 0.5，纯属显示：此时它不生效
-        value: this.settings.brightness < 0 ? 50 : this.settings.brightness * 100,
+        /**
+         * ⚠️ 非手动档时滑块停在 50% 只是**显示**，此时它被禁用、不生效。
+         * 之所以还画出来（而不是隐藏）：让"亮度可调"这件事始终可见，
+         * 用户才知道有这回事、也看得出"切到手动就能拖"。
+         */
+        value: this.isManualBrightness()
+          ? this.settings.brightness * 100
+          : AppConstants.DEFAULT_MANUAL_BRIGHTNESS * 100,
         min: 0,
         max: 100,
         step: 1
@@ -623,8 +607,8 @@ export struct SettingsPanel {
         .selectedColor(this.theme.text)
         .trackColor(this.theme.secondary)
         .width('100%')
-        .enabled(this.settings.brightness >= 0)
-        .opacity(this.settings.brightness >= 0 ? 1 : 0.4)
+        .enabled(this.isManualBrightness())
+        .opacity(this.isManualBrightness() ? 1 : 0.4)
         .onChange((value: number, mode: SliderChangeMode) => {
           if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
             const next: ReaderSettings = this.derive();
@@ -636,97 +620,25 @@ export struct SettingsPanel {
     .width('100%')
   }
 
-  /** 亮度标签：跟随系统时显示"跟随系统"，否则显示百分比 */
-  private brightnessLabel(): string {
-    if (this.settings.brightness < 0) {
-      return '跟随系统';
-    }
-    return `${Math.round(this.settings.brightness * 100)}%`;
+  // ------------------------------------------------------------ 亮度
+
+  /** 亮度是否处于「手动」档（即不是 -1 跟随系统） */
+  private isManualBrightness(): boolean {
+    return this.settings.brightness >= 0;
   }
 
-  // ------------------------------------------------------------ 显示开关
-
   /**
-   * 两个开关：保持屏幕常亮、音量键翻页。
+   * 亮度标签：跟随系统时不显示百分比。
    *
-   * ⚠️ 用同一套胶囊（选中反色）而不是 `Toggle` 组件：
-   * 本面板已有「翻页方式 / 跟随系统」两种胶囊，再来一种开关形态会让
-   * 面板里出现三套控件语汇。胶囊在这里足够表达"二选一状态"，
-   * 而且颜色跟随 `ReaderTheme`（`Toggle` 的默认配色不跟阅读主题）。
-   *
-   * ⚠️ 两行**内联写死**，不抽带参 `@Builder`：本项目反复记过
-   * "带参 `@Builder` 在同一处 build 里调多次会串位"（设计文档第 15/41 条），
-   * 而这里恰好要调两次、且两行的文案与字段都不同。
+   * ⚠️ 「跟随系统」档下显示一个百分比是**错的**：那个数字不生效，
+   * 用户会以为当前亮度就是它。所以这一档**返回空串**，
+   * 由旁边的胶囊表达状态（那个词已经由「跟随系统」胶囊承担了，
+   * 这里再写一遍就是同一信息两处显示）。
    */
-  @Builder
-  buildSwitchRows() {
-    Column({ space: AppTheme.GAP_M }) {
-      Row() {
-        Column({ space: 2 }) {
-          Text('保持常亮')
-            .fontSize(AppTheme.FONT_BODY)
-            .fontColor(this.theme.text)
-            .width('100%')
-          Text('阅读时屏幕不自动熄灭')
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(this.theme.secondary)
-            .width('100%')
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-
-        Text(this.settings.keepScreenOn ? '开' : '关')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(this.settings.keepScreenOn ? this.theme.bg : this.theme.text)
-          .backgroundColor(this.settings.keepScreenOn ? this.theme.text : this.theme.bg)
-          .borderRadius(AppTheme.CHIP_RADIUS)
-          .border({ width: 1, color: this.theme.secondary })
-          .padding({ left: 16, right: 16, top: 4, bottom: 4 })
-          .onClick(() => {
-            const next: ReaderSettings = this.derive();
-            next.keepScreenOn = !this.settings.keepScreenOn;
-            this.emit(next);
-          })
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
-
-      Row() {
-        Column({ space: 2 }) {
-          Text('音量键翻页')
-            .fontSize(AppTheme.FONT_BODY)
-            .fontColor(this.theme.text)
-            .width('100%')
-          /**
-           * ⚠️ 说明里必须写明"仅分页模式"：滚动模式整章连续滚动，
-           * 没有"翻页"这个概念，此时按音量键走系统默认行为（调音量）。
-           * 不写清楚的话，用户在滚动模式下开了它、按音量键没反应，
-           * 会以为功能坏了。
-           */
-          Text('仅分页模式生效；滚动模式下音量键仍调音量')
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(this.theme.secondary)
-            .width('100%')
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-
-        Text(this.settings.volumeKeyPage ? '开' : '关')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(this.settings.volumeKeyPage ? this.theme.bg : this.theme.text)
-          .backgroundColor(this.settings.volumeKeyPage ? this.theme.text : this.theme.bg)
-          .borderRadius(AppTheme.CHIP_RADIUS)
-          .border({ width: 1, color: this.theme.secondary })
-          .padding({ left: 16, right: 16, top: 4, bottom: 4 })
-          .onClick(() => {
-            const next: ReaderSettings = this.derive();
-            next.volumeKeyPage = !this.settings.volumeKeyPage;
-            this.emit(next);
-          })
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
+  private brightnessLabel(): string {
+    if (!this.isManualBrightness()) {
+      return '';
     }
-    .width('100%')
+    return `${Math.round(this.settings.brightness * 100)}%`;
   }
 }
