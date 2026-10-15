@@ -210,7 +210,7 @@ export struct SettingsPanel {
      */
     Row() {
       Text('阅读设置')
-        .fontSize(AppTheme.FONT_SUBTITLE)
+        .fontSize(AppTheme.FONT_TITLE)
         .fontWeight(FontWeight.Medium)
         // 标题落衬线（探测到才有）—— 与全 app 的题字同一套语汇
         .fontFamily(AppFont.titleFamily())
@@ -219,7 +219,7 @@ export struct SettingsPanel {
         .layoutWeight(1)
 
       Text('完成')
-        .fontSize(AppTheme.FONT_BODY)
+        .fontSize(AppTheme.FONT_SUBTITLE)
         .fontColor(AppColor.accent)
         .letterSpacing(1)
         .padding({ left: 12, right: 4, top: 8, bottom: 8 })
@@ -244,7 +244,7 @@ export struct SettingsPanel {
        */
       Row() {
         Text('字号')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(AppTheme.FONT_SUBTITLE)
           .fontColor(this.theme.text)
           .layoutWeight(1)
         Text(`${this.settings.fontSize}`)
@@ -296,7 +296,7 @@ export struct SettingsPanel {
     Column({ space: AppTheme.GAP_S }) {
       Row() {
         Text('行距')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(AppTheme.FONT_SUBTITLE)
           .fontColor(this.theme.text)
           .layoutWeight(1)
         Text(this.lineHeightLabel())
@@ -345,7 +345,7 @@ export struct SettingsPanel {
     Column({ space: AppTheme.GAP_S }) {
       Row() {
         Text('字间距')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(AppTheme.FONT_SUBTITLE)
           .fontColor(this.theme.text)
           .layoutWeight(1)
         Text(`${this.settings.letterSpacing.toFixed(1)} vp`)
@@ -389,7 +389,7 @@ export struct SettingsPanel {
     Column({ space: AppTheme.GAP_S }) {
       Row() {
         Text('页边距')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(AppTheme.FONT_SUBTITLE)
           .fontColor(this.theme.text)
           .layoutWeight(1)
         Text(`${Math.round(this.settings.pageMargin)} vp`)
@@ -436,15 +436,14 @@ export struct SettingsPanel {
   @Builder
   buildPageModeRow() {
     /**
-     * 标签放**选择器左边**（用户要求）：「翻页方式 [上下滚动|左右翻页]」
-     * 一行完成 —— 面板少一层、扫读时标签全部左对齐。
+     * 标题独占一行、选择器下一行（用户要求改回）——
+     * 与滑块项的「标题行 + 控件行」节奏一致，面板纵向节奏统一。
      */
-    Row({ space: AppTheme.GAP_M }) {
+    Column({ space: AppTheme.GAP_S }) {
       Text('翻页方式')
-        .fontSize(AppTheme.FONT_CAPTION)
+        .fontSize(AppTheme.FONT_SUBTITLE)
         .fontColor(this.theme.text)
-        // ⚠️ 标签定宽而不参与等分：两档选择器要保持等宽平分剩余宽度
-        .width(64)
+        .width('100%')
 
       Row() {
         ForEach(PAGE_MODES, (mode: string) => {
@@ -472,7 +471,7 @@ export struct SettingsPanel {
             })
         }, (mode: string) => mode)
       }
-      .layoutWeight(1)
+      .width('100%')
       .padding(3)
       // 外框：把两段圈成一个控件；槽底用 `barBg`（比面板底深半档）
       .border({ width: 1, color: this.theme.secondary })
@@ -480,7 +479,6 @@ export struct SettingsPanel {
       .backgroundColor(this.theme.barBg)
     }
     .width('100%')
-    .alignItems(VerticalAlign.Center)
   }
 
   // ------------------------------------------------------------ 主题
@@ -585,76 +583,85 @@ export struct SettingsPanel {
   buildBrightnessRow() {
     Column({ space: AppTheme.GAP_S }) {
       /**
-       * 标签放**选择器左边**（用户要求，与「翻页方式」同一布局）：
-       * 「亮度 [跟随系统|手动]」一行；数值标签（手动时的百分比）
-       * 并在标签右侧，选择器独占剩余宽度。滑块仍在下一行，位置不动。
+       * 标题独占一行（用户要求改回，与「翻页方式」同一节奏）：
+       * 「亮度」标题行 → 选择器行 → 滑块行（滑块位置不动）。
+       * 手动档时的百分比数值缀在标题右侧。
        */
-      Row({ space: AppTheme.GAP_M }) {
+      Row() {
         Text('亮度')
-          .fontSize(AppTheme.FONT_CAPTION)
+          .fontSize(AppTheme.FONT_SUBTITLE)
           .fontColor(this.theme.text)
-          // ⚠️ 与「翻页方式」同一个定宽：两行标签左缘对齐
-          .width(64)
+          .layoutWeight(1)
 
         Text(this.brightnessLabel())
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(this.theme.secondary)
           .fontFeature(AppFont.TABULAR)
-
-        Row() {
-          Text('跟随系统')
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(this.isManualBrightness() ? this.theme.secondary : this.theme.bg)
-            .backgroundColor(this.isManualBrightness() ? Color.Transparent : this.theme.text)
-            .layoutWeight(1)
-            .textAlign(TextAlign.Center)
-            .padding({ top: 7, bottom: 7 })
-            .borderRadius(AppTheme.CHIP_RADIUS)
-            .onClick(() => {
-              if (!this.isManualBrightness()) {
-                return;
-              }
-              const next: ReaderSettings = this.derive();
-              /**
-               * ⚠️ 显式写 -1，而不是"留空/跳过"：切回跟随系统必须把这个值
-               * 真的传下去，页面才会调 `setWindowBrightness(-1)` 交还控制权。
-               * 跳过的话屏幕会一直停在手动亮度上（见 `ReaderSettings.brightness`）。
-               */
-              next.brightness = -1;
-              this.emit(next);
-            })
-
-          Text('手动')
-            .fontSize(AppTheme.FONT_CAPTION)
-            .fontColor(this.isManualBrightness() ? this.theme.bg : this.theme.secondary)
-            .backgroundColor(this.isManualBrightness() ? this.theme.text : Color.Transparent)
-            .layoutWeight(1)
-            .textAlign(TextAlign.Center)
-            .padding({ top: 7, bottom: 7 })
-            .borderRadius(AppTheme.CHIP_RADIUS)
-            .onClick(() => {
-              if (this.isManualBrightness()) {
-                return;
-              }
-              const next: ReaderSettings = this.derive();
-              /**
-               * ⚠️ 从「跟随系统」切到「手动」必须给一个**确定的手动值**（0.5），
-               * 不能沿用 -1 —— 那会让滑块拿到一个非法值、拖动手感错乱。
-               * 0.5 是不改变观感的中间档：用户切过去、屏幕不会突然变亮或变暗。
-               */
-              next.brightness = AppConstants.DEFAULT_MANUAL_BRIGHTNESS;
-              this.emit(next);
-            })
-        }
-        .layoutWeight(1)
-        .padding(3)
-        // 外框：把两段圈成一个控件（与「翻页方式」同一套写法）
-        .border({ width: 1, color: this.theme.secondary })
-        .borderRadius(AppTheme.CHIP_RADIUS + 3)
-        .backgroundColor(this.theme.barBg)
       }
       .width('100%')
-      .alignItems(VerticalAlign.Center)
+
+      /**
+       * 亮度的来源：**分段选择器**（跟随系统 / 手动）。
+       *
+       * 与「翻页方式」用**完全同一套**写法（等宽分段 + 外框），
+       * 本面板里"二选一"因此只有一种表达。
+       *
+       * ⚠️ 绝不能退回"一颗胶囊 + 禁用滑块"：默认就是跟随系统，
+       * 那样滑块一进来就是禁用态，而唯一能解锁的控件**长得像状态指示**，
+       * 用户不会想到去点它（用户实测反馈过"点不动、拖不了"）。
+       * 判据：**当"可操作性"取决于另一个控件的状态时，那个控件必须长得像开关。**
+       */
+      Row() {
+        Text('跟随系统')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.isManualBrightness() ? this.theme.secondary : this.theme.bg)
+          .backgroundColor(this.isManualBrightness() ? Color.Transparent : this.theme.text)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 7, bottom: 7 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (!this.isManualBrightness()) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            /**
+             * ⚠️ 显式写 -1，而不是"留空/跳过"：切回跟随系统必须把这个值
+             * 真的传下去，页面才会调 `setWindowBrightness(-1)` 交还控制权。
+             * 跳过的话屏幕会一直停在手动亮度上（见 `ReaderSettings.brightness`）。
+             */
+            next.brightness = -1;
+            this.emit(next);
+          })
+
+        Text('手动')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.isManualBrightness() ? this.theme.bg : this.theme.secondary)
+          .backgroundColor(this.isManualBrightness() ? this.theme.text : Color.Transparent)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 7, bottom: 7 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (this.isManualBrightness()) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            /**
+             * ⚠️ 从「跟随系统」切到「手动」必须给一个**确定的手动值**（0.5），
+             * 不能沿用 -1 —— 那会让滑块拿到一个非法值、拖动手感错乱。
+             * 0.5 是不改变观感的中间档：用户切过去、屏幕不会突然变亮或变暗。
+             */
+            next.brightness = AppConstants.DEFAULT_MANUAL_BRIGHTNESS;
+            this.emit(next);
+          })
+      }
+      .width('100%')
+      .padding(3)
+      // 外框：把两段圈成一个控件（与「翻页方式」同一套写法）
+      .border({ width: 1, color: this.theme.secondary })
+      .borderRadius(AppTheme.CHIP_RADIUS + 3)
+      .backgroundColor(this.theme.barBg)
 
       Slider({
         /**
