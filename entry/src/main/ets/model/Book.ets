@@ -53,6 +53,29 @@ export class Book {
     return this.lastChapterIndex < 0;
   }
 
+  /**
+   * 列表项的键（供 `ForEach` 用）。
+   *
+   * ⚠️ **必须把"会显示出来的字段"都编进来**，不能只用 `id`。
+   *
+   * 这是本项目实测踩过的真实 bug：往分组里加了书之后，书架首页那个分组
+   * 仍显示"0 本"。根因是 `ForEach` 在 key 不变时**复用组件实例、
+   * 不再执行 item generator** —— 子组件的 `@Prop book` 就永远停在旧对象上。
+   * 判据：**key 必须能区分"渲染结果不同"的两个状态**。
+   *
+   * ⚠️ 收在 `Book` 上而不是各处自己拼：书架首页、分组详情页、
+   * 挑书页三处都在用 `ForEach` 渲染书籍，字段清单一旦分散，
+   * 就必然出现"改了一处忘了另两处"（这正是本 bug 蔓延三处的原因）。
+   *
+   * ⚠️ 只编入**真正会显示**的字段（书名/作者/章节数/大小/进度/最近阅读），
+   * 不要图省事把整个对象序列化：key 每变一次就重建一次组件，
+   * 无关字段（如 `updatedAt`）会让列表白重建。
+   */
+  listKey(): string {
+    return `${this.id}_${this.title}_${this.author}_${this.totalChapters}`
+      + `_${this.fileSize}_${this.progressPercent}_${this.lastReadAt}`;
+  }
+
   /** 是否已读完 */
   isFinished(): boolean {
     return this.readStatus === AppConstants.READ_STATUS_FINISHED;

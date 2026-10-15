@@ -54,8 +54,18 @@ struct GroupPickerPage {
 
   /** 目标分组 id；-1 表示"未分组"（把书移出所有分组） */
   private targetGroupId: number = -1;
-  /** 目标分组名（显示在标题与按钮上） */
-  private targetGroupName: string = '未分组';
+  /**
+   * 目标分组名（显示在标题上）。
+   *
+   * ⚠️ 初值是**空串**而不是 `'未分组'`：空串表示"路由没传名字"，
+   * 于是 `loadAll` 里的兜底查询才有机会执行。若初值写成 `'未分组'`，
+   * "没传名字"与"传的就是未分组"就无法区分，兜底查询会被永远跳过。
+   * 真正显示时由 `displayGroupName()` 统一兜底。
+   *
+   * ⚠️ 用 `@State` 而不是普通成员：它由路由参数在 `aboutToAppear` 里赋值，
+   * 而普通成员的赋值**不会触发重绘** —— 首帧标题会停在初始值上。
+   */
+  @State private targetGroupName: string = '';
 
   @State private books: Book[] = [];
   /**
@@ -88,6 +98,15 @@ struct GroupPickerPage {
     const params = this.getUIContext().getRouter().getParams() as RouteParam | null;
     if (params !== null && params !== undefined) {
       this.targetGroupId = params.groupId;
+      /**
+       * ⚠️ 名字**直接用路由传来的值**，不再去查库（见 `RouteParam.groupName`）：
+       * 查库是异步的，而首帧渲染发生在它完成之前；更关键的是
+       * 首帧就已经确定的分组名没必要再绕一次 IO。
+       * 只有传空时才退回按 id 查（防御性兜底，正常路径不会走到）。
+       */
+      if (params.groupName.length > 0) {
+        this.targetGroupName = params.groupName;
+      }
     }
     this.vm = ShelfRefreshRegistry.current;
     if (this.vm === null) {
@@ -113,14 +132,14 @@ struct GroupPickerPage {
       /**
        * ② 分组表：一次查完。
        *
-       * ⚠️ 用它做两件事：把 `book.groupId` 翻成名字、以及取出目标分组名。
-       * 比"逐本查库"少几十次 IO。
+       * ⚠️ 它的作用是**把每本书的 `groupId` 翻成名字**（列表第二行要显示
+       * "当前：科幻"）。目标分组名已由路由参数给定，这里只在**没传**时
+       * 才顺手兜底查一次（正常路径不会走到）。
        */
       this.groups = await GroupRepository.listAll();
-      for (const group of this.groups) {
-        if (group.id === this.targetGroupId) {
-          this.targetGroupName = group.name;
-        }
+      if (this.targetGroupName.length === 0) {
+        // 兜底：路由没传名字时按 id 查一次（正常路径不会走到）
+        this.targetGroupName = this.groupNameOf(this.targetGroupId);
       }
       this.error = '';
     } catch (e) {
@@ -128,6 +147,20 @@ struct GroupPickerPage {
     } finally {
       this.loading = false;
     }
+  }
+
+  /**
+   * 标题上显示的分组名（统一兜底）。
+   *
+   * ⚠️ 空串会渲染成 `加入「」`，所以显示前必须兜一次。
+   * 兜底值按目标类型给：id < 0 是"未分组"，否则是"未知分组"
+   * （后者只在数据异常时出现 —— 分组被删了但页面还开着）。
+   */
+  private displayGroupName(): string {
+    if (this.targetGroupName.length > 0) {
+      return this.targetGroupName;
+    }
+    return this.targetGroupId < 0 ? '未分组' : '未知分组';
   }
 
   /** 按 id 查分组名；没有返回空串（表示未分组） */
@@ -279,7 +312,7 @@ struct GroupPickerPage {
        * 标题写清"要加入哪个分组"：用户点进来时最想确认的就是这件事。
        * ⚠️ 分组名可能很长，必须截断，否则会把右侧的"全选"挤出去。
        */
-      Text(`加入「${this.targetGroupName}」`)
+      Text(`加入「${this.displayGroupName()}」`)
         .fontSize(AppTheme.FONT_SUBTITLE)
         .fontWeight(FontWeight.Medium)
         .fontColor(AppColor.textPrimary)
@@ -372,7 +405,7 @@ struct GroupPickerPage {
             this.toggleSelect(book.id);
           })
         }
-      }, (book: Book) => `${book.id}`)
+      }, (book: Book) => book.listKey())
     }
     .width('100%')
     .layoutWeight(1)

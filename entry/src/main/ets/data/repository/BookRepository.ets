@@ -119,6 +119,68 @@ export class BookRepository {
     return list;
   }
 
+  /**
+   * **未分组**的书籍（书架首页在"分组当文件夹"模式下显示这些）。
+   *
+   * ⚠️ 与 `listShelf(sort, null)` 的区别：后者是"不限分组"（返回**全部**书），
+   * 本方法才是"没有归入任何分组"（`group_id IS NULL`）。
+   * 两者只差一个 SQL 条件，但语义完全相反 —— 首页要的是后者：
+   * 已归组的书只应出现在它所属的分组里，不该在首页再出现一次。
+   */
+  static async listUngrouped(sort: BookSort): Promise<Book[]> {
+    await RdbHelper.ensureReady();
+    let sql: string =
+      `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} ` +
+      `WHERE deleted = 0 AND group_id IS NULL`;
+    if (sort === BookSort.LAST_READ) {
+      // 从未读过的排在最后，而不是被当成 0 排到最前
+      sql += ` ORDER BY last_read_at IS NULL, last_read_at DESC, id DESC`;
+    } else if (sort === BookSort.ADDED) {
+      sql += ` ORDER BY added_at DESC`;
+    } else {
+      sql += ` ORDER BY title ASC`;
+    }
+    const list: Book[] = [];
+    await db().query(sql, [], (rs: relationalStore.ResultSet) => {
+      list.push(BookRepository.mapRow(rs));
+    });
+    return list;
+  }
+
+  /**
+   * **已分组**的全部书籍，按"分组 → 排序"输出。
+   *
+   * 用途：分组封面要拿"组内前几本书"（`BookGroup.coverBooks`）。
+   *
+   * ⚠️ 一次查完、在内存里按组切前 N 本，**不要**"每个分组查一次"：
+   * 后者是 N+1 次 IO，而首页每次刷新都要跑。
+   * 一本书只属于一个分组（`book.groupId` 是单值），所以这里的数据量
+   * 就是"全部已归组的书"，对本地小说库（几十到几百本）完全可控。
+   *
+   * ⚠️ `ORDER BY group_id` 必须在**排序键之前**：先按组聚拢，
+   * 组内再按用户选的排序，这样"每组前 4 本"才是该组里最该显示的那 4 本。
+   * 反过来（先按 last_read 再按 group）会让同一组的书散落在结果各处。
+   */
+  static async listGrouped(sort: BookSort): Promise<Book[]> {
+    await RdbHelper.ensureReady();
+    let sql: string =
+      `SELECT ${BookCol.ALL} FROM ${DbConstants.TABLE_BOOK} ` +
+      `WHERE deleted = 0 AND group_id IS NOT NULL ` +
+      `ORDER BY group_id ASC, `;
+    if (sort === BookSort.LAST_READ) {
+      sql += `last_read_at IS NULL, last_read_at DESC, id DESC`;
+    } else if (sort === BookSort.ADDED) {
+      sql += `added_at DESC`;
+    } else {
+      sql += `title ASC`;
+    }
+    const list: Book[] = [];
+    await db().query(sql, [], (rs: relationalStore.ResultSet) => {
+      list.push(BookRepository.mapRow(rs));
+    });
+    return list;
+  }
+
   /** 继续阅读卡片：最近读过且未读完的一本 */
   static async getContinueReading(): Promise<Book | null> {
     await RdbHelper.ensureReady();
@@ -356,6 +418,37 @@ export class BookRepository {
     await RdbHelper.ensureReady();
     await BookRepository.updateParseState(
       bookId, AppConstants.PARSE_FAILED, '文件丢失', parseRule, 0, 0);
+  }
+
+  /**
+   * 清空全部数据（"数据管理"里的"清空所有数据"）。
+   *
+   * ⚠️ 单事务清空 6 张表（不 DROP，保留表结构与索引）：
+   *  - book / chapter / annotation / book_group / reading_daily_stats / page_cache；
+   *  - 沙箱里的书源文件**不删**（用户可能还要文件），只清库；
+   *  - 清空后 bump 书架与统计两个版本号，让在库的页面各自刷新。
+   *
+   * 顺序无所谓（没有外键引用问题），但必须在同一事务里 ——
+   * 中途失败宁可什么都不清，也不要留下半清状态。
+   */
+  static async wipeAll(): Promise<void> {
+    await RdbHelper.ensureReady();
+    const tables: string[] = [
+      DbConstants.TABLE_ANNOTATION,
+      DbConstants.TABLE_PAGE_CACHE,
+      DbConstants.TABLE_CHAPTER,
+      DbConstants.TABLE_BOOK,
+      DbConstants.TABLE_BOOK_GROUP,
+      DbConstants.TABLE_DAILY_STATS
+    ];
+    await db().withTransaction<void>(async () => {
+      for (const t of tables) {
+        await db().getStore().executeSql(`DELETE FROM ${t}`);
+      }
+    });
+    AppState.bumpBookshelf();
+    AppState.bumpGroup();
+    AppState.bumpStats();
   }
 
   // ------------------------------------------------------------ 映射

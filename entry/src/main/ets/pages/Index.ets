@@ -4,6 +4,7 @@ import { BookShelfViewModel } from '../viewmodels/BookShelfViewModel';
 import { ShelfRefreshRegistry } from '../viewmodels/ShelfRefreshRegistry';
 import { BookShelfPage } from './BookShelfPage';
 import { ProfilePage } from './ProfilePage';
+import { StatsPage } from '../views/stats/StatsPage';
 
 /**
  * 底部 Tab 的图标与文案，**下标与 Tabs 的 index 严格对应**。
@@ -116,7 +117,7 @@ struct Index {
         .tabBar(this.tabBuilder(0))
 
         TabContent() {
-          this.buildPlaceholder('统计', '阅读时长、天数、连续打卡将在下一轮接入')
+          StatsPage()
         }
         .tabBar(this.tabBuilder(1))
 
@@ -280,21 +281,8 @@ struct Index {
     })
   }
 
-  @Builder
-  buildPlaceholder(title: string, hint: string) {
-    Column({ space: AppTheme.GAP_S }) {
-      Text(title)
-        .fontSize(AppTheme.FONT_TITLE)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(AppColor.textPrimary)
-      Text(hint)
-        .fontSize(AppTheme.FONT_CAPTION)
-        .fontColor(AppColor.textHint)
-        .textAlign(TextAlign.Center)
-    }
-    .width('100%')
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(AppColor.bgPage)
-  }
+  /**
+   * ⚠️ 已删除原 `buildPlaceholder`：统计页（StatsPage）已实装，
+   * 第 2 个 Tab 不再是占位符。
+   */
 }

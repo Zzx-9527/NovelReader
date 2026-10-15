@@ -558,7 +558,19 @@ export class ReaderViewModel {
       return;
     }
     if (this.state.pageIndex <= 0) {
-      await this.prevChapter();
+      /**
+       * 第一页向回翻 → 落到**上一章的末尾**（`switchChapter` 的 toOffset = -1 语义），
+       * "接着刚才读的地方继续往前读"。
+       *
+       * ⚠️ 不能复用 `prevChapter()`：那是「上一章」按钮的语义，
+       * 按用户定案它落到**上一章章首**（想从开头重看）。
+       * 翻页回退与按钮跳章是两个不同的动作，各走各的定位 ——
+       * 早期两者共用，表现为"第 2 章第 1 页点左边直接跳到第 1 章开头"。
+       */
+      if (!this.state.hasPrev) {
+        return;
+      }
+      await this.switchChapter(this.state.chapterIndex - 1, -1);
       return;
     }
     this.renderAt(this.state.breaks[this.state.pageIndex - 1]);

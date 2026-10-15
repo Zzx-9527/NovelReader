@@ -1,6 +1,7 @@
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Book } from '../model/Book';
 import { BookGroup } from '../model/BookGroup';
+import { ShelfEntry } from '../model/ShelfEntry';
 import { ShelfState } from './ShelfState';
 import { BookRepository, BookSort, HashLookup } from '../data/repository/BookRepository';
 import { ChapterRepository } from '../data/repository/ChapterRepository';
@@ -11,7 +12,7 @@ import { SettingsService } from '../data/service/SettingsService';
 import { SettingsKeys } from '../common/constants/SettingsKeys';
 import { Logger } from '../common/utils/Logger';
 import { PathUtil } from '../common/utils/PathUtil';
-import { LogTag } from '../common/constants/AppConstants';
+import { AppConstants, LogTag } from '../common/constants/AppConstants';
 
 /**
  * 书架 ViewModel。
@@ -48,18 +49,23 @@ export class BookShelfViewModel {
    *
    * 与 refresh() 分开的原因：init() 需要先读设置（要求 SettingsService 已就绪），
    * 而"切回书架时重载"只该查数据，不该再碰设置。
+   *
+   * ⚠️ 首页取的是**未分组**的书（`listUngrouped`），不是全部书：
+   * 分组现在是"文件夹"语义，已归组的书只出现在组内，不在首页重复出现
+   * （用户明确要求）。分组用 `listAllWithCount` 一次带回数量。
    */
   async reloadData(): Promise<void> {
     this.state.loading = true;
     try {
-      const groupId: number | null = this.state.selectedGroupId < 0
-        ? null
-        : this.state.selectedGroupId;
-      // 整体替换 books 数组而不是原地改：确保 ArkUI 一定能观察到变化
-      const books: Book[] = await BookRepository.listShelf(this.state.sort, groupId);
+      // 整体替换数组而不是原地改：确保 ArkUI 一定能观察到变化
+      const books: Book[] = await BookRepository.listUngrouped(this.state.sort);
       this.state.books = books;
-      const groups: BookGroup[] = await GroupRepository.listAll();
+      // 带 bookCount：首页把分组当"一本书"显示，要标出组内数量
+      const groups: BookGroup[] = await GroupRepository.listAllWithCount();
+      await this.attachCoverBooks(groups);
       this.state.groups = groups;
+      // 分组与书**混排**成一条数组（用户要求：分组就相当于一本书）
+      this.state.entries = BookShelfViewModel.buildEntries(groups, books, this.state.sort);
       const continueBook: Book | null = await BookRepository.getContinueReading();
       this.state.continueBook = continueBook;
       this.state.error = '';
@@ -67,6 +73,156 @@ export class BookShelfViewModel {
       this.state.error = `加载书架失败：${Logger.errText(e as BusinessError)}`;
     } finally {
       this.state.loading = false;
+    }
+  }
+
+  /**
+   * 把分组与未分组的书**混排**成一条有序数组。
+   *
+   * ⚠️ 这是"分组就相当于一本书"的落地实现（用户明确要求）：
+   * 刚读完的书必须能排在分组**前面**，而两个独立数组做不到交错，
+   * 所以必须在这里合并、排序、输出一条数组。
+   *
+   * ⚠️ 排序键**必须与 SQL 的 `ORDER BY` 语义一致**，否则会出现
+   * "书与书之间的相对顺序"和"分组插进去的位置"两套逻辑打架。
+   * 三个排序键的对应关系：
+   *  - `LAST_READ`：书用 `lastReadAt`，分组用组内 `MAX(lastReadAt)`；
+   *    **从未读过的排在最后**（与 SQL 的 `last_read_at IS NULL` 一致）——
+   *    不能把 null 当 0，那会让"没读过"排到"很久以前读过"的前面。
+   *  - `ADDED`：书用 `addedAt`，分组用组内 `MAX(addedAt)`
+   *    （空分组退回分组创建时间，见 `GroupRepository`）。
+   *  - `TITLE`：书用 `title`，分组用 `name`。
+   *
+   * ⚠️ 用**显式比较函数**而不是 `Array.sort()` 的默认行为：
+   * 默认排序会把元素转成字符串比较，中文与数字都会排错。
+   *
+   * ⚠️ 同键时的**兜底次序**必须确定（否则每次刷新的顺序可能不同）：
+   * 这里用"分组在后、id 升序"，保证结果可复现。
+   */
+  private static buildEntries(groups: BookGroup[], books: Book[],
+    sort: BookSort): ShelfEntry[] {
+    const entries: ShelfEntry[] = [];
+    for (const group of groups) {
+      const entry = new ShelfEntry();
+      entry.isGroup = true;
+      entry.group = group;
+      entries.push(entry);
+    }
+    for (const book of books) {
+      const entry = new ShelfEntry();
+      entry.isGroup = false;
+      entry.book = book;
+      entries.push(entry);
+    }
+
+    entries.sort((a: ShelfEntry, b: ShelfEntry): number => {
+      if (sort === BookSort.TITLE) {
+        const an: string = a.isGroup ? a.group.name : a.book.title;
+        const bn: string = b.isGroup ? b.group.name : b.book.title;
+        /**
+         * ⚠️ 用简单的 `<` / `>` 比较，**不用 `localeCompare`**。
+         *
+         * `localeCompare` 是**本地化**排序（中文按拼音），而书架的
+         * `ORDER BY title ASC` 在 SQLite 里是**二进制**比较 ——
+         * 两者对中文的次序完全不同。混排时若分组用拼音序、书用二进制序，
+         * 结果会看起来"忽 A 忽 B"，很难解释。
+         *
+         * 判据：**混排的所有元素必须用同一套比较规则**，
+         * 且那套规则要与原有的 SQL 排序一致（否则改动前后书的相对次序会变）。
+         */
+        if (an < bn) {
+          return -1;
+        }
+        if (an > bn) {
+          return 1;
+        }
+        return BookShelfViewModel.tieBreak(a, b);
+      }
+
+      if (sort === BookSort.ADDED) {
+        const at: number = a.isGroup ? a.group.addedAt : a.book.addedAt;
+        const bt: number = b.isGroup ? b.group.addedAt : b.book.addedAt;
+        if (at !== bt) {
+          // 导入时间：新的在前（与 SQL 的 added_at DESC 一致）
+          return bt - at;
+        }
+        return BookShelfViewModel.tieBreak(a, b);
+      }
+
+      // LAST_READ：null 表示"从未读过"，一律排到最后
+      const ar: number | null = a.isGroup ? a.group.lastReadAt : a.book.lastReadAt;
+      const br: number | null = b.isGroup ? b.group.lastReadAt : b.book.lastReadAt;
+      if (ar === null && br === null) {
+        return BookShelfViewModel.tieBreak(a, b);
+      }
+      if (ar === null) {
+        return 1;
+      }
+      if (br === null) {
+        return -1;
+      }
+      if (ar !== br) {
+        // 最近阅读：越新越靠前
+        return br - ar;
+      }
+      return BookShelfViewModel.tieBreak(a, b);
+    });
+
+    return entries;
+  }
+
+  /**
+   * 排序键相同时的**确定性兜底**。
+   *
+   * ⚠️ 必须有：比较函数返回 0 时，`sort` 的稳定性在不同引擎上不保证，
+   * 表现是"每次刷新顺序都可能变一下"。用"分组在后、id 升序"固定下来，
+   * 结果可复现（也让问题容易定位）。
+   *
+   * ⚠️ 分组排在后是刻意的：分组是"容器"，把容器放在内容前面会挡视线；
+   * 而"刚读完的书"正是用户最想第一眼看到的（用户明确反馈过这一点）。
+   */
+  private static tieBreak(a: ShelfEntry, b: ShelfEntry): number {
+    if (a.isGroup !== b.isGroup) {
+      return a.isGroup ? 1 : -1;
+    }
+    const aid: number = a.isGroup ? a.group.id : a.book.id;
+    const bid: number = b.isGroup ? b.group.id : b.book.id;
+    return aid - bid;
+  }
+
+  /**
+   * 给每个分组填上"组内前几本书"（`coverBooks`），供封面渲染。
+   *
+   * ⚠️ 一次查全部已归组的书、在内存里按组切前 N 本，
+   * **不要**对每个分组各查一次 —— 那是 N+1 次 IO，而首页每次刷新都要跑。
+   *
+   * ⚠️ 切分依据是"`listGrouped` 已按 `group_id` 排好序"：
+   * 同一个分组的书在结果里是**连续**的一段，所以顺序扫一遍、
+   * 每遇到新 groupId 就开一段即可，不需要哈希表或二次排序。
+   * 一旦 `listGrouped` 的 ORDER BY 变了，这里的假设就会失效 ——
+   * 两处是**耦合**的，改那边必须回来看这里。
+   */
+  private async attachCoverBooks(groups: BookGroup[]): Promise<void> {
+    if (groups.length === 0) {
+      return;
+    }
+    const slots: number = AppConstants.GROUP_COVER_SLOTS;
+    const grouped: Book[] = await BookRepository.listGrouped(this.state.sort);
+    for (const book of grouped) {
+      const gid: number | null = book.groupId;
+      if (gid === null) {
+        continue;
+      }
+      for (const group of groups) {
+        if (group.id !== gid) {
+          continue;
+        }
+        // 只收前 slots 本：填满封面格子后就不再变化（用户明确要求）
+        if (group.coverBooks.length < slots) {
+          group.coverBooks.push(book);
+        }
+        break;
+      }
     }
   }
 
@@ -91,12 +247,6 @@ export class BookShelfViewModel {
       return BookSort.TITLE;
     }
     return BookSort.LAST_READ;
-  }
-
-  /** 切换分组 */
-  async selectGroup(groupId: number): Promise<void> {
-    this.state.selectedGroupId = groupId;
-    await this.refresh();
   }
 
   /** 切换网格/列表，并记住选择 */
@@ -473,13 +623,9 @@ export class BookShelfViewModel {
     try {
       const moved: number = await GroupRepository.softDeleteWithMembers(groupId);
       /**
-       * ⚠️ 删掉的若是**当前选中**的分组，必须把选择退回"全部"。
-       * 否则 `selectedGroupId` 指向一个已不存在的分组，书架会显示成空列表
-       * ——用户看到的是"删了个分组，我的书全没了"。
+       * ⚠️ 分组被删后必须刷新首页：它作为"一本书"的条目要消失，
+       * 组内那些书会回到首页（`group_id` 被置空 ⇒ 变成未分组 ⇒ 出现在首页）。
        */
-      if (this.state.selectedGroupId === groupId) {
-        this.state.selectedGroupId = -1;
-      }
       await this.refresh();
       return moved;
     } catch (e) {
@@ -492,6 +638,44 @@ export class BookShelfViewModel {
   async countInGroup(groupId: number): Promise<number> {
     return BookRepository.countInGroup(groupId);
   }
+
+  /**
+   * 分组详情页用：取该分组下的书 + 分组本身。
+   *
+   * ⚠️ 分组可能已被删除（用户从别的入口删了、或数据异常），
+   * 此时返回 `null` 让页面走错误态 —— 不要返回一个空名字的
+   * `BookGroup` 让页面显示"「」"。
+   */
+  async loadGroupDetail(groupId: number): Promise<BookGroup | null> {
+    try {
+      const group: BookGroup | null = await GroupRepository.getById(groupId);
+      if (group === null) {
+        return null;
+      }
+      const books: Book[] = await BookRepository.listShelf(this.state.sort, groupId);
+      /**
+       * ⚠️ 数量以**实际查到的书**为准，不用 `group.bookCount`：
+       * 那是首页列表里的快照，可能已经过期（比如刚在组内移出过书）。
+       * 显示与实际列表不一致比数字旧一点更糟。
+       */
+      group.bookCount = books.length;
+      this.detailBooks = books;
+      return group;
+    } catch (e) {
+      this.state.error = `加载分组失败：${Logger.errText(e as BusinessError)}`;
+      return null;
+    }
+  }
+
+  /**
+   * 分组详情页的书单（由 `loadGroupDetail` 填充）。
+   *
+   * ⚠️ 单独放一个字段、不复用 `state.books`：
+   * `state.books` 是**首页**的列表（未分组的书）。若把组内的书写进去，
+   * 返回首页时首页会短暂显示组内的书 —— 而首页的语义是"未分组的书"，
+   * 那会是一个可见的错乱。
+   */
+  detailBooks: Book[] = [];
 
   clearError(): void {
     this.state.error = '';

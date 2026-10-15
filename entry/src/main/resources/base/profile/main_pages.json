@@ -6,6 +6,7 @@
     "pages/ReaderCatalogPage",
     "pages/ImportConfirmPage",
     "pages/GroupPickerPage",
+    "pages/GroupDetailPage",
     "pages/SelfCheckPage"
   ]
 }

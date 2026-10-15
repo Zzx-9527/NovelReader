@@ -41,6 +41,19 @@ export class AppConstants {
   static readonly FORMAT_TXT: string = 'txt';
   static readonly FORMAT_EPUB: string = 'epub';
 
+  // ---------------------------------------------------------------- 分组封面
+  /**
+   * 分组封面的格子数（2×2）。
+   *
+   * ⚠️ 分组封面是"**用组内书的封面填格子**"（用户明确要求）：
+   * 有几本填几格，填满 4 格后**不再变化**。
+   * 所以取封面时只需前 4 本 —— 不必把整个组加载进内存。
+   *
+   * ⚠️ 这个数字同时决定"取几本书"与"画几个格子"，两处必须**同源**：
+   * 各写一个 4 就会出现"取了 4 本但画 6 格"这类对不上的情况。
+   */
+  static readonly GROUP_COVER_SLOTS: number = 4;
+
   // ---------------------------------------------------------------- 文件与目录
   static readonly DIR_BOOKS: string = 'books';
   static readonly DIR_COVERS: string = 'covers';

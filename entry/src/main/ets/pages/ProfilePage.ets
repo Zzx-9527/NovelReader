@@ -1,6 +1,7 @@
 import { AppColor, AppTheme } from '../common/theme/AppTheme';
 import { RouteName } from '../model/RouteParam';
 import { PageCacheRepository } from '../data/repository/PageCacheRepository';
+import { BookRepository } from '../data/repository/BookRepository';
 
 /** "我的"页：设置入口、缓存清理、关于 */
 @Component
@@ -43,6 +44,11 @@ export struct ProfilePage {
 
         this.settingRow('清除分页缓存', `当前 ${this.cacheCount} 条`, () => {
           this.clearCache();
+        })
+        Divider().color(AppColor.divider)
+
+        this.settingRow('清空所有数据', '删除全部书籍、进度、书签与统计（书源文件保留）', () => {
+          this.confirmWipeAll();
         })
         Divider().color(AppColor.divider)
 
@@ -115,6 +121,50 @@ export struct ProfilePage {
       this.getUIContext().getPromptAction().showToast({ message: '分页缓存已清除' });
     } catch (e) {
       this.getUIContext().getPromptAction().showToast({ message: '清除失败' });
+    } finally {
+      this.clearing = false;
+    }
+  }
+
+  /**
+   * 清空所有数据：先弹系统确认（不可撤销的破坏性操作必须二次确认），
+   * 确认后才调 `BookRepository.wipeAll()`。
+   *
+   * ⚠️ 用 `getUIContext().showAlertDialog()`：`AlertDialog.show()` 全局函数
+   * 自 API 18 已废弃（设计文档 §5.6 第 20 条）。
+   */
+  private confirmWipeAll(): void {
+    this.getUIContext().showAlertDialog({
+      title: '清空所有数据？',
+      message: '将删除全部书籍、阅读进度、书签笔记与统计记录，且不可恢复。书源 TXT 文件会保留在沙箱中。',
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '清空',
+        fontColor: '#B4432F',
+        action: () => {
+          this.doWipeAll();
+        }
+      }
+    });
+  }
+
+  private async doWipeAll(): Promise<void> {
+    if (this.clearing) {
+      return;
+    }
+    this.clearing = true;
+    try {
+      await BookRepository.wipeAll();
+      this.cacheCount = 0;
+      this.getUIContext().getPromptAction().showToast({ message: '已清空全部数据' });
+    } catch (e) {
+      this.getUIContext().getPromptAction().showToast({ message: '清空失败' });
     } finally {
       this.clearing = false;
     }

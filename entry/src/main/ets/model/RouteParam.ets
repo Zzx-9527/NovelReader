@@ -21,6 +21,16 @@ export class RouteParam {
    * 与 `chapterIndex` 用 -1 表示"未指定"是同一套约定。
    */
   groupId: number = -1;
+  /**
+   * 目标分组名（"选择书籍加入分组"页的标题用）。
+   *
+   * ⚠️ 必须**随路由一起传**，不能让目标页自己去查：
+   * 查库是异步的，而首帧渲染发生在查询完成**之前** —— 标题会先显示默认值，
+   * 等查回来又因为"普通成员不触发重绘"而**永远停在错的名字上**
+   * （本项目实测踩过 `@Prop` 与普通成员的这类差异）。
+   * 名字本来就在调用方手里，直接传过来最省事也最准确。
+   */
+  groupName: string = '';
   /** 来源标识，用于返回时的行为分支 */
   from: string = '';
 }
@@ -51,6 +61,16 @@ export class RouteName {
    * "建/改名/删"，永远装不进任何一本书（本项目实测踩过这个缺口）。
    */
   static readonly GROUP_PICKER_PAGE: string = 'pages/GroupPickerPage';
+  /**
+   * 分组详情页（点书架首页的分组条目进入）。
+   *
+   * ⚠️ 与 `GROUP_PICKER_PAGE` 是**两个方向**的页面，不要合并：
+   *  - 本页 = 打开分组，看组里有什么（管理组内书籍）；
+   *  - Picker = 从全部书里挑几本加入某个分组。
+   * 合并成一个页面就得靠一个模式标志位去分叉标题与主操作，
+   * 越写越乱，且两条路径的"空状态引导"完全不同。
+   */
+  static readonly GROUP_DETAIL_PAGE: string = 'pages/GroupDetailPage';
   /** 来源标识（放在 RouteParam.from 里，用于返回时的行为分支） */
   static readonly BOOK_SHELF: string = 'shelf';
   static readonly BOOK_DETAIL: string = 'detail';

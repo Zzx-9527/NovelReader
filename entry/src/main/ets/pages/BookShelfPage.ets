@@ -3,6 +3,7 @@
 import { promptAction } from '@kit.ArkUI';
 import { Book } from '../model/Book';
 import { BookGroup } from '../model/BookGroup';
+import { ShelfEntry } from '../model/ShelfEntry';
 import { ShelfState } from '../viewmodels/ShelfState';
 import { BookShelfViewModel } from '../viewmodels/BookShelfViewModel';
 import { ShelfRefreshRegistry } from '../viewmodels/ShelfRefreshRegistry';
@@ -16,6 +17,8 @@ import { EmptyView } from '../views/common/EmptyView';
 import { ErrorView } from '../views/common/ErrorView';
 import { BookGridItem } from '../views/bookshelf/BookGridItem';
 import { BookListItem } from '../views/bookshelf/BookListItem';
+import { GroupGridItem } from '../views/bookshelf/GroupGridItem';
+import { GroupListItem } from '../views/bookshelf/GroupListItem';
 import { ContinueReadingCard } from '../views/bookshelf/ContinueReadingCard';
 import { TextInputDialog } from '../views/common/TextInputDialog';
 import { RouteName, RouteParam } from '../model/RouteParam';
@@ -101,9 +104,19 @@ export struct BookShelfPage {
       Column() {
         this.buildHeader()
 
-        if (this.state.loading && this.state.books.length === 0) {
+        /**
+         * ⚠️ 加载态与错误态的判据都要求"**完全没有内容**"
+         * （分组与散书都为 0），不能只看 `books`。
+         *
+         * 只看 `books` 的话：一个只有分组、没有散书的书架在刷新时会
+         * 闪出"正在加载书架…"，出错时更是整屏替换成错误页 ——
+         * 而分组条目明明还能正常点进去。判据要覆盖**这一页实际会渲染的东西**。
+         */
+        if (this.state.loading && this.state.books.length === 0
+          && this.state.groups.length === 0) {
           LoadingView({ message: this.state.reparsing ? '正在重新解析…' : '正在加载书架…' })
-        } else if (this.state.error.length > 0 && this.state.books.length === 0) {
+        } else if (this.state.error.length > 0 && this.state.books.length === 0
+          && this.state.groups.length === 0) {
           ErrorView({
             message: this.state.error,
             hint: '下拉重试，或检查存储权限',
@@ -115,12 +128,11 @@ export struct BookShelfPage {
           })
         } else if (this.state.isEmptyShelf) {
           /**
-           * **书架真的空** → 引导导入。
+           * **首页完全为空** → 引导导入。
            *
-           * ⚠️ 判据是 `isEmptyShelf`（没有选中分组）而**不是** `isEmpty`：
-           * 后者在"点进一个空分组"时也成立，会错误地显示这一屏 ——
-           * 用户看到"书架还是空的 + 导入 TXT"，以为自己的书全没了
-           * （这正是用户实测反馈的 bug）。
+           * ⚠️ 判据是 `isEmptyShelf`，它同时看**分组与散书**：
+           * 只有分组、没有散书时不该显示这一屏 —— 用户会以为分组也没了，
+           * 而分组恰恰是他自己建的。
            */
           EmptyView({
             title: '书架还是空的',
@@ -128,27 +140,6 @@ export struct BookShelfPage {
             actionText: '导入 TXT',
             onAction: () => {
               this.doImport();
-            }
-          })
-        } else if (this.state.isEmptyGroup) {
-          /**
-           * **分组是空的** → 引导"把书架里的书加进来"。
-           *
-           * ⚠️ 这里**绝不能**引导"导入 TXT"：书架里明明有书，
-           * 用户要的是把它们归到这个组里。让一个空分组看起来像
-           * "书架空了"，是两件事被混成一件（用户实测反馈）。
-           *
-           * ⚠️ 主操作直接跳到挑书页（`openGroupPickerForTarget`），
-           * 而不是只提示一句"去添加书籍"—— 提示完还得让用户自己找入口，
-           * 等于把问题留给用户。当前分组 id 就是目标，直接带过去。
-           */
-          EmptyView({
-            title: '这个分组还没有书',
-            hint: '从书架里挑几本加进来，阅读进度和书签都不会受影响。',
-            actionText: '添加书籍',
-            onAction: () => {
-              this.openGroupPickerForTarget(
-                this.state.selectedGroupId, this.currentGroupName());
             }
           })
         } else {
@@ -216,6 +207,27 @@ export struct BookShelfPage {
           })
 
         /**
+         * 「＋分组」：新建分组。
+         *
+         * ⚠️ 它必须留在**标题行**这个常驻位置。
+         *
+         * 早期分组入口藏在"分组标签行末尾的「＋ 管理」"里，而那一行现在已经
+         * 整个取消（分组不再作为筛选标签，而是像书一样显示在书架里）——
+         * 如果这里不补上，用户就**没有任何途径新建分组**了。
+         *
+         * ⚠️ 点它直接进"新建"弹窗，不再套一层菜单：
+         * 从标题行进来时用户的意图就是"我要建一个组"，
+         * 中间夹一个「新建/管理」的选择纯属多一步（管理已有分组走长按分组条目）。
+         */
+        Text('＋分组')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.accent)
+          .padding(8)
+          .onClick(() => {
+            this.openCreateGroupDialog();
+          })
+
+        /**
          * 「导入」按钮：**中性填充**，不是点缀色。
          *
          * ⚠️ `fontColor` 必须显式设成 `onPrimary`：`Button` 默认字色是白色，
@@ -250,17 +262,16 @@ export struct BookShelfPage {
       /**
        * 继续阅读卡片。
        *
-       * ⚠️ **选中分组时，只在"这本书属于该分组"才显示**。
+       * ⚠️ 它显示的是**全局**最近在读的一本，不受分组影响 —— 这是对的：
+       * 首页本身就是"全部内容"的视图（分组与未分组的书都在这里列），
+       * 所以"最近在读哪本"在这里显示没有任何矛盾。
        *
-       * 这张卡的语义是"我最近在读哪本"，本身是**全局**的；但一旦用户按分组
-       * 筛选，屏幕上出现一本**不在这个组里**的书就自相矛盾了 ——
-       * 空分组时更明显：上面一张有书的卡片、下面写着"这个分组还没有书"
-       * （用户实测反馈的截图正是这样）。
-       *
-       * 判据：**筛选生效时，视图里的一切内容都必须满足筛选条件**，
-       * 不能有"这是全局信息所以例外"的漏洞。
+       * ⚠️ 与早期实现的区别：那时分组是**筛选条件**，在"某个分组"视图下
+       * 显示一本组外的书会自相矛盾（用户实测反馈过）；
+       * 现在分组是**文件夹**（点进去才筛选），首页不存在"当前分组"，
+       * 这个矛盾自然消失了。
        */
-      if (this.continueBookVisible()) {
+      if (this.state.continueBook !== null) {
         ContinueReadingCard({
           book: this.state.continueBook ?? undefined,
           onContinue: (book: Book) => {
@@ -268,110 +279,78 @@ export struct BookShelfPage {
           }
         })
       }
-
-      this.buildGroupTabs()
     }
     .width('100%')
     .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
   }
 
-  @Builder
-  buildGroupTabs() {
-    Scroll() {
-      Row({ space: AppTheme.GAP_S }) {
-        this.groupChip('全部', -1)
-        ForEach(this.state.groups, (group: BookGroup) => {
-          this.groupChip(group.name, group.id)
-        }, (group: BookGroup) => `${group.id}`)
-
-        /**
-         * 「管理」入口放在 chips 行**末尾**，而不是标题行：
-         *
-         * ⚠️ 它是**低频**操作（建组/改名/删组），放进标题行会和"导入/排序/
-         * 网格切换"这几个高频操作抢注意力；而分组这一行的语义本来就是
-         * "与分组有关的事"，放这里用户找得到、又不干扰日常。
-         *
-         * ⚠️ 长按分组标签也能改名/删除（见 `showGroupActions`），
-         * 这是给"只想改一个组"的快捷路径；本入口负责"新建"与总览。
-         */
-        Text('＋ 管理')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.accent)
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .onClick(() => {
-            this.showGroupManageMenu();
-          })
-      }
-      .padding({ right: AppTheme.GAP_S })
-    }
-    .scrollable(ScrollDirection.Horizontal)
-    .scrollBar(BarState.Off)
-    .width('100%')
-  }
-
-  @Builder
-  groupChip(label: string, groupId: number) {
-    /**
-     * 选中的分组标签用**中性填充**（`primary` / `onPrimary`），不用点缀色。
-     *
-     * ⚠️ 它是**实心大色块**：一行里同时有多个标签，若选中那个用主题色，
-     * 整条标签栏的视觉重量会全压到它身上，而分组只是个筛选条件、
-     * 不值得抢走主视线。中性填充同样能表达"选中"，且不破坏黑白灰的基调。
-     */
-    Text(label)
-      .fontSize(AppTheme.FONT_CAPTION)
-      .fontColor(this.state.selectedGroupId === groupId
-        ? AppColor.onPrimary
-        : AppColor.textSecondary)
-      .backgroundColor(this.state.selectedGroupId === groupId
-        ? AppColor.primary
-        : AppColor.bgCard)
-      .borderRadius(AppTheme.CHIP_RADIUS)
-      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-      .onClick(() => {
-        this.vm.selectGroup(groupId);
-      })
-      /**
-       * ⚠️ 长按进入分组管理（仅真实分组，不含"全部"）。
-       *
-       * 为什么用长按而不是给每个标签加一个小按钮：标签本身很窄
-       * （`CHIP_RADIUS` 的胶囊），塞进按钮会把点击热区切碎、容易误触；
-       * 而"长按某个标签 → 改它/删它"是移动端的通用心智，
-       * 也与书籍项的长按菜单（`showBookActions`）保持一致。
-       *
-       * ⚠️ "全部"（groupId < 0）没有长按菜单：它是虚拟分组，
-       * 既不能改名也不能删除。
-       */
-      .gesture(
-        LongPressGesture()
-          .onAction(() => {
-            if (groupId < 0) {
-              return;
-            }
-            this.showGroupActions(groupId, label);
-          })
-      )
+  /**
+   * 点分组条目 → 进入分组详情页。
+   *
+   * ⚠️ 名字随路由一起传：目标页要立刻在标题上显示它，
+   * 而"自己去查库"是异步的，首帧会先渲染成空标题（详见 `RouteParam.groupName`）。
+   */
+  private openGroupDetail(group: BookGroup): void {
+    const param: RouteParam = new RouteParam();
+    param.groupId = group.id;
+    param.groupName = group.name;
+    this.getUIContext().getRouter()
+      .pushUrl({ url: RouteName.GROUP_DETAIL_PAGE, params: param })
+      .catch(() => {
+        this.toast('打开分组失败');
+      });
   }
 
   // ------------------------------------------------------------ 书籍列表
 
+  /**
+   * 书架首页列表：**分组与书籍混排**。
+   *
+   * ⚠️ 只遍历 `state.entries` 这**一条**数组，而不是"分组一个 `ForEach`、
+   * 书一个 `ForEach`"。
+   *
+   * 后者无论各自怎么排，渲染出来永远是"分组全在前、书全在后" ——
+   * 做不到交错，而用户明确要求"分组就相当于一本书"：
+   * 刚读完的书必须能排在分组**前面**（用户实测反馈过这一点）。
+   *
+   * ⚠️ 排序已在 ViewModel 里做完（`buildEntries`），这里**不再排序**：
+   * 渲染层只负责画，排序规则收在一处（设计文档第 28 条）。
+   * 若在这里再排一次，两处规则迟早会不一致。
+   */
   @Builder
   buildBookList() {
     if (this.state.gridMode) {
       Grid() {
-        ForEach(this.state.books, (book: Book) => {
+        ForEach(this.state.entries, (entry: ShelfEntry) => {
           GridItem() {
-            BookGridItem({
-              book: book,
-              onTap: (b: Book) => {
-                this.openReader(b);
-              },
-              onLongPress: (b: Book) => {
-                this.showBookActions(b);
-              }
-            })
+            /**
+             * ⚠️ 按 `isGroup` 分流到两个组件，而不是做一个"万能条目"：
+             * 分组与书的**封面逻辑、角标、长按菜单**都不同，
+             * 塞进一个组件会到处是 `if (isGroup)`，越写越难读。
+             */
+            if (entry.isGroup) {
+              GroupGridItem({
+                group: entry.group,
+                onTap: (g: BookGroup) => {
+                  this.openGroupDetail(g);
+                },
+                onLongPress: (g: BookGroup) => {
+                  this.showGroupActions(g.id, g.name);
+                }
+              })
+            } else {
+              BookGridItem({
+                book: entry.book,
+                onTap: (b: Book) => {
+                  this.openReader(b);
+                },
+                onLongPress: (b: Book) => {
+                  this.showBookActions(b);
+                }
+              })
+            }
           }
-        }, (book: Book) => `${book.id}`)
+        }, (entry: ShelfEntry) => entry.key())
       }
       .columnsTemplate('1fr 1fr 1fr')
       .columnsGap(AppTheme.GAP_M)
@@ -387,19 +366,31 @@ export struct BookShelfPage {
       .scrollBar(BarState.Off)
     } else {
       List({ space: AppTheme.GAP_S }) {
-        ForEach(this.state.books, (book: Book) => {
+        ForEach(this.state.entries, (entry: ShelfEntry) => {
           ListItem() {
-            BookListItem({
-              book: book,
-              onTap: (b: Book) => {
-                this.openReader(b);
-              },
-              onLongPress: (b: Book) => {
-                this.showBookActions(b);
-              }
-            })
+            if (entry.isGroup) {
+              GroupListItem({
+                group: entry.group,
+                onTap: (g: BookGroup) => {
+                  this.openGroupDetail(g);
+                },
+                onLongPress: (g: BookGroup) => {
+                  this.showGroupActions(g.id, g.name);
+                }
+              })
+            } else {
+              BookListItem({
+                book: entry.book,
+                onTap: (b: Book) => {
+                  this.openReader(b);
+                },
+                onLongPress: (b: Book) => {
+                  this.showBookActions(b);
+                }
+              })
+            }
           }
-        }, (book: Book) => `${book.id}`)
+        }, (entry: ShelfEntry) => entry.key())
       }
       .padding({
         left: AppTheme.PAGE_PADDING,
@@ -510,7 +501,7 @@ export struct BookShelfPage {
      * ⚠️ 「移入分组」只在**已有分组**时出现。
      *
      * 一个分组都没有时，点它只能弹一个"还没有分组"的空菜单 —— 那是死路。
-     * 用户要建组应该走分组那一行的「＋ 管理」（那里才有"新建分组"）。
+     * 用户要建组应该走标题行的「＋分组」。
      * 判据：**菜单项要么能用，要么不显示**，不要放一个只会报错的入口。
      */
     const canGroup: boolean = this.state.groups.length > 0;
@@ -635,6 +626,12 @@ export struct BookShelfPage {
   private openGroupPickerForTarget(groupId: number, groupName: string): void {
     const param: RouteParam = new RouteParam();
     param.groupId = groupId;
+    /**
+     * ⚠️ 名字随路由一起传（见 `RouteParam.groupName` 的说明）：
+     * 目标页自己去查是异步的，首帧会先用默认值渲染标题，
+     * 而普通成员赋值不触发重绘 —— 标题就永远停在错的名字上。
+     */
+    param.groupName = groupName;
     this.getUIContext().getRouter()
       .pushUrl({ url: RouteName.GROUP_PICKER_PAGE, params: param })
       .catch(() => {
@@ -738,23 +735,6 @@ export struct BookShelfPage {
     }
   }
 
-  /**
-   * 继续阅读卡片是否可见。
-   *
-   * 选中分组时，只在"这本书属于该分组"才显示。
-   */
-  private continueBookVisible(): boolean {
-    const cb: Book | null = this.state.continueBook;
-    if (cb === null) {
-      return false;
-    }
-    // -1 表示"全部"，不按分组筛选
-    if (this.state.selectedGroupId < 0) {
-      return true;
-    }
-    return cb.groupId === this.state.selectedGroupId;
-  }
-
   private openReader(book: Book): void {
     const param: RouteParam = new RouteParam();
     param.bookId = book.id;
@@ -772,146 +752,27 @@ export struct BookShelfPage {
   // ------------------------------------------------------------ 分组管理
 
   /**
-   * 「管理」入口：新建分组 / 管理已有分组。
+   * 长按分组条目 → 分组操作菜单。
    *
-   * ⚠️ 用 `showActionMenu` 且按钮是**动态拼**的：
-   * `buttons` 的类型是六元组（第 1 个必填、其余可选），所以先把要显示的项
-   * 收集进数组，再断言成元组 —— 与 `showEncodingPicker` 同一套写法。
+   * ⚠️ 它与分组详情页右上角的「更多」菜单**职责不同，都要保留**：
+   *  - 本菜单（首页长按）= 不进入分组就能做的快捷操作；
+   *  - 详情页的「更多」= 打开分组后的操作，多一项「编辑分组」（管理组内书籍）。
    *
-   * 注意：这里的按钮文案与下标**必须由同一个数组推导**，不能各写一份，
-   * 否则以后插入一项就会"点了 A 执行 B"（设计文档第 28 条）。
+   * ⚠️ 首页这里**不放「编辑分组」**：那是"管理组内的书"，
+   * 而此刻用户还没打开这个组、看不到里面有什么 —— 让他先进去再编辑更合理。
+   *
+   * ⚠️ 文案与下标由同一个数组推导（设计文档第 28 条）。
    */
-  private showGroupManageMenu(): void {
-    const actions: string[] = ['新建分组'];
-    /**
-     * ⚠️ 「添加书籍到分组」是分组功能的**主路径**，必须在有分组时就能一步到达。
-     *
-     * 分组本身只是个标签，用户建完组紧接着要做的就是把已导入的书放进去 ——
-     * 少了这一项，"建组"就成了一个没有下文的动作（本项目实测踩过：
-     * 分组永远是空的）。
-     *
-     * ⚠️ 它排在「新建分组」之后、「重命名/删除」之前：按**使用频率**排，
-     * 日常最常做的是"往组里加书"，改删组是低频维护动作。
-     */
-    if (this.state.groups.length > 0) {
-      actions.push('添加书籍到分组');
-      actions.push('重命名 / 删除分组');
-    }
+  private showGroupActions(groupId: number, name: string): void {
+    const actions: string[] = ['打开分组', '加入书籍', '重命名', '解散分组'];
 
     const buttons: promptAction.Button[] = [];
     for (const action of actions) {
-      buttons.push({ text: action, color: AppColorLiteral.textPrimary });
+      buttons.push({
+        text: action,
+        color: action === '解散分组' ? AppColorLiteral.danger : AppColorLiteral.textPrimary
+      });
     }
-
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: '分组管理',
-      buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?]
-    }).then((result) => {
-      const picked: string = actions[result.index];
-      if (picked === '新建分组') {
-        this.openCreateGroupDialog();
-      } else if (picked === '添加书籍到分组') {
-        this.showGroupPickerForAddBooks();
-      } else if (picked === '重命名 / 删除分组') {
-        this.showGroupPickerForManage();
-      }
-    }).catch(() => {
-      // 用户取消
-    });
-  }
-
-  /**
-   * 「添加书籍到分组」：先选**目标分组**，再进入挑书的页面。
-   *
-   * ⚠️ 两步是必要的（先组后书，而不是先书后组）：
-   * 用户的心智是"我要把一批书放进『科幻』"，而不是"我要给这 20 本书分别挑组"。
-   * 先定目标组，挑书页就能一直显示"加入「科幻」"，每勾一本都不用再想目标。
-   */
-  private showGroupPickerForAddBooks(): void {
-    const groups: BookGroup[] = this.state.groups;
-    const maxItems: number = 6;
-    const shown: BookGroup[] = groups.slice(0, maxItems);
-
-    const buttons: promptAction.Button[] = [];
-    for (const group of shown) {
-      buttons.push({ text: group.name, color: AppColorLiteral.textPrimary });
-    }
-
-    const truncated: boolean = groups.length > shown.length;
-    const title: string = truncated
-      ? `要把书籍加入哪个分组？（仅显示前 ${shown.length} 个）`
-      : '要把书籍加入哪个分组？';
-
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: title,
-      buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?,
-        promptAction.Button?, promptAction.Button?, promptAction.Button?]
-    }).then((result) => {
-      const group: BookGroup = shown[result.index];
-      if (group === undefined) {
-        return;
-      }
-      this.openGroupPickerForTarget(group.id, group.name);
-    }).catch(() => {
-      // 用户取消
-    });
-  }
-
-  /**
-   * 选一个分组去管理（重命名/删除）。
-   *
-   * ⚠️ 分组可能很多，而 `showActionMenu` 最多六项 —— 所以先按名字列出，
-   * 超出部分截断并提示。真正要"管理很多分组"需要独立管理页（见设计文档待办），
-   * 这里先覆盖常见数量（几个到十几个）。
-   */
-  private showGroupPickerForManage(): void {
-    const groups: BookGroup[] = this.state.groups;
-    const maxItems: number = 6;
-    const shown: BookGroup[] = groups.slice(0, maxItems);
-
-    const buttons: promptAction.Button[] = [];
-    for (const group of shown) {
-      buttons.push({ text: group.name, color: AppColorLiteral.textPrimary });
-    }
-
-    const truncated: boolean = groups.length > shown.length;
-    const title: string = truncated
-      ? `选择要管理的分组（仅显示前 ${shown.length} 个）`
-      : '选择要管理的分组';
-
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: title,
-      buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?,
-        promptAction.Button?, promptAction.Button?, promptAction.Button?]
-    }).then((result) => {
-      const group: BookGroup = shown[result.index];
-      if (group === undefined) {
-        return;
-      }
-      this.showGroupActions(group.id, group.name);
-    }).catch(() => {
-      // 用户取消
-    });
-  }
-
-  /**
-   * 单个分组的操作菜单：添加书籍 / 重命名 / 删除。
-   *
-   * ⚠️ 「添加书籍」排第一：长按一个分组时，最常想做的事就是"往这个组里加书"
-   * （改删组是低频维护）。而且它把"从已导入的书里挑"这条主路径
-   * 直接挂到了分组本身上，用户不必先去记「＋ 管理」在哪。
-   *
-   * @param groupId 分组 id
-   * @param name    当前名字（用于菜单标题与重命名初值）
-   */
-  private showGroupActions(groupId: number, name: string): void {
-    const actions: string[] = ['添加书籍到本组', '重命名', '删除分组'];
-
-    const buttons: promptAction.Button[] = [
-      { text: actions[0], color: AppColorLiteral.textPrimary },
-      { text: actions[1], color: AppColorLiteral.textPrimary },
-      { text: actions[2], color: AppColorLiteral.danger }
-    ];
 
     this.getUIContext().getPromptAction().showActionMenu({
       title: `分组「${name}」`,
@@ -919,16 +780,40 @@ export struct BookShelfPage {
         promptAction.Button?, promptAction.Button?, promptAction.Button?]
     }).then(async (result) => {
       const picked: string = actions[result.index];
-      if (picked === '添加书籍到本组') {
+      if (picked === undefined) {
+        return;
+      }
+      if (picked === '打开分组') {
+        this.openGroupDetailById(groupId, name);
+      } else if (picked === '加入书籍') {
         this.openGroupPickerForTarget(groupId, name);
       } else if (picked === '重命名') {
         this.openRenameGroupDialog(groupId, name);
-      } else if (picked === '删除分组') {
+      } else if (picked === '解散分组') {
         await this.confirmDeleteGroup(groupId, name);
       }
     }).catch(() => {
       // 用户取消
     });
+  }
+
+  /**
+   * 按 id 打开分组详情（长按菜单用）。
+   *
+   * ⚠️ 与 `openGroupDetail(group)` 是同一个动作的两个入口：
+   * 一个手上是 `BookGroup` 对象、一个只有 id 与名字。
+   * 不合并是因为详情页只需要 id + 名字两个值，
+   * 为它去查一次 `BookGroup` 是多余的 IO。
+   */
+  private openGroupDetailById(groupId: number, name: string): void {
+    const param: RouteParam = new RouteParam();
+    param.groupId = groupId;
+    param.groupName = name;
+    this.getUIContext().getRouter()
+      .pushUrl({ url: RouteName.GROUP_DETAIL_PAGE, params: param })
+      .catch(() => {
+        this.toast('打开分组失败');
+      });
   }
 
   private openCreateGroupDialog(): void {
@@ -1014,24 +899,6 @@ export struct BookShelfPage {
     } catch (e) {
       // 用户取消
     }
-  }
-
-  /**
-   * 当前选中分组的名字（用于挑书页的标题）。
-   *
-   * ⚠️ 找不到时返回空串，由调用方决定怎么显示 —— 不要在这里编一个
-   * "未命名"之类的兜底名：那会让"分组已不存在"这种异常状态
-   * 看起来像正常状态（`deleteGroup` 已保证选中分组被删时退回"全部"，
-   * 所以这里理论上不会发生）。
-   */
-  private currentGroupName(): string {
-    const selected: number = this.state.selectedGroupId;
-    for (const group of this.state.groups) {
-      if (group.id === selected) {
-        return group.name;
-      }
-    }
-    return '';
   }
 
   private toast(message: string): void {

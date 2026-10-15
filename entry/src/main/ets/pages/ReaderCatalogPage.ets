@@ -616,7 +616,7 @@ struct ReaderCatalogPage {
                 this.jumpTo(item.chapterIndex, offset);
               })
             }
-          }, (item: Annotation) => `${item.id}`)
+          }, (item: Annotation) => `${item.id}_${item.type}_${item.noteContent}_${item.selectedText}`)
         }
         .width('100%')
         .layoutWeight(1)

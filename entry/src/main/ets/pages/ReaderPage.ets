@@ -585,8 +585,7 @@ struct ReaderPage {
                 Logger.error(LogTag.READ, `进度条跳章失败: ${Logger.errText(e)}`);
               });
             },
-            // 上一章回到"上一章的最后一页"（switchChapter 内部处理），
-            // 符合"往回翻"的直觉
+            // 上一章：切到上一章章首（switchChapter 内部处理）
             onPrevChapter: () => {
               this.vm.prevChapter().then(() => {
                 this.resetScrollAfterChapterChange();
@@ -1702,6 +1701,16 @@ struct ReaderPage {
     }
   }
 
+  /**
+   * 滚动模式估算"每行多少字"。
+   *
+   * ⚠️ 与 `onReaderScroll` 的上报**共用同一算法**：两处各写一份的话，
+   * 存进去和滚出来的口径会悄悄错开（本项目已在"测量与渲染不同源"上踩过同类坑）。
+   */
+  private charsPerLineEstimate(): number {
+    return Math.max(1, Math.floor(this.contentWidth / Math.max(1, this.state.settings.fontSize)));
+  }
+
   /** 阅读区（第 1 层 Column）尺寸变化 → 重算分页 */
   private onPageAreaChange(area: Area): void {
     const width: number = Number(area.width);
@@ -1775,8 +1784,8 @@ struct ReaderPage {
    *   - 进度被写成一个凭空的、偏大的偏移（`ProgressService` 随即落库）。
    *
    * 所以换章后必须显式回顶，**不能指望滚动容器自己回顶**。
-   * （章末自动衔接之所以没这个问题，是因为 `continueToNextChapter` 里
-   * 显式做了 `scrollEdge(Edge.Top)` —— 但那一步只在自动衔接时发生。）
+   * （此路径现在只在**分页/目录跳章**等真正重载内容的场景触发；
+   * 滚动模式的连续阅读已改为三段布局 + 内存晋升，不再走这里。）
    *
    * ⚠️ **一律回顶**，不再有"回到底部"的分支：换章的目标现在统一是章首
    * （「上一章」也改成落到章首了，见 `ReaderViewModel.prevChapter`）。
@@ -1917,9 +1926,8 @@ struct ReaderPage {
    * `viewportHeight` 与 `scrollContentHeight` 都可以放心等：
    * 前者是容器自身高度、换章不变；后者一旦有过内容就不会再回到 0。
    *
-   * ⚠️ `contentWidth > 0` 这个前提**不能省**：`charsPerLineEstimate()` 在宽度未知时
-   * 会退化成"每行 1 字"，于是 `y` 被算成一个天文数字，框架会把它夹到**章末** ——
-   * 与"恢复阅读位置"正好相反（用户会看到"一打开就停在最后"）。
+   * ⚠️ `contentWidth > 0` 这个前提**不能省**：宽度未知时"偏移 → 段内 y"的换算
+   * 会失真，被框架夹到错误位置 —— 与"恢复阅读位置"正好相反（一打开就停错地方）。
    * 宽度由 `setContentSize`（`tryPaginate`）写入，所以首帧之前必须等。
    */
   private applyPendingScrollRestore(): void {
@@ -1958,16 +1966,6 @@ struct ReaderPage {
     this.scroller.scrollTo({ xOffset: 0, yOffset: targetY });
     Logger.info(LogTag.READ,
       `滚动恢复位置: 偏移=${offset} → 行=${lines} → y=${targetY.toFixed(1)}`);
-  }
-
-  /**
-   * 滚动模式估算"每行多少字"。
-   *
-   * ⚠️ 与 `onReaderScroll` 的上报**共用同一算法**：两处各写一份的话，
-   * 存进去和滚出来的口径会悄悄错开（本项目已在"测量与渲染不同源"上踩过同类坑）。
-   */
-  private charsPerLineEstimate(): number {
-    return Math.max(1, Math.floor(this.contentWidth / Math.max(1, this.state.settings.fontSize)));
   }
 
   private goBack(): void {
