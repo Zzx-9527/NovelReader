@@ -1,10 +1,9 @@
-import { promptAction } from '@kit.ArkUI';
 import { Book } from '../model/Book';
 import { BookGroup } from '../model/BookGroup';
 import { RouteName, RouteParam } from '../model/RouteParam';
 import { BookShelfViewModel } from '../viewmodels/BookShelfViewModel';
 import { ShelfRefreshRegistry } from '../viewmodels/ShelfRefreshRegistry';
-import { AppColor, AppColorLiteral, AppTheme } from '../common/theme/AppTheme';
+import { AppColor, AppTheme } from '../common/theme/AppTheme';
 import { AppFont } from '../common/theme/AppFont';
 import { Logger } from '../common/utils/Logger';
 import { LoadingView } from '../views/common/LoadingView';
@@ -12,6 +11,8 @@ import { EmptyView } from '../views/common/EmptyView';
 import { ErrorView } from '../views/common/ErrorView';
 import { BookListItem } from '../views/bookshelf/BookListItem';
 import { TextInputDialog } from '../views/common/TextInputDialog';
+import { ThemeMenu } from '../views/common/ThemeMenu';
+import { ThemeConfirm } from '../views/common/ThemeConfirm';
 
 /**
  * 标题左右各留的安全间距（vp）。
@@ -74,6 +75,21 @@ struct GroupDetailPage {
   @State private error: string = '';
   /** 重命名弹窗是否可见 */
   @State private renameVisible: boolean = false;
+  /**
+   * 主题化菜单/确认弹窗的挂载状态（与 BookShelfPage 同一套做法：
+   * 收敛为一份状态，build 里各一个 if）。
+   */
+  @State private menuVisible: boolean = false;
+  @State private menuTitle: string = '';
+  @State private menuOptions: string[] = [];
+  @State private menuDanger: string = '';
+  private menuOnPick: ((index: number) => void) | null = null;
+  @State private confirmVisible: boolean = false;
+  @State private confirmTitle: string = '';
+  @State private confirmMessage: string = '';
+  @State private confirmText: string = '确定';
+  @State private confirmDanger: boolean = false;
+  private confirmOnYes: (() => void) | null = null;
   /** 重命名弹窗的初值 */
   @State private renameInitial: string = '';
   /**
@@ -180,20 +196,8 @@ struct GroupDetailPage {
   private showMoreMenu(): void {
     const actions: string[] = ['加入书籍', '编辑分组', '重命名', '解散分组'];
 
-    const buttons: promptAction.Button[] = [];
-    for (const action of actions) {
-      buttons.push({
-        text: action,
-        color: action === '解散分组' ? AppColorLiteral.danger : AppColorLiteral.textPrimary
-      });
-    }
-
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: `分组「${this.groupName}」`,
-      buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?,
-        promptAction.Button?, promptAction.Button?, promptAction.Button?]
-    }).then(async (result) => {
-      const picked: string = actions[result.index];
+    this.openThemeMenu(`分组「${this.groupName}」`, actions, `${actions.length - 1}`, (index: number) => {
+      const picked: string = actions[index];
       if (picked === undefined) {
         return;
       }
@@ -205,11 +209,19 @@ struct GroupDetailPage {
         this.renameInitial = this.groupName;
         this.renameVisible = true;
       } else if (picked === '解散分组') {
-        await this.confirmDissolve();
+        this.confirmDissolve();
       }
-    }).catch(() => {
-      // 用户取消
     });
+  }
+
+  /** 打开主题化菜单（与 BookShelfPage 的 openThemeMenu 同一入口语义） */
+  private openThemeMenu(title: string, options: string[], danger: string,
+    onPick: (index: number) => void): void {
+    this.menuTitle = title;
+    this.menuOptions = options;
+    this.menuDanger = danger;
+    this.menuOnPick = onPick;
+    this.menuVisible = true;
   }
 
   /** 打开"加入书籍"页（目标就是本分组） */
@@ -263,25 +275,23 @@ struct GroupDetailPage {
       ? `${count} 本书会回到书架（变成未分组），书和阅读进度都不会丢。`
       : '这个分组是空的，解散后无法恢复。';
 
-    const buttons: [promptAction.Button, promptAction.Button] = [
-      { text: '取消', color: AppColorLiteral.textPrimary },
-      { text: '解散分组', color: AppColorLiteral.danger }
-    ];
+    this.confirmTitle = `解散分组「${this.groupName}」？`;
+    this.confirmMessage = message;
+    this.confirmText = '解散分组';
+    this.confirmDanger = true;
+    this.confirmOnYes = () => {
+      this.runDissolve();
+    };
+    this.confirmVisible = true;
+  }
 
-    try {
-      const result = await this.getUIContext().getPromptAction().showDialog({
-        title: `解散分组「${this.groupName}」？`,
-        message: message,
-        buttons: buttons
-      });
-      if (result.index !== 1) {
-        return;
-      }
-      const vm: BookShelfViewModel | null = this.vm;
-      if (vm === null) {
-        return;
-      }
-      const moved: number = await vm.deleteGroup(this.groupId);
+  /** 解散确认通过后的实际执行（从 confirmDissolve 拆出） */
+  private runDissolve(): void {
+    const vm: BookShelfViewModel | null = this.vm;
+    if (vm === null) {
+      return;
+    }
+    vm.deleteGroup(this.groupId).then((moved: number) => {
       if (moved >= 0) {
         /**
          * ⚠️ 解散后**必须返回首页**：本页的分组已经不存在了，
@@ -292,9 +302,9 @@ struct GroupDetailPage {
         this.toast(vm.state.error.length > 0 ? vm.state.error : '解散分组失败');
         vm.clearError();
       }
-    } catch (e) {
-      // 用户取消
-    }
+    }).catch(() => {
+      this.toast('解散分组失败');
+    });
   }
 
   /** 重命名提交 */
@@ -374,6 +384,46 @@ struct GroupDetailPage {
           },
           onCancel: () => {
             this.renameVisible = false;
+          }
+        })
+      }
+
+      // 主题化动作菜单（替代系统 showActionMenu）
+      if (this.menuVisible) {
+        ThemeMenu({
+          title: this.menuTitle,
+          options: this.menuOptions,
+          dangerIndexes: this.menuDanger,
+          currentIndex: -1,
+          onPick: (index: number) => {
+            this.menuVisible = false;
+            const cb = this.menuOnPick;
+            if (cb !== null) {
+              cb(index);
+            }
+          },
+          onClose: () => {
+            this.menuVisible = false;
+          }
+        })
+      }
+
+      // 主题化确认弹窗（替代系统 showDialog）
+      if (this.confirmVisible) {
+        ThemeConfirm({
+          title: this.confirmTitle,
+          message: this.confirmMessage,
+          confirmText: this.confirmText,
+          danger: this.confirmDanger,
+          onConfirm: () => {
+            this.confirmVisible = false;
+            const cb = this.confirmOnYes;
+            if (cb !== null) {
+              cb();
+            }
+          },
+          onCancel: () => {
+            this.confirmVisible = false;
           }
         })
       }

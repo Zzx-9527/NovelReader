@@ -6,6 +6,7 @@ import { PageCacheRepository } from '../data/repository/PageCacheRepository';
 import { BookRepository } from '../data/repository/BookRepository';
 import { SettingsService } from '../data/service/SettingsService';
 import { IconChevron } from '../views/common/Marks';
+import { ThemeConfirm } from '../views/common/ThemeConfirm';
 
 /**
  * "我的"页：设置入口、缓存清理、关于。
@@ -38,6 +39,14 @@ export struct ProfilePage {
    */
   @State themeMode: number = AppThemeMode.FOLLOW_SYSTEM;
 
+  // 主题化确认弹窗的挂载状态（与 BookShelfPage 同一套做法）
+  @State private confirmVisible: boolean = false;
+  @State private confirmTitle: string = '';
+  @State private confirmMessage: string = '';
+  @State private confirmText: string = '确定';
+  @State private confirmDanger: boolean = false;
+  private confirmOnYes: (() => void) | null = null;
+
   aboutToAppear(): void {
     this.loadCacheInfo();
     // 同步读一次持久化值做高亮（失败按跟随系统 —— 与 ThemeApplier 的降级一致）
@@ -57,7 +66,12 @@ export struct ProfilePage {
   }
 
   build() {
-    Column() {
+    /**
+     * ⚠️ 外层 `Stack` 是为确认弹窗服务的：ThemeConfirm 是全屏浮层，
+     * 必须能盖住整页（层叠语义），与 BookShelfPage 同一套做法。
+     */
+    Stack() {
+     Column() {
       /**
        * 标题区（带内边距）。
        *
@@ -346,6 +360,27 @@ export struct ProfilePage {
       .width('100%')
       .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, bottom: 28 })
       .alignItems(HorizontalAlign.Center)
+      }
+
+      // 主题化确认弹窗（替代系统 showAlertDialog）
+      if (this.confirmVisible) {
+        ThemeConfirm({
+          title: this.confirmTitle,
+          message: this.confirmMessage,
+          confirmText: this.confirmText,
+          danger: this.confirmDanger,
+          onConfirm: () => {
+            this.confirmVisible = false;
+            const cb = this.confirmOnYes;
+            if (cb !== null) {
+              cb();
+            }
+          },
+          onCancel: () => {
+            this.confirmVisible = false;
+          }
+        })
+      }
     }
     .width('100%')
     .height('100%')
@@ -397,36 +432,22 @@ export struct ProfilePage {
   }
 
   /**
-   * 清空所有数据：先弹系统确认（不可撤销的破坏性操作必须二次确认），
+   * 清空所有数据：先弹主题化确认（不可撤销的破坏性操作必须二次确认），
    * 确认后才调 `BookRepository.wipeAll()`。
    *
-   * ⚠️ 用 `getUIContext().showAlertDialog()`：`AlertDialog.show()` 全局函数
-   * 自 API 18 已废弃（设计文档 §5.6 第 20 条）。
-   *
-   * ⚠️ 弹窗按钮上那个危险色是**字符串字面量** `'#B4432F'`，没有改成
-   * `AppColor.danger`：`showAlertDialog` 的 `fontColor` 只收 `string`，
-   * 塞 `Resource` 直接编译不过 —— 这与 `AppColorLiteral` 存在的理由完全相同。
-   * 若要改色，请同时改 `AppColorLiteral.danger`（那里才是唯一来源）。
+   * ⚠️ 原 `showAlertDialog` 已替换为 `ThemeConfirm`：系统确认框是冷白卡片 +
+   * 蓝色按钮，不跟随宣纸/朱砂主题，且其 `fontColor` 只收 string 字面量
+   * （`AppColorLiteral` 因此存在）。ThemeConfirm 把确认框也收进令牌体系。
    */
   private confirmWipeAll(): void {
-    this.getUIContext().showAlertDialog({
-      title: '清空所有数据？',
-      message: '将删除全部书籍、阅读进度、书签笔记与统计记录，且不可恢复。书源 TXT 文件会保留在沙箱中。',
-      autoCancel: true,
-      alignment: DialogAlignment.Center,
-      primaryButton: {
-        value: '取消',
-        action: () => {
-        }
-      },
-      secondaryButton: {
-        value: '清空',
-        fontColor: '#B4432F',
-        action: () => {
-          this.doWipeAll();
-        }
-      }
-    });
+    this.confirmTitle = '清空所有数据？';
+    this.confirmMessage = '将删除全部书籍、阅读进度、书签笔记与统计记录，且不可恢复。书源 TXT 文件会保留在沙箱中。';
+    this.confirmText = '清空';
+    this.confirmDanger = true;
+    this.confirmOnYes = () => {
+      this.doWipeAll();
+    };
+    this.confirmVisible = true;
   }
 
   private async doWipeAll(): Promise<void> {

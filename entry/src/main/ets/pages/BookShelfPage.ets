@@ -1,6 +1,5 @@
-// 仅用其**类型**（promptAction.Button）—— 调用一律走
-// this.getUIContext().getPromptAction()，全局函数已废弃（见 §5.6 第 19 条）
-import { promptAction } from '@kit.ArkUI';
+// ⚠️ 已不 import promptAction：所有系统弹窗（showActionMenu/showDialog）
+// 已替换为 ThemeMenu / ThemeConfirm（views/common/），文案与配色走令牌体系。
 import { Book } from '../model/Book';
 import { BookGroup } from '../model/BookGroup';
 import { ShelfEntry } from '../model/ShelfEntry';
@@ -9,7 +8,7 @@ import { BookShelfViewModel } from '../viewmodels/BookShelfViewModel';
 import { ShelfRefreshRegistry } from '../viewmodels/ShelfRefreshRegistry';
 import { BookSort } from '../data/repository/BookRepository';
 import { StorageBootstrap } from '../common/StorageBootstrap';
-import { AppColor, AppColorLiteral, AppTheme } from '../common/theme/AppTheme';
+import { AppColor, AppTheme } from '../common/theme/AppTheme';
 import { AppFont } from '../common/theme/AppFont';
 import { Encodings } from '../common/utils/EncodingDetector';
 import { Logger } from '../common/utils/Logger';
@@ -23,6 +22,8 @@ import { GroupListItem } from '../views/bookshelf/GroupListItem';
 import { ContinueReadingCard } from '../views/bookshelf/ContinueReadingCard';
 import { ShelfSkeleton } from '../views/bookshelf/ShelfSkeleton';
 import { TextInputDialog } from '../views/common/TextInputDialog';
+import { ThemeMenu } from '../views/common/ThemeMenu';
+import { ThemeConfirm } from '../views/common/ThemeConfirm';
 import { RouteName, RouteParam } from '../model/RouteParam';
 
 /**
@@ -64,6 +65,30 @@ export struct BookShelfPage {
   @State private editingGroupId: number = -1;
   /** 重命名时输入框的初值 */
   @State private editingGroupName: string = '';
+
+  // ── 主题化菜单/确认弹窗的挂载状态 ────────────────────────
+  /**
+   * 当前显示的 ThemeMenu 内容。
+   *
+   * ⚠️ 用"一个可选对象 + visible 位"而不是多个 boolean：
+   * 菜单有 6 处调用点，每处一份 boolean + 一份标题 + 一份选项数组
+   * 会把 build() 炸成 6 个 if；收成一份状态，build 里只有一个 if。
+   * `danger` 用字符串（"2,3"）与 ThemeMenu 的 @Prop 对齐（见组件注释）。
+   */
+  @State private menuVisible: boolean = false;
+  @State private menuTitle: string = '';
+  @State private menuOptions: string[] = [];
+  @State private menuDanger: string = '';
+  @State private menuCurrent: number = -1;
+  private menuOnPick: ((index: number) => void) | null = null;
+
+  /** 确认弹窗（ThemeConfirm）的挂载状态，与菜单同理收敛为一份 */
+  @State private confirmVisible: boolean = false;
+  @State private confirmTitle: string = '';
+  @State private confirmMessage: string = '';
+  @State private confirmText: string = '确定';
+  @State private confirmDanger: boolean = false;
+  private confirmOnYes: (() => void) | null = null;
 
   aboutToAppear(): void {
     // 关键一步：让 ViewModel 与 UI 操作同一个状态对象。
@@ -201,6 +226,53 @@ export struct BookShelfPage {
           }
         })
       }
+
+      /**
+       * 主题化动作菜单（替代系统 showActionMenu）：全页共用一个实例，
+       * 内容由 `menu*` 状态驱动 —— 6 处调用点只改状态、不改结构。
+       */
+      if (this.menuVisible) {
+        ThemeMenu({
+          title: this.menuTitle,
+          options: this.menuOptions,
+          dangerIndexes: this.menuDanger,
+          currentIndex: this.menuCurrent,
+          onPick: (index: number) => {
+            this.menuVisible = false;
+            const cb = this.menuOnPick;
+            if (cb !== null) {
+              cb(index);
+            }
+          },
+          onClose: () => {
+            this.menuVisible = false;
+          }
+        })
+      }
+
+      /**
+       * 主题化确认弹窗（替代系统 showDialog / AlertDialog）。
+       * 确认按钮的回调 `confirmOnYes` 存普通成员：它只在弹窗打开期间有效，
+       * 不需要驱动重绘（与 `menuOnPick` 同理）。
+       */
+      if (this.confirmVisible) {
+        ThemeConfirm({
+          title: this.confirmTitle,
+          message: this.confirmMessage,
+          confirmText: this.confirmText,
+          danger: this.confirmDanger,
+          onConfirm: () => {
+            this.confirmVisible = false;
+            const cb = this.confirmOnYes;
+            if (cb !== null) {
+              cb();
+            }
+          },
+          onCancel: () => {
+            this.confirmVisible = false;
+          }
+        })
+      }
     }
     .width('100%')
     .height('100%')
@@ -248,7 +320,7 @@ export struct BookShelfPage {
   @Builder
   buildHeader() {
     Column() {
-      // ① 标题 + 计数 + 导入
+      // ① 标题 + 计数 + 「更多」图标
       Row({ space: AppTheme.GAP_S }) {
         Column({ space: 4 }) {
           Text('书架')
@@ -272,22 +344,27 @@ export struct BookShelfPage {
         .layoutWeight(1)
 
         /**
-         * 「导入」：**朱色文字动作**，不是实心按钮。
+         * 「更多」图标：**列表/排列/新建分组/导入** 四个动作的唯一入口
+         * （用户要求合并）。`more.svg`（三点竖排），`fillColor` 染色。
          *
-         * ⚠️ 从实心 `primary` 按钮降级为文字动作的理由：操作行改成
-         * 朱色文字语汇后（见②），「导入」再保留实心底就是这一屏
-         * 最重的元素 —— 而导入是低频动作，不该比"继续阅读"更重。
-         * 三个动作统一"朱色文字 + 8vp 热区"，主次交给「继续阅读」卡。
+         * ⚠️ **绝不要给固定尺寸的 `Image` 加 `padding`**（`GroupDetailPage`
+         * 实测踩过：padding 向内挤，20vp 的图标区域被 24vp 的 padding 压成 0，
+         * 图标整个画不出来）。热区靠外层 `Row` 撑，`onClick` 也绑在 Row 上。
+         *
+         * ⚠️ 导入进行中置灰：四个动作里只有导入是重操作，
+         * 解析期间把它单独禁用即可，不影响其余三项弹出。
          */
-        Text('导入')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.accent)
-          .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-          .enabled(!this.state.importing)
-          .opacity(this.state.importing ? 0.4 : 1)
-          .onClick(() => {
-            this.doImport();
-          })
+        Row() {
+          Image($r('app.media.more'))
+            .width(20)
+            .height(20)
+            .objectFit(ImageFit.Contain)
+            .fillColor(AppColor.textPrimary)
+        }
+        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+        .onClick(() => {
+          this.showHeaderActionsMenu();
+        })
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
@@ -297,49 +374,7 @@ export struct BookShelfPage {
         top: AppTheme.GAP_M
       })
 
-      /**
-       * ② 操作行：**朱色文字动作**，不再是描边胶囊。
-       *
-       * ⚠️ 从"1vp 描边胶囊"改成裸文字的理由：三个胶囊 + 导入按钮
-       * 把标题区下缘挤成一条"控件带"，描边让每个动作都带着一圈框，
-       * 视觉重量全在框上而不是字上。改成文字动作后，
-       * "可点"由**颜色**（accent，全页唯一彩色）表达，边界由 8vp 热区承担 ——
-       * 与"朱砂只用于小面积"的纪律一致，也更安静。
-       */
-      Row({ space: AppTheme.GAP_L }) {
-        Text(this.state.gridMode ? '列表' : '网格')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.accent)
-          .padding({ left: 2, right: 8, top: 8, bottom: 8 })
-          .onClick(() => {
-            this.vm.toggleGridMode();
-          })
-
-        Text('排列')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.accent)
-          .padding({ left: 2, right: 8, top: 8, bottom: 8 })
-          .onClick(() => {
-            this.showSortMenu();
-          })
-
-        Text('＋ 新建分组')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.accent)
-          .padding({ left: 2, right: 8, top: 8, bottom: 8 })
-          .onClick(() => {
-            this.openCreateGroupDialog();
-          })
-      }
-      .width('100%')
-      .padding({
-        left: AppTheme.PAGE_PADDING,
-        right: AppTheme.PAGE_PADDING,
-        top: 0,
-        bottom: AppTheme.GAP_S
-      })
-
-      // ③ 通栏发丝线
+      // ③ 通栏发丝线（原②操作行已并入「更多」菜单，这一行直接顶上）
       Row()
         .width('100%')
         .height(AppTheme.HAIRLINE)
@@ -618,24 +653,78 @@ export struct BookShelfPage {
     }
   }
 
+  /**
+   * 打开主题化菜单（替代系统 showActionMenu 的统一入口）。
+   * 6 处调用点只填状态，浮层结构与回调分发都在 build 里那一个 ThemeMenu 上。
+   */
+  private openThemeMenu(title: string, options: string[], danger: string,
+    current: number, onPick: (index: number) => void): void {
+    this.menuTitle = title;
+    this.menuOptions = options;
+    this.menuDanger = danger;
+    this.menuCurrent = current;
+    this.menuOnPick = onPick;
+    this.menuVisible = true;
+  }
+
+  /** 打开主题化确认弹窗（替代系统 showDialog / AlertDialog 的统一入口） */
+  private openThemeConfirm(title: string, message: string, confirmText: string,
+    danger: boolean, onYes: () => void): void {
+    this.confirmTitle = title;
+    this.confirmMessage = message;
+    this.confirmText = confirmText;
+    this.confirmDanger = danger;
+    this.confirmOnYes = onYes;
+    this.confirmVisible = true;
+  }
+
+  /**
+   * 标题栏「更多」图标的动作菜单：**列表/排列/新建分组/导入** 四项。
+   *
+   * ⚠️ 文案与下标由同一个数组推导（设计文档第 28 条）——
+   * 插入一项就会"点了 A 执行 B"，先收集项、再用同一数组取下标。
+   *
+   * ⚠️ 第一项「网格/列表」的文案随当前形态切换：它显示的是
+   * **点下去会变成什么**（与阅读页"夜间/日间"按钮同一语义）。
+   */
+  private showHeaderActionsMenu(): void {
+    const actions: string[] = [
+      this.state.gridMode ? '切换为列表' : '切换为网格',
+      '排列',
+      '新建分组',
+      this.state.importing ? '正在导入…' : '导入 TXT'
+    ];
+
+    this.openThemeMenu('书架', actions, '', -1, (index: number) => {
+      const picked: string = actions[index];
+      if (picked === undefined) {
+        return;
+      }
+      if (picked === actions[0]) {
+        this.vm.toggleGridMode();
+      } else if (picked === '排列') {
+        this.showSortMenu();
+      } else if (picked === '新建分组') {
+        this.openCreateGroupDialog();
+      } else if (picked === '导入 TXT') {
+        this.doImport();
+      }
+    });
+  }
+
   private showSortMenu(): void {
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: '书架排序',
-      buttons: [
-        { text: '最近阅读', color: AppColorLiteral.textPrimary },
-        { text: '导入时间', color: AppColorLiteral.textPrimary },
-        { text: '书名', color: AppColorLiteral.textPrimary }
-      ]
-    }).then((result) => {
-      if (result.index === 0) {
+    const actions: string[] = ['最近阅读', '导入时间', '书名'];
+    const currentIndex: number = this.state.sort === BookSort.LAST_READ ? 0
+      : this.state.sort === BookSort.ADDED ? 1 : 2;
+
+    this.openThemeMenu('书架排序', actions, '', currentIndex, (index: number) => {
+      if (index === 0) {
         this.vm.changeSort(BookSort.LAST_READ);
-      } else if (result.index === 1) {
+      } else if (index === 1) {
         this.vm.changeSort(BookSort.ADDED);
-      } else if (result.index === 2) {
+      } else if (index === 2) {
         this.vm.changeSort(BookSort.TITLE);
       }
-    }).catch(() => {
-      // 用户取消，不处理
     });
   }
 
@@ -662,21 +751,11 @@ export struct BookShelfPage {
     actions.push('换编码（正文乱码时用）');
     actions.push('从书架移除');
 
-    const buttons: promptAction.Button[] = [];
-    for (const action of actions) {
-      buttons.push({
-        text: action,
-        // 危险项单独上色，其余中性
-        color: action === '从书架移除' ? AppColorLiteral.danger : AppColorLiteral.textPrimary
-      });
-    }
+    // 危险项（移除）的下标：最后一个
+    const dangerIndex: string = `${actions.length - 1}`;
 
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: book.title,
-      buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?,
-        promptAction.Button?, promptAction.Button?, promptAction.Button?]
-    }).then(async (result) => {
-      const picked: string = actions[result.index];
+    this.openThemeMenu(book.title, actions, dangerIndex, -1, (index: number) => {
+      const picked: string = actions[index];
       if (picked === undefined) {
         return;
       }
@@ -685,13 +764,14 @@ export struct BookShelfPage {
       } else if (picked === '移入分组') {
         this.showGroupPicker(book);
       } else if (picked === '换编码（正文乱码时用）') {
-        await this.showEncodingPicker(book);
+        this.showEncodingPicker(book);
       } else if (picked === '从书架移除') {
-        await this.vm.removeBook(book.id);
-        this.toast('已移出书架');
+        this.vm.removeBook(book.id).then(() => {
+          this.toast('已移出书架');
+        }).catch(() => {
+          this.toast('移除失败');
+        });
       }
-    }).catch(() => {
-      // 用户取消
     });
   }
 
@@ -709,10 +789,9 @@ export struct BookShelfPage {
   private showGroupPicker(book: Book): void {
     const groups: BookGroup[] = this.state.groups;
     /**
-     * ⚠️ 上限是 **5** 而不是 6，因为「未分组」也占一项：
-     * `showActionMenu` 最多只接受 **6 个按钮**（类型就是六元组），
-     * 写成 6 就会拼出 7 项 —— 超出的部分会被系统丢弃或直接报错，
-     * 表现是"最后那个分组点了没反应"。
+     * ⚠️ 上限 5 是**可读性**决定：ThemeMenu 本身不限项数（内部可滚），
+     * 但一屏塞十几个分组名没有"挑选"的意义，想批量走
+     * 「移入分组」页的入口（见 `openGroupPickerForTarget`）。
      */
     const maxItems: number = 5;
     const shown: BookGroup[] = groups.slice(0, maxItems);
@@ -722,28 +801,23 @@ export struct BookShelfPage {
     // 「未分组」永远排第一：它最常用（把书从某个组里拿出来）
     labels.push(book.groupId === null ? '未分组（当前）' : '未分组');
     ids.push(-1);
+    let currentIndex: number = book.groupId === null ? 0 : -1;
     for (const group of shown) {
       const isCurrent: boolean = book.groupId === group.id;
       labels.push(isCurrent ? `${group.name}（当前）` : group.name);
       ids.push(group.id);
-    }
-
-    const buttons: promptAction.Button[] = [];
-    for (const label of labels) {
-      buttons.push({ text: label, color: AppColorLiteral.textPrimary });
+      if (isCurrent) {
+        currentIndex = ids.length - 1;
+      }
     }
 
     const truncated: boolean = groups.length > shown.length;
     const title: string = truncated
-      ? `${book.title}\n分组较多，仅显示前 ${shown.length} 个`
+      ? `${book.title}（分组较多，仅显示前 ${shown.length} 个）`
       : book.title;
 
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: title,
-      buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?,
-        promptAction.Button?, promptAction.Button?, promptAction.Button?]
-    }).then(async (result) => {
-      const groupId: number = ids[result.index];
+    this.openThemeMenu(title, labels, '', currentIndex, (index: number) => {
+      const groupId: number = ids[index];
       if (groupId === undefined) {
         return;
       }
@@ -755,14 +829,15 @@ export struct BookShelfPage {
       if (targetId === book.groupId) {
         return;
       }
-      await this.vm.moveToGroup(book.id, targetId);
-      if (targetId === null) {
-        this.toast('已移出分组');
-      } else {
-        this.toast('已移入分组');
-      }
-    }).catch(() => {
-      // 用户取消
+      this.vm.moveToGroup(book.id, targetId).then(() => {
+        if (targetId === null) {
+          this.toast('已移出分组');
+        } else {
+          this.toast('已移入分组');
+        }
+      }).catch(() => {
+        this.toast('移动失败');
+      });
     });
   }
 
@@ -813,53 +888,65 @@ export struct BookShelfPage {
       Encodings.UTF8, Encodings.GB18030, Encodings.GBK,
       Encodings.BIG5, Encodings.UTF16LE, Encodings.UTF16BE
     ];
-    const buttons: promptAction.Button[] = [];
-    for (const encoding of options) {
-      buttons.push({
-        text: encoding === current ? `${encoding}（当前）` : encoding,
-        color: AppColorLiteral.textPrimary
-      });
+    const labels: string[] = [];
+    let currentIndex: number = -1;
+    for (let i = 0; i < options.length; i++) {
+      labels.push(options[i] === current ? `${options[i]}（当前）` : options[i]);
+      if (options[i] === current) {
+        currentIndex = i;
+      }
     }
 
     const title: string = impacted > 0
-      ? `${book.title}\n重新分章会删除已有的 ${impacted} 条书签/笔记`
-      : `${book.title}\n选择正确的编码后重新分章`;
+      ? `${book.title}（重新分章会删除已有的 ${impacted} 条书签/笔记）`
+      : `${book.title}（选择正确的编码后重新分章）`;
 
-    try {
-      const result = await this.getUIContext().getPromptAction().showActionMenu({
-        title: title,
-        buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?,
-          promptAction.Button?, promptAction.Button?, promptAction.Button?]
-      });
+    /**
+     * ⚠️ `openThemeMenu` 的 onPick 不支持 async 回调链，
+     * 确认步骤拆到 `_afterEncodingPicked`：选编码 → （有标注时）确认 → 执行。
+     */
+    this.openThemeMenu(title, labels, '', currentIndex, (index: number) => {
       /**
        * ⚠️ 下标必须**显式校验**，不能只靠"取出来是 undefined 再判断"。
        *
-       * 用户点弹窗外部取消时 `index` 是 `-1`；而菜单项数量、系统实际渲染的
-       * 项数、`options` 数组长度三者并不保证一致（选项是数据、按钮是元组类型）。
+       * 选项数组长度与渲染项数并不保证一致；
        * 早先的写法把越界值继续往下传，最终会走到
-       * `new util.StringDecoder(undefined)` 抛异常 —— 那是在 try 之外的下游，
-       * 直接白屏。
+       * `new util.StringDecoder(undefined)` 抛异常 —— 直接白屏。
        *
-       * 判据：**外部系统返回的下标，使用前一律做边界检查**，
-       * 不要假定它一定落在自己的数组范围内。
+       * 判据：**外部输入的下标，使用前一律做边界检查**。
        */
-      const pickedIndex: number = result.index;
-      if (pickedIndex < 0 || pickedIndex >= options.length) {
+      if (index < 0 || index >= options.length) {
         return;
       }
-      const picked: string = options[pickedIndex];
+      const picked: string = options[index];
       if (picked === undefined || picked === current) {
         return;
       }
-      /**
-       * ⚠️ 确认放在"选完编码之后"，不是点菜单时：
-       * 用户此时才真的决定要重解析，而且能看到自己选了哪个编码。
-       */
-      if (impacted > 0 && !(await this.confirmAnnotationLoss(impacted))) {
-        return;
-      }
-      this.toast(`正在按 ${picked} 重新解析…`);
-      const ok: boolean = await this.vm.reparseWithEncoding(book.id, picked);
+      this.afterEncodingPicked(book, current, picked, impacted);
+    });
+  }
+
+  /** 编码已选定 → （有标注时）二次确认 → 执行重解析（从 showEncodingPicker 拆出） */
+  private afterEncodingPicked(book: Book, current: string, picked: string, impacted: number): void {
+    /**
+     * ⚠️ 确认放在"选完编码之后"，不是点菜单时：
+     * 用户此时才真的决定要重解析，而且能看到自己选了哪个编码。
+     */
+    if (impacted > 0) {
+      this.openThemeConfirm('确认重新分章？',
+        `这本书的 ${impacted} 条书签/笔记会一并被删除，且无法恢复。`,
+        '删除并重新分章', true, () => {
+          this.runReparse(book, picked);
+        });
+      return;
+    }
+    this.runReparse(book, picked);
+  }
+
+  /** 真正执行重解析（确认通过后调用） */
+  private runReparse(book: Book, picked: string): void {
+    this.toast(`正在按 ${picked} 重新解析…`);
+    this.vm.reparseWithEncoding(book.id, picked).then((ok: boolean) => {
       if (ok) {
         /**
          * ⚠️ 重解析成功不代表编码选对了：若章数依然极少，说明这个编码也不对，
@@ -869,10 +956,7 @@ export struct BookShelfPage {
          */
         if (this.state.reparseSuspicious) {
           this.state.reparseSuspicious = false;
-          this.getUIContext().getPromptAction().showToast({
-            message: `按 ${picked} 只解析出很少的章节，编码可能仍不正确，建议再换一个编码试试`,
-            duration: 4000
-          });
+          this.toast(`按 ${picked} 只解析出很少的章节，编码可能仍不正确，建议再换一个编码试试`);
         } else {
           this.toast('重新解析完成，进阅读页确认');
         }
@@ -880,9 +964,9 @@ export struct BookShelfPage {
         this.toast(this.state.error.length > 0 ? this.state.error : '重新解析失败');
         this.vm.clearError();
       }
-    } catch (e) {
-      // 用户取消
-    }
+    }).catch(() => {
+      this.toast('重新解析失败');
+    });
   }
 
   /**
@@ -897,24 +981,8 @@ export struct BookShelfPage {
    *
    * @returns 用户是否确认继续
    */
-  private async confirmAnnotationLoss(count: number): Promise<boolean> {
-    const buttons: [promptAction.Button, promptAction.Button] = [
-      { text: '取消', color: AppColorLiteral.textPrimary },
-      { text: '删除并重新分章', color: AppColorLiteral.danger }
-    ];
-    try {
-      const result = await this.getUIContext().getPromptAction().showDialog({
-        title: '确认重新分章？',
-        message: `这本书的 ${count} 条书签/笔记会一并被删除，且无法恢复。`,
-        buttons: buttons
-      });
-      // index === 1 才是"删除并重新分章"
-      return result.index === 1;
-    } catch (e) {
-      // 用户取消或弹窗失败：一律当作"不继续"，绝不默认执行破坏性操作
-      return false;
-    }
-  }
+  // ⚠️ confirmAnnotationLoss 已删除：二次确认改走 `openThemeConfirm`
+  // （见 afterEncodingPicked），危险按钮与文案由 ThemeConfirm 统一承担。
 
   private openReader(book: Book): void {
     const param: RouteParam = new RouteParam();
@@ -947,20 +1015,8 @@ export struct BookShelfPage {
   private showGroupActions(groupId: number, name: string): void {
     const actions: string[] = ['打开分组', '加入书籍', '重命名', '解散分组'];
 
-    const buttons: promptAction.Button[] = [];
-    for (const action of actions) {
-      buttons.push({
-        text: action,
-        color: action === '解散分组' ? AppColorLiteral.danger : AppColorLiteral.textPrimary
-      });
-    }
-
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: `分组「${name}」`,
-      buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?,
-        promptAction.Button?, promptAction.Button?, promptAction.Button?]
-    }).then(async (result) => {
-      const picked: string = actions[result.index];
+    this.openThemeMenu(`分组「${name}」`, actions, `${actions.length - 1}`, -1, (index: number) => {
+      const picked: string = actions[index];
       if (picked === undefined) {
         return;
       }
@@ -971,10 +1027,8 @@ export struct BookShelfPage {
       } else if (picked === '重命名') {
         this.openRenameGroupDialog(groupId, name);
       } else if (picked === '解散分组') {
-        await this.confirmDeleteGroup(groupId, name);
+        this.confirmDeleteGroup(groupId, name);
       }
-    }).catch(() => {
-      // 用户取消
     });
   }
 
@@ -1056,30 +1110,18 @@ export struct BookShelfPage {
       ? `组内 ${count} 本书会移到「未分组」，书和阅读进度都不会丢。`
       : '这个分组是空的，删除后无法恢复。';
 
-    const buttons: [promptAction.Button, promptAction.Button] = [
-      { text: '取消', color: AppColorLiteral.textPrimary },
-      { text: '删除分组', color: AppColorLiteral.danger }
-    ];
-
-    try {
-      const result = await this.getUIContext().getPromptAction().showDialog({
-        title: `删除分组「${name}」？`,
-        message: message,
-        buttons: buttons
+    this.openThemeConfirm(`删除分组「${name}」？`, message, '删除分组', true, () => {
+      this.vm.deleteGroup(groupId).then((moved: number) => {
+        if (moved >= 0) {
+          this.toast(count > 0 ? `已删除分组，${moved} 本书移到未分组` : '分组已删除');
+        } else {
+          this.toast(this.state.error.length > 0 ? this.state.error : '删除分组失败');
+          this.vm.clearError();
+        }
+      }).catch(() => {
+        this.toast('删除分组失败');
       });
-      if (result.index !== 1) {
-        return;
-      }
-      const moved: number = await this.vm.deleteGroup(groupId);
-      if (moved >= 0) {
-        this.toast(count > 0 ? `已删除分组，${moved} 本书移到未分组` : '分组已删除');
-      } else {
-        this.toast(this.state.error.length > 0 ? this.state.error : '删除分组失败');
-        this.vm.clearError();
-      }
-    } catch (e) {
-      // 用户取消
-    }
+    });
   }
 
   private toast(message: string): void {
