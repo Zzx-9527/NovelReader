@@ -99,6 +99,15 @@ struct ImportConfirmPage {
   @State private wordCount: number = 0;
   @State private lowConfidence: boolean = false;
   @State private fallback: boolean = false;
+  /**
+   * 分章结果可疑（编码大概率选错了）。
+   *
+   * ⚠️ 它是比 `fallback` **更严重**的信号：兜底切分本身正常
+   * （只是没识别到章节标记），但"只切出个位数章"意味着字节/字符比离谱 ——
+   * 那本书一旦入库，打开阅读页会因单章过大触发数千次分页测量而白屏假死。
+   * 所以这里用 danger 色在**入库前**明确拦住用户。
+   */
+  @State private suspicious: boolean = false;
   /** 正在重新解析（换编码后）。用来挡住重复点击并给出可见反馈 */
   @State private parsing: boolean = false;
   /** 是否正在执行最终导入（防连点） */
@@ -168,6 +177,7 @@ struct ImportConfirmPage {
       this.wordCount = result.wordCount;
       this.lowConfidence = result.lowConfidence;
       this.fallback = result.fallback;
+      this.suspicious = result.suspicious;
     } catch (e) {
       this.error = `读取导入数据失败：${Logger.errText(e as Object)}`;
     }
@@ -508,8 +518,19 @@ struct ImportConfirmPage {
        * ⚠️ 兜底切分要提示：它意味着这本书**没有识别到标准章节标记**
        * （`第 x 章` 之类），只能按固定字数硬切。用户看到章节名是
        * "第 1 节 / 第 2 节"这种机械命名时，会以为程序出错了。
+       *
+       * ⚠️ "只有几章"要**升级成明确告警**：兜底切分正常也有几十章，
+       * 只有个位数说明**编码八成选错了**（字节/字符比被算得离谱，
+       * 按 8000 字切出来的章会大得惊人）。这种书一旦入库，
+       * 打开阅读页会因为"单章几十万字"触发数千次分页测量而白屏假死。
+       * 所以这里必须**在入库前**拦住，让用户换编码重试。
        */
-      if (this.fallback) {
+      if (this.suspicious) {
+        Text('只解析出很少的章节，编码可能不正确 —— 建议换一个编码重新解析，否则阅读时可能卡住')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.danger)
+          .width('100%')
+      } else if (this.fallback) {
         Text('没有找到标准章节标记，已按字数自动切分；阅读时若章节不对可换编码重试')
           .fontSize(AppTheme.FONT_CAPTION)
           .fontColor(AppColor.textHint)

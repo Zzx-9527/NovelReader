@@ -178,6 +178,18 @@ export class AppConstants {
   static readonly MAX_TITLE_LINE_LENGTH: number = 60;
   /** 兜底切分时每章约多少个字符 */
   static readonly FALLBACK_CHARS_PER_CHAPTER: number = 8000;
+  /**
+   * 分章结果"可疑"的判据：平均每章超过这么多字。
+   *
+   * ⚠️ 为什么需要它：正常小说的章节在几千字量级（网文 2000~5000 字/章），
+   * 平均十万字一章几乎只可能是**编码选错导致分章失败**。
+   * 这种书的单章会触发数千次分页测量，让阅读页白屏假死
+   * （见 `PaginationService.MAX_MEASURED_CHARS`），必须在入库前提示用户换编码。
+   *
+   * 取 10 万：远高于任何正常章节，又低于"分章失败"产生的量级（几十万字），
+   * 不会把"超大单章但结构正常的书"误判掉太多。
+   */
+  static readonly SUSPICIOUS_AVG_CHAPTER_CHARS: number = 100000;
 
   // ---------------------------------------------------------------- 默认排版
   static readonly DEFAULT_FONT_SIZE: number = 18;

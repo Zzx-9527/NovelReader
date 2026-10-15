@@ -25,6 +25,15 @@ export class ParseResult {
   totalWordCount: number = 0;
   /** 是否走了兜底切分（说明这本书章节结构不标准，UI 可提示"可尝试重新分章"） */
   fallback: boolean = false;
+  /**
+   * 分章质量可疑（编码可能选错了）。
+   *
+   * ⚠️ 判据是"**兜底切分 + 章数极少**"：正常小说兜底也该切出几十章，
+   * 只有个位数说明 `bytesPerChar` 被算得极大 —— 而那正是**用错编码**的特征
+   * （例如给 GBK 文件选 utf-16，字节/字符比会从约 2 暴涨到接近 1 个"字"占 4 字节）。
+   * UI 据此提示用户"换一个编码再试"，而不是让这本书悄悄留在书架上。
+   */
+  suspicious: boolean = false;
 }
 
 /** 分章规则 */
@@ -196,7 +205,6 @@ export class ChapterParser {
     const result = new ParseResult();
     result.rule = outcome.ruleName;
     result.fallback = outcome.ruleIndex < 0;
-
     const unit: number = ChapterParser.bytesPerChar(outcome.textLength, outcome.byteLength);
 
     if (outcome.markers.length === 0) {
@@ -235,7 +243,37 @@ export class ChapterParser {
       chapterIndex++;
     }
     ChapterParser.sumWordCount(result, outcome.fileSize, unit);
+    ChapterParser.markSuspiciousIfOdd(result);
     return result;
+  }
+
+  /**
+   * 判据：分章结果是否"可疑"（编码大概选错了）。
+   *
+   * ⚠️ 这是**唯一**的判定点 —— 命中标记与兜底切分两条路径都调它。
+   * 早先只在兜底分支判，于是"命中 3 条标记（刚好达到下限）、只切出 4 章"
+   * 这种书一路绿灯入库，点开就是白屏假死（用户实测）。
+   * 同一件事两处实现必然漏一处，所以收成一个方法。
+   *
+   * 判据用**平均每章字符数**而不是"章数"：
+   *  - 章数少在小文件上是正常的（一本 5 万字的短篇集只有 3 章很合理）；
+   *  - 而"平均一章超过 10 万字"几乎只可能是分章失败
+   *    （正常网文 2000~5000 字/章，实体书也不过几万字/章）。
+   *
+   * 这个标记不是"拒绝导入"，而是**提示用户在入库前换编码重试**：
+   * 编码错的书即使入库也读不了（单章几十万字 ⇒ 数千次分页测量 ⇒ 假死）。
+   */
+  private static markSuspiciousIfOdd(result: ParseResult): void {
+    if (result.chapters.length === 0) {
+      return;
+    }
+    const avgWords: number = result.totalWordCount / result.chapters.length;
+    if (avgWords > AppConstants.SUSPICIOUS_AVG_CHAPTER_CHARS) {
+      result.suspicious = true;
+      Logger.warn(LogTag.PARSER,
+        `分章可疑：仅 ${result.chapters.length} 章、平均每章约 ${Math.round(avgWords)} 字，`
+          + `编码可能不正确（rule=${result.rule} fallback=${result.fallback}）`);
+    }
   }
 
   /** 无可靠章节标记时按固定字节数切分，保证任何文件都能读 */
@@ -249,7 +287,21 @@ export class ChapterParser {
       result.chapters.push(only);
       return;
     }
-    const bytesPerChapter: number = Math.max(1, Math.round(AppConstants.FALLBACK_CHARS_PER_CHAPTER * unit));
+    /**
+     * ⚠️ `unit`（字节/字符）必须先夹到合理区间，否则会用错编码把书切成个位数章。
+     *
+     * `unit` 由 `StreamTextReader` 实测得出（已交付文本 / 对应字节），
+     * 编码正确时：GBK/GB18030 中文约 2.0、UTF-8 中文约 3.0、纯英文约 1.0。
+     * 而**编码选错**时解码会大量产出替换字符，`unit` 会被算成一个荒谬的值，
+     * 于是 `8000 × unit` 变成"一章几十万字" —— 一本小说只剩 4 章。
+     * 那种章节一打开就是几千次分页测量（见 `PaginationService.MAX_MEASURED_CHARS`），
+     * 表现为阅读页白屏假死。
+     *
+     * 夹取本身不会让分章变准（编码错了内容本来就是乱的），
+     * 但能保证**每章大小可控、阅读页不会假死**，同时配合 `suspicious` 提示用户换编码。
+     */
+    const safeUnit: number = Math.min(4, Math.max(1, unit));
+    const bytesPerChapter: number = Math.max(1, Math.round(AppConstants.FALLBACK_CHARS_PER_CHAPTER * safeUnit));
     let index: number = 0;
     let offset: number = 0;
     while (offset < fileSize) {
@@ -259,11 +311,20 @@ export class ChapterParser {
       chapter.startOffset = offset;
       const next: number = offset + bytesPerChapter;
       chapter.endOffset = next >= fileSize ? null : next;
-      chapter.wordCount = Math.round((Math.min(next, fileSize) - offset) / unit);
+      /**
+       * ⚠️ 字数也必须用 `safeUnit`，与下面的 `sumWordCount` **同源**。
+       * 混用（这里 raw unit、那里 safeUnit）会让"最后一章"与其它章
+       * 按两套比例算字数，总字数与平均章节大小的判断就失真了 ——
+       * 而这正是 `markSuspiciousIfOdd` 的输入。
+       */
+      chapter.wordCount = Math.round((Math.min(next, fileSize) - offset) / safeUnit);
       result.chapters.push(chapter);
       offset = next;
       index++;
     }
+    // 兜底切分的结果同样要走统一的可疑判定（不要在这里各写一份判据）
+    ChapterParser.sumWordCount(result, fileSize, safeUnit);
+    ChapterParser.markSuspiciousIfOdd(result);
   }
 
   /** 最后一章没有 endOffset，用文件大小补齐并汇总总字数 */

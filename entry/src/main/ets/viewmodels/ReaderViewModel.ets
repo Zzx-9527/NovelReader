@@ -27,6 +27,28 @@ import { Logger } from '../common/utils/Logger';
 const SCROLL_REPORT_INTERVAL_MS: number = 200;
 
 /**
+ * 分页算好之前，正文占位最多渲染多少字符。
+ *
+ * ⚠️ 存在的唯一理由：首次打开时分页还没算（要等正文区实测尺寸），
+ * 而那一瞬间的占位渲染**不能是整章** —— 编码错的书单章可有上百万字符，
+ * 一个百万字符的 `Text` 节点会当场压死主线程（"正文闪一下就卡死"）。
+ *
+ * 取 3000：远大于一屏能放的字数（约 600 字），视觉上与真实第一页无异；
+ * 又小到足以让排版瞬间完成。
+ */
+const PLACEHOLDER_MAX_CHARS: number = 3000;
+
+/**
+ * 单章允许渲染的字符数上限。
+ *
+ * ⚠️ 超过它就**拒绝渲染并报错**，而不是硬画（见 `loadChapter`）。
+ * 依据：正常小说单章几千~几万字；分章失败（编码错）会产生几十万~上百万字的"章"，
+ * 那种尺寸的 `Text` 会让 ArkUI 排版压死主线程 —— 表现为白屏闪退，
+ * 用户既看不到原因也不知道怎么办。给一条明确提示远好于崩溃。
+ */
+const MAX_CHAPTER_RENDER_CHARS: number = 200000;
+
+/**
  * 阅读页 ViewModel。
  *
  * 关键约定（见设计文档 5.1 铁律）：
@@ -98,14 +120,43 @@ export class ReaderViewModel {
         this.state.error = '无法打开文件';
         return;
       }
+      /**
+       * ⚠️ 建新 readService 之前**必须先释放旧的**，否则文件句柄泄漏。
+       *
+       * 为什么这里会重复进入：`ReaderPage` 是 `@Entry`，从书架反复进出会
+       * 重建页面 ⇒ 新 VM ⇒ 再次 `open()`。而 `dispose()` 挂在
+       * `aboutToDisappear`，某些路径（错误分支、页面被直接销毁）不一定跑到。
+       * 每泄漏一个 fd 就少一个可用的；系统 fd 上限很小，
+       * 泄漏到几十个之后 `fs.openSync` 开始抛异常 ——
+       * 表现是"打开阅读页白屏 / 闪退"，且看不出与进出次数有关。
+       *
+       * 判据：**持有独占资源的地方，获取前先释放已有实例**，
+       * 不要把释放完全托付给生命周期回调。
+       */
+      if (this.readService !== null) {
+        this.readService.dispose();
+        this.readService = null;
+      }
       this.readService = new ChapterReadService(source, book.encoding, book.id);
       this.progress = new ProgressService(bookId);
       this.progress.markActive();
 
+      /**
+       * ⚠️ 清错误必须放在 `restorePosition` **之前**。
+       *
+       * 早先写在最后一行（`await restorePosition(); ...; error = ''`），
+       * 于是 `loadChapter` 在加载过程中设置的**真实错误会被无条件抹掉** ——
+       * 包括"章节异常庞大，无法显示"那条提示（见 `loadChapter`）。
+       * 抹掉之后页面既没有正文、也没有错误，就是一片空白：
+       * 用户看到的正是"白屏"，而且完全无从判断原因。
+       *
+       * 判据：清除旧状态的语句要放在**产生新状态的操作之前**，
+       * 放在之后就会把这次操作的结果一起清掉。
+       */
+      this.state.error = '';
       await this.restorePosition(book);
       AppState.setCurrentBook(bookId);
       await BookRepository.touchLastRead(bookId);
-      this.state.error = '';
     } catch (e) {
       this.state.error = `打开失败：${Logger.errText(e as BusinessError)}`;
     } finally {
@@ -167,6 +218,17 @@ export class ReaderViewModel {
    */
   async repaginateCurrentChapter(): Promise<void> {
     if (this.readService === null || this.state.chapterIndex < 0) {
+      return;
+    }
+    /**
+     * ⚠️ 已经处于错误态时不要再重排。
+     *
+     * 页面在正文区尺寸变化时会反复调用本方法，而 `loadChapter` 内部会重新
+     * 设置 `loading`/`error`。若前一章是"异常庞大被拒绝渲染"（见 `loadChapter`），
+     * 不拦就会变成"loading ↔ error 反复切换"的抖动 ——
+     * 用户看到提示一闪一闪，比稳定显示一条错误更糟。
+     */
+    if (this.state.error.length > 0) {
       return;
     }
     this.restoreToOffset = Math.max(0, this.state.offset);
@@ -271,6 +333,34 @@ export class ReaderViewModel {
         this.state.error = `第 ${chapter.displayNumber()} 章内容为空，可能文件已变化`;
         return;
       }
+      /**
+       * ⚠️ **异常庞大的章节要明确报错，而不是硬渲染**（"白屏闪退"的兜底防线）。
+       *
+       * 正常小说的单章在几千到几万字；超过这个量级说明**分章失败**
+       * （典型成因是编码选错，见 `ChapterParser.markSuspiciousIfOdd`）。
+       * 而一张 `Text` 节点塞进几十万、上百万字符时，ArkUI 的排版会把主线程
+       * 彻底压死 —— 用户看到的是"正文闪一下然后卡死/被系统杀掉"，
+       * 既没有错误提示、也不知道该做什么。
+       *
+       * 所以这里直接拒绝渲染，给一条**可操作**的提示。这比白屏好得多：
+       * 用户知道该去书架长按这本书换编码重新分章。
+       *
+       * 阈值取 20 万字符：是正常章节上限（几万字）的数倍，不会误伤；
+       * 又远低于分章失败产生的量级（几十万~上百万）。
+       */
+      if (text.length > MAX_CHAPTER_RENDER_CHARS) {
+        this.state.setFullText('');
+        this.state.renderedText = '';
+        this.state.chapterIndex = chapterIndex;
+        this.state.chapterTitle = chapter.title;
+        Logger.warn(LogTag.READ,
+          `章节异常庞大（${text.length} 字符），拒绝渲染以免主线程被排版压死：`
+            + `book=${this.bookId} chapter=${chapterIndex}`);
+        this.state.error = `这一章有 ${text.length} 个字，远超正常章节`
+          + `（说明分章可能失败），无法显示。请返回书架长按这本书，`
+          + `换一个编码重新分章后再读。`;
+        return;
+      }
       // 取出并消费"待恢复偏移"：分页重建后要回到这里，而不是章首
       const target: number = this.restoreToOffset;
       this.restoreToOffset = -1;
@@ -322,13 +412,17 @@ export class ReaderViewModel {
     try {
       const fullText: string = this.state.getFullText();
       /**
-       * 走**实测**分页：把测量函数交给分页服务，由它二分出每页装多少字。
+       * 选路：**正常章走实测分页，超大章走估算分页**。
        *
-       * 没有测量函数时（理论上不会发生 —— 页面在 `aboutToAppear` 就会注入）
-       * 降级到估算版，保证至少能出页面。
+       * ⚠️ 超大章必须降级（否则就是"白屏假死"）：
+       * 实测分页每页约 9 次 `measureTextSize` 系统调用，
+       * 而兜底切分产生的大章（几十万字 = 几百页）意味着**数千次同步测量**，
+       * 主线程被按住数十秒 ⇒ 系统判定无响应 ⇒ 用户看到"正在打开…"永远转圈。
+       * 估算版精度有已知缺陷，但它 O(n) 且不调系统 API —— 能翻页优先。
        */
       let breaks: number[];
-      if (this.measure !== null) {
+      const tooLarge: boolean = PaginationService.isTooLargeForMeasured(fullText);
+      if (this.measure !== null && !tooLarge) {
         /**
          * ⚠️ 传的是 `measureDecorated` 而不是原始测量函数：
          * 分页必须按"**装饰后**的文本"量高度（剥页首换行 + 补段首缩进），
@@ -339,7 +433,12 @@ export class ReaderViewModel {
           (seg: string, w: number, mid: boolean): number => this.measureDecorated(seg, w, mid),
           this.contentWidth, this.contentHeight, this.firstPageExtraHeight);
       } else {
-        Logger.warn(LogTag.PAGINATION, '未注入测量函数，降级为估算分页（页数可能不准）');
+        if (tooLarge) {
+          Logger.warn(LogTag.PAGINATION,
+            `章节过大（${fullText.length} 字 > 上限），降级为估算分页以避免主线程被测量调用压死`);
+        } else {
+          Logger.warn(LogTag.PAGINATION, '未注入测量函数，降级为估算分页（页数可能不准）');
+        }
         breaks = PaginationService.computeBreaks(
           fullText, this.state.settings, this.contentWidth, this.contentHeight,
           this.firstPageExtraHeight);
@@ -352,7 +451,7 @@ export class ReaderViewModel {
       const firstPageChars: number = breaks.length > 1 ? breaks[1] - breaks[0] : -1;
       Logger.info(LogTag.PAGINATION,
         `分页 cache=MISS 章=${this.state.chapterIndex}`
-          + ` 方式=${this.measure !== null ? '实测' : '估算'}`
+          + ` 方式=${this.measure !== null && !tooLarge ? '实测' : '估算'}`
           + ` 容器=${this.contentWidth.toFixed(0)}x${this.contentHeight.toFixed(0)}`
           + ` 首页让位=${this.firstPageExtraHeight.toFixed(1)}`
           + ` 字号=${this.state.settings.fontSize} 行距=${this.state.settings.lineHeight}`
@@ -377,8 +476,32 @@ export class ReaderViewModel {
       this.state.pageCount = 1;
       // 滚动模式整章一次渲染：没有"续排页"概念，第一行永远该按段首处理
       this.state.pageStartsMidParagraph = false;
+      /**
+       * ⚠️ **分页模式 + 断点还没算出来**时，这里只允许渲染一小段，绝不能整章。
+       *
+       * 这是"正文闪一下就卡死/闪退"的根因（用户实测）：
+       * 首次打开时 `breaks` 必然是空的（分页要等正文区实测尺寸），
+       * 而这一分支会把**整章**塞进 `renderedText` —— 正常章节几千字无所谓，
+       * 但编码错的书单章可达上百万字符，`Text` 要为一个百万字符节点做排版，
+       * 主线程当场被压死。表现为"正文闪一下（首帧已提交）然后卡住/被杀"。
+       *
+       * 所以这里按"一屏最多能放的字数"截断：它只是**分页完成前的占位**，
+       * 紧接着的 `repaginateCurrentChapter()` 会把真正的第一页换上来。
+       * 截断不影响任何偏移口径 —— 进度、书签用的仍是 `fullText`。
+       *
+       * ⚠️ 只有**分页模式**才截断：滚动模式本来就是整章滚动，
+       * 截断会让用户看不到后半章（那是另一类 bug）。
+       */
+      if (this.state.settings.pageMode === 'scroll') {
+        this.state.renderedText = ReaderViewModel.indentParagraphHeads(
+          text, this.state.settings.firstLineIndent, false);
+        return;
+      }
+      const placeholder: string = text.length > PLACEHOLDER_MAX_CHARS
+        ? text.substring(0, PLACEHOLDER_MAX_CHARS)
+        : text;
       this.state.renderedText = ReaderViewModel.indentParagraphHeads(
-        text, this.state.settings.firstLineIndent, false);
+        placeholder, this.state.settings.firstLineIndent, false);
       return;
     }
 

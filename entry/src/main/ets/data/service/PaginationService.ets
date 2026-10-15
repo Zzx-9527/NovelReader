@@ -38,6 +38,41 @@ export class PaginationService {
   private static readonly ALGO_VERSION: number = 11;
 
   /**
+   * 实测分页允许处理的**正文字符数上限**。
+   *
+   * ⚠️ 为什么必须有这个上限（本项目实测的"白屏假死"根因）：
+   * 实测分页的代价是"每页约 12 次 `measureTextSize` 系统调用"。
+   * 正常章节几千字 ⇒ 十几次调用，可以接受；
+   * 但**分章失败**（典型成因是编码选错）产生的"章"可达几十万字，
+   * 一本几 MB 的书被切成个位数章，每章几十万~上百万字符。
+   * 按 600 字/页算，一本 100 万字的书 = 1600 页 × 12 次 = **近 2 万次同步测量**，
+   * 全部压在主线程上 —— 系统判定应用无响应，
+   * 用户看到的就是"正文闪一下然后卡死"（首帧提交后就被排版压死）。
+   *
+   * 超过上限时**降级为估算分页**（`computeBreaks`）：
+   * 估算版有已知的精度缺陷（页尾留白、偶尔裁行），
+   * 但它 O(n) 且不调用任何系统 API —— 对"本来就不正常的书"来说，
+   * **能翻页**远比"每页排得完美"重要。
+   *
+   * 取 6 万：正常网文单章 2000~5000 字，即使按"一卷一章"的排版，
+   * 6 万字/章也远超常见量级 —— 不会误伤正常书，
+   * 又能把测量次数控制在 100 页 × 12 ≈ 1200 次（约 0.5 秒）。
+   */
+  private static readonly MAX_MEASURED_CHARS: number = 60000;
+
+  /**
+   * 一页**最多**可能容纳的字符数（二分探测的上界）。
+   *
+   * ⚠️ 它的作用是限制单次 `measureTextSize` 处理多长的字符串。
+   * 用 `text.length - offset` 当上界时，二分的第一次探测会把
+   * "半个剩余章节"丢给系统测量 —— 大章就此假死（详见 `computeBreaksMeasured`）。
+   *
+   * 一屏几十行、每行几十字，实际容量在几百到一千多字；
+   * 取 4000 是几倍余量，保证不会把本该一页的内容硬切成两页。
+   */
+  private static readonly MAX_CHARS_PER_PAGE: number = 4000;
+
+  /**
    * 布局指纹：改字号/字体/行距/边距/容器尺寸都会得到不同的 key。
    *
    * 用可读字符串而不是哈希：
@@ -69,6 +104,17 @@ export class PaginationService {
       + `ps${settings.paragraphSpacing}_ls${settings.letterSpacing}_`
       + `pm${settings.pageMargin}_`
       + `fi${settings.firstLineIndent}_ff${fontFamily}`;
+  }
+
+  /**
+   * 这一章是否**太大、不能用实测分页**。
+   *
+   * 由 ViewModel 在选路前调用：超限时走 `computeBreaks`（估算），
+   * 否则走 `computeBreaksMeasured`（实测）。判定收在这里，
+   * 避免调用方各自写一个阈值比较（设计文档第 28 条）。
+   */
+  static isTooLargeForMeasured(text: string): boolean {
+    return text.length > PaginationService.MAX_MEASURED_CHARS;
   }
 
   /**
@@ -127,9 +173,21 @@ export class PaginationService {
        *
        * ⚠️ 二分的单调性假设是"文字越多越高"。它在**绝大多数情况**成立；
        * 极端情况下（折行边界）可能有 ±1 字的抖动，肉眼不可见。
+       *
+       * ⚠️ **上界必须夹到"一页装得下的字数"**，不能用 `text.length - offset`。
+       *
+       * 这是"大章分页卡死"的关键：二分第一次探测的是**整个区间的一半** ——
+       * 对 10 万字的章，第一次就把一个 5 万字的字符串交给
+       * `measureTextSize`（且测量前还要先把这 5 万字跑一遍缩进装饰），
+       * 单次调用就要几百毫秒；整章累计下来是几十秒的假死。
+       * 而"一页能放多少字"是有物理上限的（一屏几十行 × 每行几十字），
+       * 夹住上界之后每次测量都只处理几千字，快两个数量级。
+       *
+       * 取 4000：默认排版一页约 600 字，即使小字号 + 大屏也远到不了 4000，
+       * 留了足够余量，不会把"能放更多字"的页误切成两页。
        */
       let lo: number = 1;
-      let hi: number = text.length - offset;
+      let hi: number = Math.min(text.length - offset, PaginationService.MAX_CHARS_PER_PAGE);
       let best: number = 0;
       while (lo <= hi) {
         const mid: number = Math.floor((lo + hi) / 2);

@@ -541,6 +541,12 @@ export class BookShelfViewModel {
         this.state.error = result.error;
         return false;
       }
+      /**
+       * ⚠️ 重解析成功 ≠ 编码选对了：兜底切分且"只切出个位数章"说明
+       * 这个编码仍然不对。必须把信号留给页面 —— 用户刚为此删掉了全部书签，
+       * 若还让他点进阅读页撞上白屏假死，那是双重损失。
+       */
+      this.state.reparseSuspicious = result.suspicious;
       return true;
     } catch (e) {
       this.state.error = `重新解析失败：${Logger.errText(e as BusinessError)}`;

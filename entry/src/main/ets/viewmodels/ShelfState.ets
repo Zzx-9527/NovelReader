@@ -69,6 +69,16 @@ export class ShelfState {
    */
   reparsing: boolean = false;
   reparseMessage: string = '';
+  /**
+   * 上一次"换编码重新解析"的结果可疑（章数极少 ⇒ 编码八成还是错的）。
+   *
+   * ⚠️ 为什么要把它留在 state 里：重解析是**破坏性**操作（级联删掉了书签），
+   * 若新编码依然是错的，用户必须**立刻知道**并再换一个 ——
+   * 否则他会点进阅读页，面对一个"单章几十万字"的书，
+   * 然后卡在白屏假死里（见 `PaginationService.MAX_MEASURED_CHARS`）。
+   * 页面读到它后弹一次明确的告警，然后清掉，避免反复打扰。
+   */
+  reparseSuspicious: boolean = false;
 
   /**
    * 首页**完全为空**：既没有分组，也没有未分组的书。

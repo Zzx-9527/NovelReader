@@ -68,6 +68,14 @@ export class ImportResult {
   wordCount: number = 0;
   /** 是否走了兜底切分 */
   fallback: boolean = false;
+  /**
+   * 分章结果可疑（编码可能选错了）。
+   *
+   * 透传 `ParseResult.suspicious`：兜底切分且章数极少 ⇒ 编码八成是错的，
+   * UI 应提示用户换编码重试，而不是让这本书带着错误的编码进书架
+   * （那本书一打开就是白屏假死，见 `PaginationService.MAX_MEASURED_CHARS`）。
+   */
+  suspicious: boolean = false;
   /** 失败原因（面向用户的简短文案） */
   error: string = '';
 }
@@ -87,6 +95,8 @@ export class ImportPreparation {
   chapters: ParsedChapter[] = [];
   parseRule: string = '';
   fallback: boolean = false;
+  /** 分章可疑（编码可能选错），透传给确认页提示用户换编码 */
+  suspicious: boolean = false;
 }
 
 /**
@@ -261,10 +271,12 @@ export class ImportService {
     preparation.chapters = parsed.chapters;
     preparation.parseRule = parsed.rule;
     preparation.fallback = parsed.fallback;
+    preparation.suspicious = parsed.suspicious;
     result.encoding = encoding;
     result.chapterCount = parsed.chapters.length;
     result.wordCount = parsed.totalWordCount;
     result.fallback = parsed.fallback;
+    result.suspicious = parsed.suspicious;
     result.outcome = ImportOutcome.SUCCESS;
     result.error = '';
     return result;
@@ -425,6 +437,7 @@ export class ImportService {
     result.chapterCount = rows.length;
     result.wordCount = parsed.totalWordCount;
     result.fallback = parsed.fallback;
+    result.suspicious = parsed.suspicious;
     return result;
   }
 

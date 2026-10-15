@@ -13,6 +13,19 @@ export class RawFileSource implements ByteSource {
   private fd: number = -1;
   private fileSize: number = 0;
   private filePath: string = '';
+  /**
+   * 是否已释放。
+   *
+   * ⚠️ 光靠 `fd < 0` 判断是不够的：`close()` 之后 fd 被置 -1，
+   * 但**文件描述符会被系统复用**给下一个打开的文件 —— 此时若还有人
+   * 拿着这个已废弃的 source 去读，`fd` 若被误设成新值就会读到**别人的数据**。
+   * 所以用一个独立的布尔位标记释放状态，读操作一律先看它。
+   *
+   * 这正是"重复打开阅读页导致 fd 泄漏 → 白屏"那条链路的配套防护：
+   * 泄漏由调用方修（见 `ReaderViewModel.open`），这里保证
+   * "释放过就一定不会再被使用"。
+   */
+  private disposed: boolean = false;
 
   private constructor(path: string, fd: number, size: number) {
     this.filePath = path;
@@ -46,6 +59,11 @@ export class RawFileSource implements ByteSource {
     }
   }
 
+  /** 是否已释放（诊断用） */
+  isDisposed(): boolean {
+    return this.disposed;
+  }
+
   size(): number {
     return this.fileSize;
   }
@@ -55,7 +73,7 @@ export class RawFileSource implements ByteSource {
   }
 
   readChunk(offset: number, length: number): Uint8Array {
-    if (this.fd < 0 || offset >= this.fileSize || length <= 0) {
+    if (this.disposed || this.fd < 0 || offset >= this.fileSize || length <= 0) {
       return new Uint8Array(0);
     }
     const want: number = Math.min(length, this.fileSize - offset);
@@ -76,7 +94,7 @@ export class RawFileSource implements ByteSource {
   }
 
   readRange(start: number, end: number | null): Uint8Array {
-    if (start < 0 || start >= this.fileSize) {
+    if (this.disposed || start < 0 || start >= this.fileSize) {
       return new Uint8Array(0);
     }
     let stop: number = end === null ? this.fileSize : Math.min(end, this.fileSize);
@@ -105,7 +123,18 @@ export class RawFileSource implements ByteSource {
     return written === total ? out : out.subarray(0, written);
   }
 
+  /**
+   * 释放文件描述符。**幂等**：重复调用是安全的。
+   *
+   * ⚠️ 幂等不能省：调用方（`ChapterReadService.dispose` → `RawFileSource.close`）
+   * 可能被多路径触发，而重复 `closeSync` 同一个 fd 会关掉**别的**文件
+   * （fd 已被系统复用给新打开的文件），是极难排查的数据损坏。
+   */
   close(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
     if (this.fd >= 0) {
       try {
         fs.closeSync(this.fd);

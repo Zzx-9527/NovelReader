@@ -80,7 +80,25 @@ export class ChapterReadService {
     return text;
   }
 
-  /** 分块读取并用 StringDecoder 增量解码（它会处理跨块残字节） */
+  /**
+   * 分块读取并用 StringDecoder 增量解码（它会处理跨块残字节）。
+   *
+   * ⚠️ 返回前必须做**换行归一化**（`\r\n` / `\r` → `\n`）。
+   *
+   * 为什么：不同来源的 TXT 换行风格不同（Windows 下载站多是 CRLF、
+   * 其它工具导出可能是 LF 或老 Mac 的 CR）。而渲染端 `Text` 对 `\n` 与
+   * `\r\n` 的处理**不同源** —— `\r\n` 被折叠成一次换行，
+   * 于是"空行"（`\r\n\r\n`）消失、段落贴在一起。
+   * 用户实测：同一排版下有的书段落间有空行、有的没有。
+   *
+   * ⚠️ 归一化必须放在**解码出口**这一处：阅读页、自检页、导入预览
+   * 全都经过这里；若只在某一处补，就又变成"同一件事两处实现"。
+   *
+   * ⚠️ 只影响**交付给 UI/正文的文本**，不碰字节偏移：
+   * `ChapterParser` 的字节游标是基于 `\r\n` 两个字节计算的，
+   * 它那边保留自己的 `\r` 处理（见 `ChapterParser` 的两处 `endsWith('\r')`），
+   * 两者是不同层面的职责，**不要合并**。
+   */
   private readAndDecode(start: number, stop: number): string {
     const decoder = new util.StringDecoder(this.encoding);
     const pieces: string[] = [];
@@ -95,7 +113,21 @@ export class ChapterReadService {
       cursor += bytes.length;
     }
     pieces.push(decoder.end());
-    return pieces.join('');
+    return ChapterReadService.normalizeNewlines(pieces.join(''));
+  }
+
+  /**
+   * 换行归一化：CRLF 与单独 CR 一律转成 LF。
+   *
+   * ⚠️ 顺序不能反：必须**先**处理 `\r\n` 再处理落单的 `\r`，
+   * 否则会把 CRLF 转成两个 `\n`（凭空多出一个空行）。
+   */
+  static normalizeNewlines(text: string): string {
+    if (text.indexOf('\r') < 0) {
+      // 绝大多数文件是纯 LF：省掉两次全量替换
+      return text;
+    }
+    return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   }
 
   /** 清空缓存（换字号重排等场景不需要，但重新分章后必须清） */

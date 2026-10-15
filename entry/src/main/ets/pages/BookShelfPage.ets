@@ -680,7 +680,23 @@ export struct BookShelfPage {
         buttons: buttons as [promptAction.Button, promptAction.Button?, promptAction.Button?,
           promptAction.Button?, promptAction.Button?, promptAction.Button?]
       });
-      const picked: string = options[result.index];
+      /**
+       * ⚠️ 下标必须**显式校验**，不能只靠"取出来是 undefined 再判断"。
+       *
+       * 用户点弹窗外部取消时 `index` 是 `-1`；而菜单项数量、系统实际渲染的
+       * 项数、`options` 数组长度三者并不保证一致（选项是数据、按钮是元组类型）。
+       * 早先的写法把越界值继续往下传，最终会走到
+       * `new util.StringDecoder(undefined)` 抛异常 —— 那是在 try 之外的下游，
+       * 直接白屏。
+       *
+       * 判据：**外部系统返回的下标，使用前一律做边界检查**，
+       * 不要假定它一定落在自己的数组范围内。
+       */
+      const pickedIndex: number = result.index;
+      if (pickedIndex < 0 || pickedIndex >= options.length) {
+        return;
+      }
+      const picked: string = options[pickedIndex];
       if (picked === undefined || picked === current) {
         return;
       }
@@ -694,7 +710,21 @@ export struct BookShelfPage {
       this.toast(`正在按 ${picked} 重新解析…`);
       const ok: boolean = await this.vm.reparseWithEncoding(book.id, picked);
       if (ok) {
-        this.toast('重新解析完成，进阅读页确认');
+        /**
+         * ⚠️ 重解析成功不代表编码选对了：若章数依然极少，说明这个编码也不对，
+         * 必须**明确告警**而不是轻描淡写地说"完成" ——
+         * 用户会立刻点进阅读页，而那本书的单章过大、会白屏假死。
+         * 告警只弹一次（读后即清），避免每次刷新书架都重复打扰。
+         */
+        if (this.state.reparseSuspicious) {
+          this.state.reparseSuspicious = false;
+          this.getUIContext().getPromptAction().showToast({
+            message: `按 ${picked} 只解析出很少的章节，编码可能仍不正确，建议再换一个编码试试`,
+            duration: 4000
+          });
+        } else {
+          this.toast('重新解析完成，进阅读页确认');
+        }
       } else {
         this.toast(this.state.error.length > 0 ? this.state.error : '重新解析失败');
         this.vm.clearError();
