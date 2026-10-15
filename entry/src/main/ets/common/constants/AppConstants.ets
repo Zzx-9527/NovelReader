@@ -298,4 +298,5 @@ export class LogTag {
   static readonly PAGINATION: string = 'PaginationService';
   static readonly PROGRESS: string = 'ProgressService';
   static readonly STATS: string = 'StatsService';
+  static readonly BACKUP: string = 'BackupService';
 }

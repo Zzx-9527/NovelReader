@@ -2,11 +2,14 @@ import { AppColor, AppTheme } from '../common/theme/AppTheme';
 import { AppFont } from '../common/theme/AppFont';
 import { AppThemeMode, ThemeApplier } from '../common/theme/ThemeApplier';
 import { RouteName } from '../model/RouteParam';
+import { bundleManager } from '@kit.AbilityKit';
+import { BackupService } from '../data/service/BackupService';
 import { PageCacheRepository } from '../data/repository/PageCacheRepository';
 import { BookRepository } from '../data/repository/BookRepository';
 import { SettingsService } from '../data/service/SettingsService';
 import { IconChevron } from '../views/common/Marks';
 import { ThemeConfirm } from '../views/common/ThemeConfirm';
+import { Logger } from '../common/utils/Logger';
 
 /**
  * "我的"页：设置入口、缓存清理、关于。
@@ -46,15 +49,108 @@ export struct ProfilePage {
   @State private confirmText: string = '确定';
   @State private confirmDanger: boolean = false;
   private confirmOnYes: (() => void) | null = null;
+  /** 应用版本号（关于行展示；bundleManager 读失败回退 '—'） */
+  @State private versionName: string = '—';
+  /** 数据操作进行中（导出/导入按钮防连点） */
+  @State private backingUp: boolean = false;
 
   aboutToAppear(): void {
     this.loadCacheInfo();
+    this.loadVersionName();
     // 同步读一次持久化值做高亮（失败按跟随系统 —— 与 ThemeApplier 的降级一致）
     try {
       this.themeMode = SettingsService.getInstance().getAppThemeMode();
     } catch (e) {
       this.themeMode = AppThemeMode.FOLLOW_SYSTEM;
     }
+  }
+
+  /** 读应用版本号（bundleManager；失败静默回退 '—'，版本号不该影响页面） */
+  private loadVersionName(): void {
+    try {
+      const info = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+      this.versionName = info.versionName;
+    } catch (e) {
+      this.versionName = '—';
+    }
+  }
+
+  /**
+   * 导出备份：生成 JSON → 弹系统保存面板。
+   *
+   * ⚠️ 结果提示区分四种情况：成功 / 用户取消 / 书架空 / 失败。
+   */
+  private async doExportBackup(): Promise<void> {
+    if (this.backingUp) {
+      return;
+    }
+    this.backingUp = true;
+    try {
+      const saved: boolean = await BackupService.exportToUser();
+      if (saved) {
+        this.getUIContext().getPromptAction().showToast({ message: '备份已保存' });
+      }
+      // 取消不提示 —— 用户自己点的取消，弹"已取消"是打扰
+    } catch (e) {
+      this.getUIContext().getPromptAction().showToast({ message: this.errorText(e, '导出失败') });
+      Logger.error('ProfilePage', `备份导出失败: ${Logger.errText(e as Object)}`);
+    } finally {
+      this.backingUp = false;
+    }
+  }
+
+  /**
+   * 把异常翻译成可展示的中文文案。
+   *
+   * ⚠️ BackupService 主动抛的都是中文，但**底层异常**（fs/picker/JSON）
+   * 的 message 是英文（"No such file or directory" / "Unexpected Text…"）——
+   * 直接透出就是用户看到的那种 toast。规则：message 里**不含中文字符**
+   * 就视为底层异常，换成调用方给的中性文案；原文只进日志。
+   */
+  private errorText(e: Object, fallback: string): string {
+    const msg: string = (e as Error).message ?? '';
+    return /[\u4e00-\u9fa5]/.test(msg) ? msg : fallback;
+  }
+
+  /**
+   * 导入恢复：弹选择面板 → 合并进库 → 刷新书架缓存计数。
+   *
+   * ⚠️ 导入动了书签/进度，读后的 `ShelfRefreshRegistry.refresh()` 会由
+   * 返回书架时触发；本页只需刷新缓存计数（数字可能与书签变化相关）。
+   */
+  private async doImportBackup(): Promise<void> {
+    if (this.backingUp) {
+      return;
+    }
+    this.backingUp = true;
+    try {
+      const result = await BackupService.importFromUser();
+      if (result.cancelled) {
+        return;
+      }
+      this.getUIContext().getPromptAction().showToast({ message: result.summary() });
+      this.loadCacheInfo();
+    } catch (e) {
+      this.getUIContext().getPromptAction().showToast({ message: this.errorText(e, '导入失败') });
+      Logger.error('ProfilePage', `备份导入失败: ${Logger.errText(e as Object)}`);
+    } finally {
+      this.backingUp = false;
+    }
+  }
+
+  /** 「关于静读」行点击：落款卡片收编为居中弹窗（版权页的完整版） */
+  private showAboutDialog(): void {
+    this.confirmVisible = true;
+    this.confirmTitle = '静读';
+    this.confirmMessage =
+      `版本 ${this.versionName}\n\n本地导入 · 离线阅读 · 无广告 · 不上传任何内容\n\n` +
+      '所有数据只保存在本机沙箱中；备份文件请妥善保管。';
+    this.confirmText = '好的';
+    this.confirmDanger = false;
+    this.confirmOnYes = () => {
+      // 「好的」只是关闭弹窗，无额外动作
+    };
   }
 
   private async loadCacheInfo(): Promise<void> {
@@ -259,6 +355,72 @@ export struct ProfilePage {
           .onClick(() => {
             this.confirmWipeAll();
           })
+        }
+        .width('100%')
+        .backgroundColor(AppColor.bgCard)
+        .borderRadius(AppTheme.CARD_RADIUS)
+        .clip(true)
+      }
+      .width('100%')
+      .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
+
+      /**
+       * 「数据管理」区块：备份 / 恢复。
+       *
+       * ⚠️ 与上面那张卡**分开**：数据备份是"用户创造的数据"的出入口，
+       * 与"清除类"操作（缓存/清空）语义相反 —— 放同一张卡里，
+       * 「导出备份」和「清空所有数据」上下相邻，误触的心理成本很高。
+       */
+      Column() {
+        Column() {
+          Row() {
+            Column({ space: 2 }) {
+              Text('导出备份')
+                .fontSize(AppTheme.FONT_BODY)
+                .fontColor(AppColor.textPrimary)
+                .width('100%')
+              Text('书签、划线、笔记与阅读进度存为 JSON 文件')
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(AppColor.textHint)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            IconChevron()
+          }
+          .width('100%')
+          .padding(14)
+          .alignItems(VerticalAlign.Center)
+          .opacity(this.backingUp ? 0.4 : 1)
+          .onClick(() => {
+            this.doExportBackup();
+          })
+
+          Row() {
+            Column({ space: 2 }) {
+              Text('导入恢复')
+                .fontSize(AppTheme.FONT_BODY)
+                .fontColor(AppColor.textPrimary)
+                .width('100%')
+              Text('从备份文件合并恢复（书按 uuid 匹配，重复自动跳过）')
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(AppColor.textHint)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            IconChevron()
+          }
+          .width('100%')
+          .padding(14)
+          .alignItems(VerticalAlign.Center)
+          .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
+          .opacity(this.backingUp ? 0.4 : 1)
+          .onClick(() => {
+            this.doImportBackup();
+          })
 
           Row() {
             Column({ space: 2 }) {
@@ -314,53 +476,46 @@ export struct ProfilePage {
       .width('100%')
       .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
 
-      // 把落款压到底部：它是一个签名，不该紧贴在设置卡片下面
-      Blank()
-
       /**
-       * 页脚落款 —— 版权页的意象。
+       * 「关于」区块：版本号 + 承诺文案收编。
        *
-       * ⚠️ 文案口径与 `SplashPage` 的 `APP_NAME` / `SLOGAN` **必须一致** ——
-       * 同一个 App 不能有两种自我描述（见 `SplashPage` 顶部注释）。
-       *
-       * ⚠️ 承诺文案拆成两行居中：压成一行的 21 个字在窄屏上会顶满整宽，
-       * 两行 + 行距比一行 + 字距更好读。
+       * ⚠️ 页脚落款（静读 + 朱线 + 承诺）**移进卡片**：它从"页面装饰"
+       * 变成"关于条目"，页面不再需要一个压底的 Blank。
        */
-      Column({ space: 9 }) {
-        Text('静读')
-          .fontSize(17)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(AppColor.textPrimary)
-          // 大字号下才敢用这么大的字距；wordmark 的字距常量与启动页同源
-          .letterSpacing(AppTheme.TRACK_WORDMARK)
-          // `letterSpacing` 会在**每个字之后**（含最后一个字）加空隙，于是文字块
-          // 右侧多出一个字距的空白、整块看起来偏左。补一个**等量**的左缩进把它
-          // 顶回视觉居中 —— 这是排版里的常规处理，启动页的 wordmark 用的是同一招
-          .padding({ left: AppTheme.TRACK_WORDMARK })
-          // 与启动页的 wordmark 同源：探测到衬线才有，取不到自动回退系统字体
-          .fontFamily(AppFont.titleFamily())
+      Column() {
+        Column() {
+          Row() {
+            Column({ space: 2 }) {
+              Text('关于静读')
+                .fontSize(AppTheme.FONT_BODY)
+                .fontColor(AppColor.textPrimary)
+                .width('100%')
+              Text(`版本 ${this.versionName} · 本地导入 · 离线阅读 · 不上传任何内容`)
+                .fontSize(AppTheme.FONT_CAPTION)
+                .fontColor(AppColor.textHint)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
 
-        Row()
-          .width(22)
-          .height(AppTheme.HAIRLINE)
-          .backgroundColor(AppColor.accent)
-          .opacity(0.75)
-
-        Text('本地导入 · 离线阅读 · 无广告')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.textHint)
-          .textAlign(TextAlign.Center)
-
-        Text('不上传任何内容')
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.textHint)
-          .textAlign(TextAlign.Center)
-          .margin({ top: -5 })
+            IconChevron()
+          }
+          .width('100%')
+          .padding(14)
+          .alignItems(VerticalAlign.Center)
+          .onClick(() => {
+            this.showAboutDialog();
+          })
+        }
+        .width('100%')
+        .backgroundColor(AppColor.bgCard)
+        .borderRadius(AppTheme.CARD_RADIUS)
+        .clip(true)
       }
       .width('100%')
-      .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, bottom: 28 })
-      .alignItems(HorizontalAlign.Center)
-      }
+      .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
+
+      // ⚠️ 原「自检页」行已移入「数据管理」卡；原页脚落款已收编进「关于静读」行。
 
       // 主题化确认弹窗（替代系统 showAlertDialog）
       if (this.confirmVisible) {
@@ -381,6 +536,7 @@ export struct ProfilePage {
           }
         })
       }
+     }
     }
     .width('100%')
     .height('100%')

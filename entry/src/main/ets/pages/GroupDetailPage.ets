@@ -264,6 +264,62 @@ struct GroupDetailPage {
   }
 
   /**
+   * 长按组内书籍 → 动作菜单。
+   *
+   * ⚠️ 与书架首页的长按菜单**刻意不同**（用户在本页的语境是"管理组内的书"）：
+   *  - 多一项「移出分组」——本页最高频的整理动作；
+   *  - 少一项「移入分组」——书已经在这个组里了，要换组回书架长按更合理，
+   *    在本页再放一个"选另一个组"的入口会让两处菜单互相打架。
+   *
+   * ⚠️ 文案与下标由同一个数组推导（设计文档第 28 条）。
+   */
+  private showBookActions(book: Book): void {
+    const actions: string[] = ['开始阅读', '移出分组', '从书架移除'];
+    const dangerIndexes: string = '2';
+
+    this.openThemeMenu(book.title, actions, dangerIndexes, (index: number) => {
+      const picked: string = actions[index];
+      if (picked === undefined) {
+        return;
+      }
+      if (picked === '开始阅读') {
+        this.openReader(book);
+      } else if (picked === '移出分组') {
+        this.removeFromGroup(book);
+      } else if (picked === '从书架移除') {
+        this.confirmRemoveBook(book);
+      }
+    });
+  }
+
+  /**
+   * 从书架移除：**必须二次确认**。
+   *
+   * ⚠️ 与「移出分组」的区别要在文案里说清：移出分组是"放回书架"（可逆），
+   * 从书架移除是"这本书不在书架里了"（进度与标注仍在库里，但用户看不到）。
+   * 用户看到"移除"第一反应是"我的书是不是没了"，所以要说清书源文件保留。
+   */
+  private confirmRemoveBook(book: Book): void {
+    this.confirmTitle = `从书架移除《${book.title}》？`;
+    this.confirmMessage = '这本书会从书架消失（阅读进度与书签笔记保留在库中，书源文件也不删）。';
+    this.confirmText = '移除';
+    this.confirmDanger = true;
+    this.confirmOnYes = () => {
+      const vm: BookShelfViewModel | null = this.vm;
+      if (vm === null) {
+        return;
+      }
+      vm.removeBook(book.id).then(() => {
+        this.loadAll();
+        this.toast('已移出书架');
+      }).catch(() => {
+        this.toast('移除失败');
+      });
+    };
+    this.confirmVisible = true;
+  }
+
+  /**
    * 解散分组（= 删除分组，但书全部保留）。
    *
    * ⚠️ 必须先查**组内书籍数**并写进提示：用户看到"解散分组"第一反应是
@@ -430,6 +486,17 @@ struct GroupDetailPage {
     }
     .width('100%')
     .height('100%')
+    /**
+     * ⚠️ 背景色必须挂在**这一层**（与 padding / expandSafeArea 同一个节点）。
+     *
+     * 原来只在里面的 `Column` 上设了 `bgPage`，而让出状态栏的 padding 在
+     * 这个 Stack 上 —— Stack 铺满全屏（含状态栏）却没有底色，那条被让出的
+     * 区域露的是**窗口底色（白）**，于是页面顶部出现一条白带、
+     * 看起来"没有沉浸式"。背景挂在带 padding 的节点上时，
+     * 底色会连 padding 一起铺满，这才是沉浸式该有的样子
+     * （`Index.ets` 的主页正是这么写的）。
+     */
+    .backgroundColor(AppColor.bgPage)
     .padding({ top: this.safeAreaTop, bottom: this.safeAreaBottom })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
@@ -569,6 +636,18 @@ struct GroupDetailPage {
                   book: book,
                   onTap: (b: Book) => {
                     this.openReader(b);
+                  },
+                  /**
+                   * ⚠️ **必须传 `onLongPress`**：`BookListItem` 内部的长按手势
+                   * 只在回调存在时才有意义（组件用 `if (this.onLongPress !== undefined)`
+                   * 判断），不传就是"长按完全没反应"——本页此前正是这个漏传。
+                   *
+                   * 菜单项与书架首页的长按菜单**刻意不同**：这里多了
+                   * 「移出分组」（在本页语境下最常用），少了「移入分组」
+                   * （已经在分组里了，要换组回书架长按更合理）。
+                   */
+                  onLongPress: (b: Book) => {
+                    this.showBookActions(b);
                   }
                 })
               }

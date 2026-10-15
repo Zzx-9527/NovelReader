@@ -778,12 +778,17 @@ export struct BookShelfPage {
   /**
    * 单本书 → 选一个分组放进去。
    *
-   * ⚠️ 列出全部分组 **+「未分组」**：
-   * 「未分组」是"移出当前分组"的唯一入口，不给它用户就无法把书挪出来
-   * （只能靠删掉整个分组，那会连带影响别的书）。
+   * ⚠️ **不列「未分组」**（用户要求，也是一个死项）：本菜单只在书架首页
+   * 长按书籍时弹出，而首页列出的书**必然都是未分组的**（已归组的书
+   * 只出现在分组里）—— 所以「未分组」在这里永远是"（当前）"，
+   * 点了不会有任何变化。把一个必然无效的入口摆在第一行，
+   * 既占位置又让人以为能点。
+   *
+   * 「移出分组」的入口在**分组详情页**：那里的书才真的在组里
+   * （见 `GroupDetailPage.showBookActions`）。
    *
    * ⚠️ 当前所在的分组标上「（当前）」：让用户知道点了会不会有变化。
-   * 菜单最多六项，分组超过五个时截断并提示 —— 想一次挑很多本走
+   * 菜单最多五项，分组超过五个时截断并提示 —— 想一次挑很多本走
    * 「移入分组」页的批量入口（见 `openGroupPickerForTarget`）。
    */
   private showGroupPicker(book: Book): void {
@@ -798,10 +803,7 @@ export struct BookShelfPage {
 
     const labels: string[] = [];
     const ids: number[] = [];
-    // 「未分组」永远排第一：它最常用（把书从某个组里拿出来）
-    labels.push(book.groupId === null ? '未分组（当前）' : '未分组');
-    ids.push(-1);
-    let currentIndex: number = book.groupId === null ? 0 : -1;
+    let currentIndex: number = -1;
     for (const group of shown) {
       const isCurrent: boolean = book.groupId === group.id;
       labels.push(isCurrent ? `${group.name}（当前）` : group.name);
@@ -825,16 +827,11 @@ export struct BookShelfPage {
        * ⚠️ 选了"当前所在的分组"就直接返回，不做无意义的写库 + 刷新：
        * 那会闪一下列表，用户还以为发生了什么。
        */
-      const targetId: number | null = groupId < 0 ? null : groupId;
-      if (targetId === book.groupId) {
+      if (groupId === book.groupId) {
         return;
       }
-      this.vm.moveToGroup(book.id, targetId).then(() => {
-        if (targetId === null) {
-          this.toast('已移出分组');
-        } else {
-          this.toast('已移入分组');
-        }
+      this.vm.moveToGroup(book.id, groupId).then(() => {
+        this.toast('已移入分组');
       }).catch(() => {
         this.toast('移动失败');
       });
