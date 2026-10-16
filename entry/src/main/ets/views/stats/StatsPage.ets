@@ -2,9 +2,11 @@ import { AppColor, AppTheme } from '../../common/theme/AppTheme';
 import { AppFont } from '../../common/theme/AppFont';
 import { StatsService, DayBar } from '../../data/service/StatsService';
 import { StatsSummary } from '../../model/DailyStats';
-import { BookReadingRecord, ReadingRecordSummary } from '../../model/ReadingRecord';
+import { ReadingRecordSummary } from '../../model/ReadingRecord';
 import { DateUtil } from '../../common/utils/DateUtil';
 import { Logger } from '../../common/utils/Logger';
+import { IconChevron } from '../common/Marks';
+import { ReadingRecordDialog } from './ReadingRecordDialog';
 
 /** 折线/柱状图展示最近几天 */
 const RECENT_DAYS: number = 7;
@@ -34,14 +36,6 @@ const HEAT_GAP: number = 3;
  * 不写高度会被压成 0、完全看不见。
  */
 const RECORD_RULE_H: number = 30;
-/**
- * 时长横条的最小百分比。
- *
- * ⚠️ 最短的那本书（比如只读了 30 秒）按真实比例不到 1%，
- * 横条会缩成一个小点、看起来像"没读到"。给 3% 的下限让
- * "读得少"与"完全没读"在视觉上分得开；最长的那本恒为 100%。
- */
-const RECORD_RAIL_MIN_PERCENT: number = 3;
 
 /**
  * 统计页（书架底部 Tab 第 2 页）。
@@ -84,9 +78,7 @@ const RECORD_RAIL_MIN_PERCENT: number = 3;
  *   6 本   │   63 天   │   17 天     ← 三格账目，竖线分隔
  * 阅读书目     阅读天数     连续阅读
  * ──────────────────────────────
- * 各书时长                由多到少
- * 01  三体                  4 时 12 分
- *     ▬▬▬▬▬▬▬▬▬▬▬▬▬▬●              ← 时长横条（相对最长的那本）
+ * 各书时长        6 本 · 3 时 46 分 ›  ← 可点入口 → ReadingRecordDialog
  * ```
  *
  * ⚠️ **原「账目行」区块已删除**：它的三项（连续阅读 / 累计阅读 / 有记录的天数）
@@ -110,6 +102,14 @@ export struct StatsPage {
    * "这块跟着变、那块没变"的半更新状态。
    */
   @State record: ReadingRecordSummary = new ReadingRecordSummary();
+  /**
+   * 「各书时长」弹窗是否可见。
+   *
+   * ⚠️ 弹窗挂在**最外层 `Stack`** 上（与 `BookShelfPage` 的弹窗同一套做法）：
+   * 放在 `Scroll` 里会参与布局、把内容挤短，而 `Stack` 是层叠语义。
+   * 因此本页的根节点需要从 `Column` 改成 `Stack`。
+   */
+  @State private recordDialogVisible: boolean = false;
   @State loading: boolean = true;
   @State error: string = '';
   @StorageProp('statsVersion') @Watch('onStatsChanged') statsVersion: number = 0;
@@ -170,98 +170,127 @@ export struct StatsPage {
   }
 
   build() {
-    Column() {
-      /**
-       * 标题区：标题 + **日期副标题**（效果稿元素，"今天是哪天"的环境信息）。
-       *
-       * ⚠️ 标题与下面那条线**都带左右内边距**，而线是**通栏**的 ——
-       * 所以它们不能共处一个带内边距的容器里：本 `build` 分了三段。
-       */
-      Column({ space: 5 }) {
-        Text('统计')
-          .fontSize(AppTheme.FONT_TITLE)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(AppColor.textPrimary)
-          .letterSpacing(AppTheme.TRACK_TITLE)
-          .width('100%')
+    /**
+     * ⚠️ 根节点是 `Stack` 而不是 `Column` —— 为「各书时长」弹窗服务。
+     *
+     * 弹窗是全屏浮层，必须能盖住整页（层叠语义）。若把它作为 `Column`
+     * 的最后一个子节点，它会参与纵向布局、把上面的内容挤短
+     * （弹窗自己 `height('100%')`，会把父容器撑爆）——
+     * 与 `BookShelfPage` 用 `Stack` 装弹窗是同一套做法。
+     */
+    Stack() {
+      Column() {
+        /**
+         * 标题区：标题 + **日期副标题**（效果稿元素，"今天是哪天"的环境信息）。
+         *
+         * ⚠️ 标题与下面那条线**都带左右内边距**，而线是**通栏**的 ——
+         * 所以它们不能共处一个带内边距的容器里：本 `build` 分了三段。
+         */
+        Column({ space: 5 }) {
+          Text('统计')
+            .fontSize(AppTheme.FONT_TITLE)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(AppColor.textPrimary)
+            .letterSpacing(AppTheme.TRACK_TITLE)
+            .width('100%')
 
-        Text(this.todayCaption())
-          .fontSize(AppTheme.FONT_CAPTION)
-          .fontColor(AppColor.textHint)
-          .letterSpacing(0.5)
-          .width('100%')
-      }
-      .alignItems(HorizontalAlign.Start)
-      .width('100%')
-      .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_L })
-
-      // 通栏发丝线：与书架页、我的页同一条语汇
-      Row()
-        .width('100%')
-        .height(AppTheme.HAIRLINE)
-        .backgroundColor(AppColor.divider)
-        .margin({ top: AppTheme.GAP_M })
-
-      if (this.loading) {
-        Column({ space: AppTheme.GAP_S }) {
-          LoadingProgress().width(36).height(36).color(AppColor.accent)
-          Text('加载中…').fontSize(AppTheme.FONT_CAPTION).fontColor(AppColor.textHint)
+          Text(this.todayCaption())
+            .fontSize(AppTheme.FONT_CAPTION)
+            .fontColor(AppColor.textHint)
+            .letterSpacing(0.5)
+            .width('100%')
         }
+        .alignItems(HorizontalAlign.Start)
         .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.error.length > 0) {
-        Column({ space: AppTheme.GAP_M }) {
-          Text(this.error).fontSize(AppTheme.FONT_BODY).fontColor(AppColor.textSecondary)
-          Button('重试')
-            .fontSize(AppTheme.FONT_BODY)
-            .backgroundColor(AppColor.primary)
-            .fontColor(AppColor.onPrimary)
-            .onClick(() => {
-              this.reload();
-            })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
-          Column() {
-            this.buildLede()
-            this.buildSectionTitle()
-            this.buildRecentBars()
-            this.buildHeatmap()
-            /**
-             * ⚠️ 原 `buildLedger()`（连续阅读 / 累计阅读 / 有记录的天数）
-             * **已删除**，因为下面那块阅读记录把它**逐项覆盖**了：
-             *   连续阅读     → 阅读记录的「连续阅读」格（同值）
-             *   累计阅读     → 阅读记录的「总阅读时长」（同值）
-             *   有记录的天数 → 阅读记录的「阅读天数」格（同值）
-             * 两块并存会让同一页出现两遍相同数字（"累计阅读 42 时 18 分"
-             * 与"总阅读时长 42 时 18 分"），那是明确的缺陷而不是冗余保险。
-             * 判据：**后一块完整包含前一块时，删掉前一块。**
-             *
-             * ⚠️ 阅读记录块**只在有数据时渲染**（见 `buildReadingRecord`）：
-             * 从未读过书时，一块全 0 的表格是噪声。
-             * 放在 `if` 里而不是让 builder 内部 return ——
-             * `@Builder` 不能提前 return，条件必须由调用处表达。
-             */
-            if (this.record.bookCount > 0) {
-              this.buildReadingRecord()
-            }
+        .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_L })
+
+        // 通栏发丝线：与书架页、我的页同一条语汇
+        Row()
+          .width('100%')
+          .height(AppTheme.HAIRLINE)
+          .backgroundColor(AppColor.divider)
+          .margin({ top: AppTheme.GAP_M })
+
+        if (this.loading) {
+          Column({ space: AppTheme.GAP_S }) {
+            LoadingProgress().width(36).height(36).color(AppColor.accent)
+            Text('加载中…').fontSize(AppTheme.FONT_CAPTION).fontColor(AppColor.textHint)
           }
           .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.error.length > 0) {
+          Column({ space: AppTheme.GAP_M }) {
+            Text(this.error).fontSize(AppTheme.FONT_BODY).fontColor(AppColor.textSecondary)
+            Button('重试')
+              .fontSize(AppTheme.FONT_BODY)
+              .backgroundColor(AppColor.primary)
+              .fontColor(AppColor.onPrimary)
+              .onClick(() => {
+                this.reload();
+              })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll() {
+            Column() {
+              this.buildLede()
+              this.buildSectionTitle()
+              this.buildRecentBars()
+              this.buildHeatmap()
+              /**
+               * ⚠️ 原 `buildLedger()`（连续阅读 / 累计阅读 / 有记录的天数）
+               * **已删除**，因为下面那块阅读记录把它**逐项覆盖**了：
+               *   连续阅读     → 阅读记录的「连续阅读」格（同值）
+               *   累计阅读     → 阅读记录的「总阅读时长」（同值）
+               *   有记录的天数 → 阅读记录的「阅读天数」格（同值）
+               * 两块并存会让同一页出现两遍相同数字（"累计阅读 42 时 18 分"
+               * 与"总阅读时长 42 时 18 分"），那是明确的缺陷而不是冗余保险。
+               * 判据：**后一块完整包含前一块时，删掉前一块。**
+               *
+               * ⚠️ 阅读记录块**只在有数据时渲染**（见 `buildReadingRecord`）：
+               * 从未读过书时，一块全 0 的表格是噪声。
+               * 放在 `if` 里而不是让 builder 内部 return ——
+               * `@Builder` 不能提前 return，条件必须由调用处表达。
+               */
+              if (this.record.bookCount > 0) {
+                this.buildReadingRecord()
+              }
+            }
+            .width('100%')
+          }
+          .layoutWeight(1)
+          .width('100%')
+          .padding({
+            left: AppTheme.PAGE_PADDING,
+            right: AppTheme.PAGE_PADDING,
+            top: AppTheme.GAP_L,
+            bottom: AppTheme.GAP_L
+          })
+          .scrollBar(BarState.Off)
+          .align(Alignment.Top)
         }
-        .layoutWeight(1)
-        .width('100%')
-        .padding({
-          left: AppTheme.PAGE_PADDING,
-          right: AppTheme.PAGE_PADDING,
-          top: AppTheme.GAP_L,
-          bottom: AppTheme.GAP_L
+      }
+      .width('100%')
+      .height('100%')
+
+      /**
+       * 「各书时长」弹窗 —— 挂在**外层 Stack** 上（层叠语义，见 `build()` 顶部说明）。
+       *
+       * ⚠️ 数据条件也判一次：`recordDialogVisible` 是独立状态，
+       * 若数据重新加载后变空（例如刚清空了所有数据），
+       * 不该留一个空弹窗浮在页面上。
+       */
+      if (this.recordDialogVisible && this.record.bookCount > 0) {
+        ReadingRecordDialog({
+          books: this.record.books,
+          totalSeconds: this.record.totalSeconds,
+          onClose: () => {
+            this.recordDialogVisible = false;
+          }
         })
-        .scrollBar(BarState.Off)
-        .align(Alignment.Top)
       }
     }
     .width('100%')
@@ -658,47 +687,83 @@ export struct StatsPage {
    * 注意这与被删掉的账目行不同：那三行曾是**始终有意义**的累计值，
    * 而本块主体是一张列表，没有列表就没有内容。
    */
+  /**
+   * 「阅读总览」卡 —— 本页**最末一块**（用户要求把整个页面搬到这里）。
+   *
+   * ## 结构（与导入确认页的「分章预览」卡同一套：**表头在卡内**）
+   * ```
+   * ┌───────────────────────────────────┐
+   * │ 阅读总览                            │  ← 表头（衬线），下方一条发丝线
+   * │ ───────────────────────────────── │
+   * │ 总阅读时长              3 小时 46 分 │  ← 账目行
+   * │ ───────────────────────────────── │
+   * │  23本   │   6天    │   6天          │  ← 三格账目（竖线分隔）
+   * │ 阅读书目   阅读天数    连续阅读       │
+   * │ ───────────────────────────────── │
+   * │ 各书时长        6 本 · 3 时 46 分 › │  ← 可点入口 → 弹窗
+   * └───────────────────────────────────┘
+   * ```
+   *
+   * ⚠️ **三块收进一张卡**（用户要求）：早先是三条裸的行（无卡、只有发丝线），
+   * 在纸面上散着；收进卡后与上面的信息卡/预览卡是同一个"表"的量感。
+   * 行间分隔仍用发丝线，卡片只提供**一条外边界** —— 与书架列表卡同一纪律。
+   *
+   * ⚠️ 不是入口行，是内容本身：原 `pages/ReadingRecordPage` 的版面落在本页，
+   * 数据由本页 `reload()` 一起加载（`loadReadingRecord` 通道）。
+   *
+   * ⚠️ **数据为空时整块不渲染**（`bookCount === 0`）：
+   * 从未读过书时，一块全 0 的表格是噪声 ——
+   * 上面的柱状图与热力图已经是空的了，再来一块全 0 的只会让人觉得
+   * "是不是坏了"。判据：**空数据不画零值表。**
+   */
   @Builder
   buildReadingRecord() {
     Column() {
+      // ── 表头（卡内）：「阅读总览」，下方一条发丝线 ──────────
+      Row() {
+        Text('阅读总览')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontFamily(AppFont.titleFamily())
+          .letterSpacing(1)
+          .fontColor(AppColor.textPrimary)
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ top: 15, bottom: 14, left: 18, right: 18 })
+
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(AppColor.divider)
+
       /**
-       * ① 总阅读时长 —— **单行账目**（用户要求：恢复成原来那一行）。
-       *
-       * ⚠️ 形态与已被删除的「累计阅读」行**逐字一致**（左标签 + 右数值、
-       * 上下 14vp、上边框）：那本来就是同一件事 —— 阅读记录搬进来之后，
-       * 它接管了原「累计阅读」那一行的位置与语义。
-       *
-       * ⚠️ 不要改回"眉标在上、大数字在下"的两行式：本页顶部已经有一个
-       * 54vp 的今日主数值，再放一个大字会形成两个焦点、互相打架；
-       * 而这一行要回答的只是"一共读了多久"，一个账目行足够。
+       * ① 总阅读时长 —— 账目行（左标签 + 右数值）。
        *
        * ⚠️ 值走 `DateUtil.humanizeDuration`，与统计页其他时长文案**同源**
-       * （"3 小时 46 分"）。原来这里是自己拆时/分再拼两个 `Text`，
-       * 单行账目没有那个必要 —— 拆开反而会与上面「最近七日」右端的
-       * "共 3 小时 46 分"出现两种写法。
+       * （"3 小时 46 分"）。
        */
       Row() {
         Text('总阅读时长')
           .fontSize(13)
-          .fontColor(AppColor.textSecondary)
+          .fontColor(AppColor.textHint)
+          .letterSpacing(0.5)
           .layoutWeight(1)
 
         Text(DateUtil.humanizeDuration(this.record.totalSeconds))
-          .fontSize(19)
+          .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(AppColor.textPrimary)
           .fontFeature(AppFont.TABULAR)
       }
       .width('100%')
-      .padding({ top: 14, bottom: 14 })
+      .padding({ top: 16, bottom: 16, left: 18, right: 18 })
       .alignItems(VerticalAlign.Bottom)
-      /**
-       * ⚠️ 上边框 + `margin` 顶部留白，替代原来那个「阅读记录」段标题：
-       * 段标题去掉之后（用户要求），本行必须自己承担"与上面的热力图分开"
-       * 这件事，否则三格账目会直接贴在图例下面。
-       */
-      .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
-      .margin({ top: AppTheme.GAP_L })
+
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(AppColor.divider)
 
       /**
        * ② 三格账目：阅读书目 / 阅读天数 / 连续阅读。
@@ -711,10 +776,10 @@ export struct StatsPage {
        * 不写高度会被压成 0、完全看不见。
        */
       Row() {
-        Column({ space: 5 }) {
+        Column({ space: 4 }) {
           Row({ space: 2 }) {
             Text(`${this.record.bookCount}`)
-              .fontSize(24)
+              .fontSize(22)
               .fontWeight(FontWeight.Medium)
               .fontColor(AppColor.textPrimary)
               .fontFeature(AppFont.TABULAR)
@@ -739,10 +804,10 @@ export struct StatsPage {
           .height(RECORD_RULE_H)
           .backgroundColor(AppColor.divider)
 
-        Column({ space: 5 }) {
+        Column({ space: 4 }) {
           Row({ space: 2 }) {
             Text(`${this.record.readingDays}`)
-              .fontSize(24)
+              .fontSize(22)
               .fontWeight(FontWeight.Medium)
               .fontColor(AppColor.textPrimary)
               .fontFeature(AppFont.TABULAR)
@@ -767,10 +832,10 @@ export struct StatsPage {
           .height(RECORD_RULE_H)
           .backgroundColor(AppColor.divider)
 
-        Column({ space: 5 }) {
+        Column({ space: 4 }) {
           Row({ space: 2 }) {
             Text(`${this.record.continuousDays}`)
-              .fontSize(24)
+              .fontSize(22)
               .fontWeight(FontWeight.Medium)
               .fontColor(AppColor.textPrimary)
               .fontFeature(AppFont.TABULAR)
@@ -791,124 +856,53 @@ export struct StatsPage {
         .alignItems(HorizontalAlign.Center)
       }
       .width('100%')
-      .padding({ top: AppTheme.GAP_M, bottom: AppTheme.GAP_M })
+      .padding({ top: 16, bottom: 16 })
       .alignItems(VerticalAlign.Center)
-      .border({
-        width: { top: AppTheme.HAIRLINE, bottom: AppTheme.HAIRLINE },
-        color: AppColor.divider
-      })
+
+      Row()
+        .width('100%')
+        .height(AppTheme.HAIRLINE)
+        .backgroundColor(AppColor.divider)
 
       /**
-       * ③ 各书时长 —— 列表的段标题。
+       * ③ 各书时长 —— **一行可点的入口**（点开弹窗看列表）。
        *
-       * ⚠️ 它是**本块唯一的段标题**：原来上面还有一个「阅读记录」标题，
-       * 已按用户要求删除（本块紧跟在热力图后面，位置本身已经说明了
-       * "这是新的一段"，再加一个标题是重复）。因此这里的字号取
-       * `FONT_SUBTITLE` 同级偏小，右端配「由多到少」说明 ——
-       * 它现在承担的是整块的引导，不只是列表的标签。
+       * ⚠️ 形态与本卡其他行**刻意不同**，这是有意的层级区分：
+       * 账目行是**只读数据**，无箭头、点了没反应；
+       * 本行是**可点入口**，右侧给 `IconChevron` 折角 ——
+       * 与「我的」页那几行同一套"能点"的记号。
+       * 判据：**同一页里"数据"与"入口"必须长得不一样。**
+       *
+       * ⚠️ 右端是「N 本 · 总时长」：让用户在**点开之前**就知道
+       * 里面有东西、有多少。
        */
       Row() {
         Text('各书时长')
-          .fontSize(AppTheme.FONT_SUBTITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontFamily(AppFont.titleFamily())
-          .letterSpacing(1)
+          .fontSize(14)
           .fontColor(AppColor.textPrimary)
+          .letterSpacing(0.5)
           .layoutWeight(1)
 
-        Text('由多到少')
-          .fontSize(AppTheme.FONT_CAPTION)
+        Text(`${this.record.bookCount} 本 · ${DateUtil.humanizeDuration(this.record.totalSeconds)}`)
+          .fontSize(12)
           .fontColor(AppColor.textHint)
+          .fontFeature(AppFont.TABULAR)
+          .margin({ right: 6 })
+
+        IconChevron()
       }
       .width('100%')
-      .margin({ top: AppTheme.GAP_L, bottom: AppTheme.GAP_S })
-      .alignItems(VerticalAlign.Bottom)
-
-      // 各书账目行 + 时长横条
-      ForEach(this.record.books, (item: BookReadingRecord, index: number) => {
-        Column() {
-          if (index > 0) {
-            Row()
-              .width('100%')
-              .height(AppTheme.HAIRLINE)
-              .backgroundColor(AppColor.divider)
-          }
-
-          Column({ space: 9 }) {
-            Row({ space: 10 }) {
-              // 序号：像账本的条目编号。固定宽度让所有书名左缘对齐
-              Text(this.rankText(index))
-                .fontSize(11)
-                .fontColor(AppColor.textHint)
-                .fontFeature(AppFont.TABULAR)
-                .width(20)
-
-              Text(this.bookTitleOf(item))
-                .fontSize(15)
-                .fontColor(AppColor.textPrimary)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .layoutWeight(1)
-
-              Text(this.compactDuration(item.seconds))
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(AppColor.textPrimary)
-                .fontFeature(AppFont.TABULAR)
-            }
-            .width('100%')
-            .alignItems(VerticalAlign.Center)
-
-            this.buildRecordRail(item.seconds)
-          }
-          .width('100%')
-          .padding({ top: 14, bottom: 14 })
-          .alignItems(HorizontalAlign.Start)
-        }
-        .width('100%')
-      }, (item: BookReadingRecord) => `rec_${item.bookId}_${item.seconds}`)
-    }
-    .width('100%')
-  }
-
-  /**
-   * 时长横条：轨道（发丝）+ 已读段（墨色）+ 末梢圆点（朱砂）。
-   *
-   * ⚠️ 三个元素的分工（与阅读页进度发丝、`ContinueReadingCard`
-   * **同一组令牌**）：轨道 `divider` 给出"满格有多长"的参照；
-   * 已读段用 `primary`（墨色，大面积不用点缀色，见 `AppColor.accent` 的纪律）；
-   * 末梢圆点用 `accent`（朱砂，小面积点缀）。
-   *
-   * ⚠️ 圆点放在**已读段内部**、靠右端对齐，而不是绝对定位：
-   * 已读段宽度是百分比，绝对定位就得再算一次像素，两处算法迟早不一致。
-   * 与 `ContinueReadingCard` 用的是同一招。
-   */
-  @Builder
-  buildRecordRail(seconds: number) {
-    Stack({ alignContent: Alignment.Start }) {
-      Row()
-        .width('100%')
-        .height(AppTheme.RAIL_H)
-        .backgroundColor(AppColor.divider)
-        .opacity(0.7)
-
-      Row() {
-        Row()
-          .layoutWeight(1)
-          .height(AppTheme.RAIL_H)
-          .backgroundColor(AppColor.primary)
-
-        Row()
-          .width(AppTheme.RAIL_DOT)
-          .height(AppTheme.RAIL_DOT)
-          .borderRadius(AppTheme.RAIL_DOT / 2)
-          .backgroundColor(AppColor.accent)
-      }
-      .width(`${this.recordRailPercent(seconds)}%`)
+      .padding({ top: 16, bottom: 16, left: 18, right: 18 })
       .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        this.recordDialogVisible = true;
+      })
     }
     .width('100%')
-    .height(AppTheme.RAIL_DOT)
+    .margin({ top: AppTheme.GAP_L })
+    .borderRadius(AppTheme.CARD_RADIUS)
+    .backgroundColor(AppColor.bgCard)
+    .clip(true)
   }
 
   /**
@@ -1120,72 +1114,13 @@ export struct StatsPage {
   // ══════════════════════════════════════════════ 阅读记录（本次从独立页搬入）
 
   /**
-   * ⚠️ 原 `recordHours()` / `recordMinutes()` **已删除**：
+   * ⚠️ 原来本页还有 `rankText` / `bookTitleOf` / `compactDuration` /
+   * `recordRailPercent` 四个方法，以及 `buildRecordRail` 这个 @Builder ——
+   * 它们**全部随各书时长列表一起搬进了 `ReadingRecordDialog`**。
+   * 列表搬进弹窗后本页不再渲染书单，留着这些方法就是死代码。
+   *
+   * ⚠️ 原 `recordHours()` / `recordMinutes()` 也**已删除**：
    * 「总阅读时长」改回单行账目后，时长整串交给
    * `DateUtil.humanizeDuration` 渲染，不再需要自己拆时/分两个数字。
-   * 留着它们只会变成无人调用的死代码。
    */
-
-  /**
-   * 序号（"01" / "02"…）。
-   *
-   * ⚠️ 补零到两位：一位数与两位数混排时左缘会参差 ——
-   * 等宽数字只保证"每个数字等宽"，不保证"位数不同也对齐"。
-   */
-  private rankText(index: number): string {
-    const n: number = index + 1;
-    return n < 10 ? `0${n}` : `${n}`;
-  }
-
-  /**
-   * 书名；统计行对应的书已被删除时给一句说明。
-   *
-   * ⚠️ 这种情况**真实存在**：`reading_daily_stats` 没有外键，
-   * 物理删书不会带走它的统计行（见 `StatsRepository.listBookDurations`）。
-   * 显示空白会让那一行看起来像渲染错误。
-   */
-  private bookTitleOf(item: BookReadingRecord): string {
-    if (item.title.length > 0) {
-      return item.title;
-    }
-    return '已移除的书';
-  }
-
-  /**
-   * 紧凑时长："4 时 12 分" / "12 分" / "45 秒"。
-   *
-   * ⚠️ 不复用 `DateUtil.humanizeDuration`：那个返回"4 小时 12 分"，
-   * 在账目行右侧这一列会把书名挤短。本区块需要**列宽稳定**的短式；
-   * 单位口径（时/分）与页面其他数值仍然一致。
-   */
-  private compactDuration(seconds: number): string {
-    const h: number = Math.floor(seconds / 3600);
-    const m: number = Math.floor((seconds % 3600) / 60);
-    if (h > 0) {
-      return `${h} 时 ${m} 分`;
-    }
-    if (m > 0) {
-      return `${m} 分`;
-    }
-    return `${seconds} 秒`;
-  }
-
-  /**
-   * 横条长度（百分比）：以**最长的那本**为满格。
-   *
-   * ⚠️ 分母取列表首项而不是再扫一遍求最大值：列表已按
-   * `ORDER BY total_seconds DESC` 排好，首项就是最大值 ——
-   * 再扫一遍是同一事实的第二次实现（设计文档第 28 条）。
-   */
-  private recordRailPercent(seconds: number): number {
-    if (this.record.books.length === 0) {
-      return RECORD_RAIL_MIN_PERCENT;
-    }
-    const max: number = this.record.books[0].seconds;
-    if (max <= 0) {
-      return RECORD_RAIL_MIN_PERCENT;
-    }
-    const pct: number = seconds / max * 100;
-    return pct < RECORD_RAIL_MIN_PERCENT ? RECORD_RAIL_MIN_PERCENT : pct;
-  }
 }

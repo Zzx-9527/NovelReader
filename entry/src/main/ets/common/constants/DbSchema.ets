@@ -89,6 +89,7 @@ export const CREATE_TABLE_SQL: string[] = [
     book_id          INTEGER NOT NULL DEFAULT 0,
     date             TEXT    NOT NULL,
     duration_seconds INTEGER NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0),
+    book_title       TEXT    NOT NULL DEFAULT '',
     updated_at       INTEGER,
     UNIQUE (book_id, date)
   )`,

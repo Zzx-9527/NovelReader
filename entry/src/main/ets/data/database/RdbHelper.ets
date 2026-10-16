@@ -1,7 +1,7 @@
 import { relationalStore } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { CREATE_INDEX_SQL, CREATE_TABLE_SQL } from '../../common/constants/DbSchema';
-import { DbConstants } from '../../common/constants/DbConstants';
+import { DbConstants, StatsCol } from '../../common/constants/DbConstants';
 import { AppConstants, LogTag } from '../../common/constants/AppConstants';
 import { Logger } from '../../common/utils/Logger';
 
@@ -133,6 +133,18 @@ export class RdbHelper {
    *    用户可能在迁移中途被杀进程，下次启动会重跑；
    *  - 只允许加列 / 加表 / 加索引。SQLite 不支持修改列类型或删除列，
    *    真要改就得走"建新表→拷数据→换名"，那属于发布级的破坏性变更，需要单独评估。
+   *
+   * ⚠️⚠️ **本方法在 `doInitialize()` 内部执行，绝对不能调用任何会
+   * `await RdbHelper.ensureReady()` 的方法**（`query` / `queryFirst` /
+   * `queryNumber` / `queryDouble` / `queryString` / `withTransaction`）。
+   *
+   * 原因：`ensureReady()` 等的就是 `doInitialize()` 自己那个 promise，
+   * 从初始化内部再等它 = **等自己**，永远不 resolve。表现为整个 app 起不来
+   * （书架永远停在骨架屏、没有报错、日志也停在"数据库就绪"之前）——
+   * 本项目实测踩过：`hasColumn()` 曾用 `query()`，加了迁移步骤后直接自锁。
+   *
+   * 需要查询时用 `queryOnStore()`（它没有那道闸门）。
+   * 判据：**初始化路径上的查询必须绕过就绪闸门。**
    */
   private async migrate(oldVersion: number): Promise<void> {
     if (oldVersion > DbConstants.DB_VERSION) {
@@ -144,12 +156,22 @@ export class RdbHelper {
     if (oldVersion === DbConstants.DB_VERSION) {
       return;
     }
-    // 示例（V1.2 启用）：
-    // if (oldVersion < 2) {
-    //   await this.addColumnIfMissing(DbConstants.TABLE_BOOK, 'tts_voice', `TEXT NOT NULL DEFAULT ''`);
-    // }
+    /**
+     * V2：`reading_daily_stats` 补 `book_title` 列（书名快照）。
+     *
+     * ⚠️ 为什么需要它：该表**没有外键**，书被物理删除后统计行会留下，
+     * 而书名只在 `book` 表 —— 阅读记录里那本书因此只能显示「已移除的书」。
+     * 补这一列之后，删书前写入过的书名会保留下来。
+     *
+     * ⚠️ 历史行无法回溯补名（书可能已经删了，无处可查）：它们保持空串，
+     * 读取时回退成「已移除的书」。这是可接受的 —— 新写入的行从此正常。
+     */
+    if (oldVersion < 2) {
+      await this.addColumnIfMissing(
+        DbConstants.TABLE_DAILY_STATS, StatsCol.BOOK_TITLE, `TEXT NOT NULL DEFAULT ''`);
+    }
     Logger.info(LogTag.DB,
-      `执行迁移: v${oldVersion} -> v${DbConstants.DB_VERSION}（当前无待执行步骤）`);
+      `执行迁移: v${oldVersion} -> v${DbConstants.DB_VERSION}（已补 book_title）`);
   }
 
   /**
@@ -164,16 +186,53 @@ export class RdbHelper {
     Logger.info(LogTag.DB, `已补列: ${table}.${column}`);
   }
 
-  /** 某张表是否存在指定列 */
+  /**
+   * 某张表是否存在指定列。
+   *
+   * ⚠️ **必须走 `queryOnStore()`，不能用 `query()`** ——
+   * `query()` 开头会 `await ensureReady()`，而本方法唯一的调用者是
+   * `migrate()`，它在 `doInitialize()` **内部**执行：
+   * `ensureReady()` 等的正是 `doInitialize()` 自己那个 promise，
+   * 于是"初始化等查询、查询等初始化"，**永久卡死**。
+   * 症状是整个 app 起不来（书架一直停在骨架屏）—— 本项目实测踩过。
+   * 判据：**初始化路径上的任何查询都必须绕过就绪闸门。**
+   */
   async hasColumn(table: string, column: string): Promise<boolean> {
     let found: boolean = false;
-    await this.query(`PRAGMA table_info(${table})`, [],
+    await this.queryOnStore(`PRAGMA table_info(${table})`, [],
       (rs: relationalStore.ResultSet) => {
         if (rs.getString(1) === column) {
           found = true;
         }
       });
     return found;
+  }
+
+  /**
+   * 初始化期间专用查询：**不走 `ensureReady()`**。
+   *
+   * ⚠️ 与 `query()` 的唯一区别就是**没有那道就绪闸门**，存在的理由见
+   * `hasColumn` 的说明（从初始化内部 await 闸门会自锁）。
+   * 调用前提：`doInitialize()` 已经把 `this.store` 赋值完毕 ——
+   * `applySchema()` / `migrate()` 都在那之后执行，因此这里 `getStore()`
+   * 一定拿得到。
+   *
+   * ⚠️ 初始化之外的代码**不要**用它：那时该走 `query()`，
+   * 才能保证"UI 抢在初始化完成前查询"不会读到半建好的库。
+   */
+  private async queryOnStore(
+    sql: string,
+    args: Array<relationalStore.ValueType>,
+    onRow: (rs: relationalStore.ResultSet) => void
+  ): Promise<void> {
+    const rs = await this.getStore().querySql(sql, args);
+    try {
+      while (rs.goToNextRow()) {
+        onRow(rs);
+      }
+    } finally {
+      rs.close();
+    }
   }
 
   private async execIgnoreError(sql: string): Promise<void> {

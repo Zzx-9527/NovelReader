@@ -1477,12 +1477,27 @@ export class ReaderViewModel {
       if (this.progress !== null) {
         const seconds: number = await this.progress.close();
         if (seconds > 0) {
-          await StatsService.submit(this.bookId, seconds);
+          await StatsService.submit(this.bookId, seconds, this.statsBookTitle());
         }
       }
     } catch (e) {
       Logger.error(LogTag.READ, `退出阅读页结算失败: ${Logger.errText(e as Object)}`);
     }
+  }
+
+  /**
+   * 落统计时带上的书名快照。
+   *
+   * ⚠️ 取值来源是 `state.book.title`（当前打开的书），不是查库 ——
+   * 此刻书一定在手上，查一次库只为拿一个已知的字段是白费。
+   *
+   * ⚠️ 书还没加载完时返回空串：`StatsRepository.upsert` 的
+   * `CASE WHEN` 保证空串**不会覆盖**已存的快照，所以这是安全的降级，
+   * 不会把已有的书名抹成空。
+   */
+  private statsBookTitle(): string {
+    const book: Book | null = this.state.book;
+    return book === null ? '' : book.title;
   }
 
   /** 切后台：立即落盘进度与阅读时长 */
@@ -1491,7 +1506,7 @@ export class ReaderViewModel {
       if (this.progress !== null) {
         const seconds: number = await this.progress.flush(true);
         if (seconds > 0) {
-          await StatsService.submit(this.bookId, seconds);
+          await StatsService.submit(this.bookId, seconds, this.statsBookTitle());
         }
       }
       await SettingsService.getInstance().flushNow();

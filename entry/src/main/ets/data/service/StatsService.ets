@@ -49,14 +49,19 @@ export class StatsService {
   /**
    * 提交一段阅读时长。
    * seconds 会被向下取整；不足 1 秒不写入，避免大量无意义行。
+   *
+   * ⚠️ `bookTitle` 会作为**书名快照**存进统计行（见 `StatsCol.BOOK_TITLE`）：
+   * 本表没有外键，书被物理删除后统计行会留下，不留快照的话
+   * 阅读记录里那本书只能显示成「已移除的书」。
+   * 调用方拿不到书名时可以传空串 —— 空串**不会覆盖**已存的快照。
    */
-  static async submit(bookId: number, seconds: number): Promise<void> {
+  static async submit(bookId: number, seconds: number, bookTitle: string = ''): Promise<void> {
     const whole: number = Math.floor(seconds);
     if (whole <= 0) {
       return;
     }
     try {
-      await StatsRepository.addDuration(bookId, whole);
+      await StatsRepository.addDuration(bookId, whole, bookTitle);
     } catch (e) {
       Logger.error(LogTag.STATS, `阅读时长落库失败: ${Logger.errText(e as Object)}`);
     }

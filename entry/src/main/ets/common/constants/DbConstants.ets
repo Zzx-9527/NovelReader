@@ -22,6 +22,14 @@ export class DbConstants {
    * 做法：把构建号编进文件名。构建号一变就用一个全新的库文件，
    * 从根上杜绝"旧表结构污染新代码"。
    * 代价是旧数据不迁移 —— 这对开发期是可接受的取舍。
+   *
+   * ⚠️ **本次补 `book_title` 列时刻意没有动它**（仍是 2）。
+   * 加列是**非破坏性**变更：`CREATE TABLE IF NOT EXISTS` 管新库、
+   * `migrate()` 管旧库，两条路都能得到正确的结构（见 `RdbHelper.migrate`）。
+   * 而把构建号 +1 会**换一个全新的库文件**，等于丢掉用户已有的书架与
+   * 全部阅读统计（那是本项目唯一的用户数据）。
+   * 判据：**能用迁移补的，就不要用换库解决** —— 换库是最后手段，
+   * 只留给"改列类型/删列"这类 SQLite 不支持就地修改的情况。
    */
   static readonly SCHEMA_BUILD: number = 2;
 
@@ -31,7 +39,7 @@ export class DbConstants {
   }
 
   /** 结构版本。改动 DDL 必须同步 +1 并在 RdbHelper.migrate 里补步骤 */
-  static readonly DB_VERSION: number = 1;
+  static readonly DB_VERSION: number = 2;
 
   static readonly TABLE_BOOK: string = 'book';
   static readonly TABLE_CHAPTER: string = 'chapter';
@@ -152,6 +160,18 @@ export class StatsCol {
   static readonly BOOK_ID: string = 'book_id';
   static readonly DATE: string = 'date';
   static readonly DURATION_SECONDS: string = 'duration_seconds';
+  /**
+   * 写入当时的**书名快照**。
+   *
+   * ⚠️ 存在的理由：`reading_daily_stats` **没有外键**，书被物理删除
+   * （`BookRepository.hardDelete`）后统计行会留下，而书名只存在于 `book` 表
+   * —— 于是阅读记录里那本书只能显示成「已移除的书」。
+   * 在写入时把书名一起存下来，删书之后仍能显示原来的名字。
+   *
+   * ⚠️ 读取时**优先用 `book` 表的实时书名**（书被改名要显示新名），
+   * 取不到才回退到这个快照。见 `StatsRepository.listBookDurations`。
+   */
+  static readonly BOOK_TITLE: string = 'book_title';
   static readonly UPDATED_AT: string = 'updated_at';
 }
 

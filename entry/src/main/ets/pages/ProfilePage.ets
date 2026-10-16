@@ -1,4 +1,4 @@
-import { AppColor, AppTheme } from '../common/theme/AppTheme';
+import { AppColor, AppTheme, ReaderTheme } from '../common/theme/AppTheme';
 import { AppFont } from '../common/theme/AppFont';
 import { AppThemeMode, ThemeApplier } from '../common/theme/ThemeApplier';
 import { bundleManager } from '@kit.AbilityKit';
@@ -6,9 +6,24 @@ import { BackupService } from '../data/service/BackupService';
 import { PageCacheRepository } from '../data/repository/PageCacheRepository';
 import { BookRepository } from '../data/repository/BookRepository';
 import { SettingsService } from '../data/service/SettingsService';
+import { ReaderSettings } from '../model/ReaderSettings';
 import { IconChevron } from '../views/common/Marks';
 import { ThemeConfirm } from '../views/common/ThemeConfirm';
 import { Logger } from '../common/utils/Logger';
+
+/**
+ * 「阅读主题」色块的宽度（vp）。
+ *
+ * ⚠️ 必须**固定宽度**而不是 `layoutWeight(1)` 等分：等分只在"五档刚好放得下"
+ * 时成立，而用户要求这一行**横向可滑动** —— 可滑动的前提是内容有确定的宽度，
+ * 用等分会被父容器压成一行、滑不动（`Scroll` 里的 `layoutWeight` 没有意义）。
+ *
+ * ⚠️ 取 56：五档合计 56×5 + 间距 8×4 = 312vp，而卡内可用宽度约 292vp
+ * （360vp 屏 − 页面左右各 16 − 卡内左右各 18）—— 于是**第五块会露出小半截**，
+ * 天然提示"这一行还能往右滑"。刻意不做成"刚好放得下"：那样用户不会知道
+ * 还有内容，也不会知道能滑。
+ */
+const THEME_SWATCH_W: number = 56;
 
 /**
  * "我的"页：设置入口、缓存清理、关于。
@@ -40,6 +55,16 @@ export struct ProfilePage {
    * 这里只是给「外观」分段控件一个高亮来源；切换动作见 `onThemeModePick`。
    */
   @State themeMode: number = AppThemeMode.FOLLOW_SYSTEM;
+  /**
+   * **阅读页正文**背景方案（light / warm / sepia / eye_care / dark）。
+   *
+   * ⚠️ 与上面的 `themeMode`（应用级深浅色）是**两件独立的事**，
+   * 这不是重复而是刻意分开（见 `SettingsKeys.THEME` 的注释）：
+   *  - `themeMode` 走系统 `setColorMode`，改的是整个 app 的深浅色；
+   *  - 本项只改**阅读页正文背景** —— 用户选的护眼绿不该被系统深色覆盖。
+   * 两件事各自有卡片（「外观」与「阅读主题」），不要合并。
+   */
+  @State private readerTheme: string = 'light';
 
   // 主题化确认弹窗的挂载状态（与 BookShelfPage 同一套做法）
   @State private confirmVisible: boolean = false;
@@ -61,6 +86,45 @@ export struct ProfilePage {
       this.themeMode = SettingsService.getInstance().getAppThemeMode();
     } catch (e) {
       this.themeMode = AppThemeMode.FOLLOW_SYSTEM;
+    }
+    // 阅读页正文背景：与上面那次读取**分开 try** ——
+    // 一项读失败不该把另一项的高亮也带回默认值
+    try {
+      this.readerTheme = SettingsService.getInstance().loadReaderSettings().theme;
+    } catch (e) {
+      this.readerTheme = 'light';
+    }
+  }
+
+  /**
+   * 「阅读主题」选中某档。
+   *
+   * ⚠️ 落盘走 `saveReaderSettings`（整份设置一起写），因此必须
+   * **先读回当前设置、只改 theme 再存**，不能 new 一份默认值 ——
+   * 那会把用户的字号/行距/翻页方式全部重置成默认
+   * （本项目 `ReaderSettings` 有十几个字段，这里只该动一个）。
+   *
+   * ⚠️ 失败时高亮**回滚**到原值：状态 UI 必须反映真实生效的值，
+   * 否则卡片会停在用户没选中的那一档上（与 `onThemeModePick` 同一纪律）。
+   *
+   * ⚠️ 这里**不清理分页缓存**：`theme` 不进 `PaginationService.buildLayoutKey`
+   * （它只影响颜色，不影响断行），改它不会让旧断点失效。
+   * 顺手清一次反而会让用户下次打开书时白重排一遍。
+   */
+  private onReaderThemePick(name: string): void {
+    if (name === this.readerTheme) {
+      return;
+    }
+    const previous: string = this.readerTheme;
+    try {
+      const next: ReaderSettings = SettingsService.getInstance().loadReaderSettings();
+      next.theme = name;
+      SettingsService.getInstance().saveReaderSettings(next);
+      this.readerTheme = name;
+    } catch (e) {
+      this.readerTheme = previous;
+      this.getUIContext().getPromptAction().showToast({ message: '切换失败' });
+      Logger.error('ProfilePage', `阅读主题保存失败: ${Logger.errText(e as Object)}`);
     }
   }
 
@@ -223,13 +287,14 @@ export struct ProfilePage {
 
         Column() {
           /**
-           * ⚠️ **本卡片只剩「外观」一行**（原「阅读设置」是死链已删，
-           * 「清除分页缓存」「清空所有数据」两行已按用户要求移入
-           * 下面的「数 据」卡片，见那边的说明）。
+           * ⚠️ **本卡片有两块**：「外观」行（应用级深浅色）与
+           * 「阅读主题」卡（阅读页正文背景）。两者是独立设置，见
+           * `readerTheme` 字段的说明 —— 不要合并成一个控件。
            *
-           * ⚠️ 因此这里**不再需要"多行内联写死、防 `@Builder` 串位"那套处理**
-           * （设计文档第 15/41 条）：那条纪律只对**同一处调多次**成立，
-           * 一行不存在串位。将来若再往本卡片加行，那条纪律重新适用。
+           * ⚠️ 多行仍然**内联写死**，不用带参 `@Builder`：
+           * 设计文档第 15/41 条（带参 `@Builder` 在同一处 `build()` 里
+           * 被调多次时参数会串位）。本卡片恰好调两次，且两块形态完全不同
+           * （一行分段控件 vs 一行色块），串位的代价远大于省下的几行。
            */
 
           /**
@@ -314,8 +379,7 @@ export struct ProfilePage {
           .padding({ top: 15, bottom: 15, left: 18, right: 18 })
           .alignItems(VerticalAlign.Center)
           /**
-           * ⚠️ **没有上边框** —— 它是本卡片的第一行（原「阅读设置」行已删）。
-           * 留着那条线的话，卡片顶端会凭空多出一根悬空的横线：
+           * ⚠️ **没有上边框** —— 它是本卡片的第一行。
            * 行的分隔线语义是"与上一行分开"，第一行之上没有上一行。
            * 判据：**分隔线画在"两行之间"，不是画在"每一行上"。**
            */
@@ -324,6 +388,131 @@ export struct ProfilePage {
         .backgroundColor(AppColor.bgCard)
         .borderRadius(AppTheme.CARD_RADIUS)
         .clip(true)
+
+      /**
+       * 「阅读主题」—— 阅读页正文背景的五档选择（从阅读设置面板搬来）。
+       *
+       * ⚠️ **本卡必须在「阅 读」区块的 `Column` 之内**（即与上面的「外观」卡
+       * 同级、共用一个带 `PAGE_PADDING` 的父容器）。本项目实测踩过：
+       * 曾经把区块的 `}` 提前收在「外观」卡之后，于是本卡成了页面级兄弟节点、
+       * **左右贴到屏幕边缘**，与上下所有卡片都对不起 —— 用户反馈"边距不一样"。
+       * 判据：**左右留白由外层统一给；只要发现某张卡比别的宽，先查它是不是
+       * 被放到了带内边距的那一层之外。**
+       *
+       * ⚠️ **单独一张卡，不与「外观」合并**（用户要求"做一个主题的卡片"）：
+       *  - 两者是**独立设置**：外观改整个 app 的深浅色，本卡只改阅读页正文背景；
+       *  - 形态也差得远：上面是一行 40vp 高的分段控件，本卡是三段式
+       *    （标题 + 色块 + 文字标签）。
+       *
+       * ⚠️ **为什么值得在"我的"里再来一份**：它原先只能进书、点屏幕中间才能改。
+       * 而"阅读背景"是用户**买前就会关心**的一项（护眼/夜间），
+       * 在设置页找不到会以为没有。
+       *
+       * ⚠️ 版面对齐用户要求的三段式：
+       *   ① 标题「阅读主题」
+       *   ② 色块（**横向可滑动**，见下）
+       *   ③ 每块下方**对应的文字**（浅色/暖白/羊皮纸/护眼/夜间）
+       *
+       * ⚠️ **色块行横向可滑动**（用户要求）：五档挤在一行里时每块只有约 52vp，
+       * 标签"羊皮纸"三个字几乎没有余量、点按目标也偏小。改成固定宽度 +
+       * 横向滚动后，每块拿到舒适的宽度与点按面积；将来加档也不必重排版
+       * （与 `SettingsPanel.buildThemeRow` 里"加一档也不用重排版"的意图一致）。
+       * ⚠️ 滚动条**关掉**：五档只多出一点点，一条滚动条比露出的半块更吵 ——
+       * 露出的半块色块本身就是"还能滑"的提示。
+       *
+       * ⚠️ 色块用**该主题自己的 bg/text**（所见即所得），
+       * 与 `SettingsPanel.buildThemeRow` 完全同一套写法 ——
+       * 两个入口改的是同一个设置，长得不一样会让人以为是两件事。
+       * 注意这里**刻意不传** `appDark`：预览必须显示各主题的真实配色，
+       * 否则全局夜间下五个色块会全变成黑的。
+       *
+       * ⚠️ 选中态用**朱色描边 + 右下角折角**（与设置面板同一表达）：
+       * 五块之间 0.5vp 的粗细差几乎不可辨，朱边 + 折角才是确定的表达。
+       */
+      Column() {
+        Text('阅读主题')
+          .fontSize(16)
+          .fontColor(AppColor.textPrimary)
+          .width('100%')
+          .padding({ left: 18, right: 18, top: 15, bottom: 10 })
+
+        /**
+         * ⚠️ 横向滚动区：**左右内边距加在里面的 `Row` 上**，不加在 `Scroll` 上。
+         * 加在 `Scroll` 上会让内容被裁在留白之后 —— 第一块贴不到 18vp，
+         * 最后一块也永远滑不到完整可见。与目录页的筛选条同一套做法。
+         */
+        Scroll() {
+          Row({ space: AppTheme.GAP_S }) {
+            ForEach(ReaderTheme.THEMES, (name: string) => {
+              Column({ space: 5 }) {
+                Stack({ alignContent: Alignment.BottomEnd }) {
+                  Text('文')
+                    .fontSize(AppTheme.FONT_SUBTITLE)
+                    .fontColor(ReaderTheme.of(name).text)
+                    .width('100%')
+                    .height(44)
+                    .textAlign(TextAlign.Center)
+                    .backgroundColor(ReaderTheme.of(name).bg)
+                    .borderRadius(AppTheme.ITEM_RADIUS)
+                    .border({
+                      width: this.readerTheme === name ? 1.5 : 1,
+                      color: this.readerTheme === name
+                        ? AppColor.accent
+                        : AppColor.divider
+                    })
+
+                  // 折角：右下角一枚小三角（选中时才画）
+                  if (this.readerTheme === name) {
+                    Row()
+                      .width(0)
+                      .height(0)
+                      .border({
+                        width: { top: 7, left: 7 },
+                        color: { top: Color.Transparent, left: AppColor.accent }
+                      })
+                      .margin({ right: 1, bottom: 1 })
+                  }
+                }
+                .width('100%')
+
+                Text(ReaderTheme.labelOf(name))
+                  .fontSize(AppTheme.FONT_CAPTION)
+                  .fontColor(this.readerTheme === name
+                    ? AppColor.accent
+                    : AppColor.textHint)
+                  .maxLines(1)
+                  .textAlign(TextAlign.Center)
+                  .width('100%')
+              }
+              // ⚠️ 固定宽度（不是 layoutWeight）：等分只在"刚好放得下"时成立，
+              // 要让它可滑动就必须给出确定宽度，否则内容会被压缩成一行。
+              .width(THEME_SWATCH_W)
+              .onClick(() => {
+                this.onReaderThemePick(name);
+              })
+            }, (name: string) => name)
+          }
+          .padding({ left: 18, right: 18, bottom: 15 })
+        }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .width('100%')
+      }
+      .width('100%')
+      .backgroundColor(AppColor.bgCard)
+      .borderRadius(AppTheme.CARD_RADIUS)
+      .clip(true)
+      .margin({ top: AppTheme.GAP_M })
+      /**
+       * ⚠️ 下面这个 `}` 收的是**「阅 读」区块的 `Column`**（从 `Text('阅 读')`
+       * 那一行开始），不是阅读主题卡 —— 本卡的 `}` 是上一行那个。
+       *
+       * ⚠️ 本卡的缩进与「阅 读」的 `Column` 相同，看起来像兄弟节点，
+       * 实际是**父子**：它必须在这一层之内才能继承 `PAGE_PADDING`。
+       * 这正是上面那条"边距不一样"的坑，读代码时**以 `}` 的配对为准，
+       * 不要被缩进误导**。（本轮只改行为、没有整块重排缩进，
+       * 以免在无法编译验证的情况下大范围移动代码。）
+       */
       }
       .width('100%')
       .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })

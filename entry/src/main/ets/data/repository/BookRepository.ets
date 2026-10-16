@@ -2,7 +2,7 @@ import { relationalStore } from '@kit.ArkData';
 import { RdbHelper } from '../database/RdbHelper';
 import { Book } from '../../model/Book';
 import { ReadingPosition } from '../../model/ReadingPosition';
-import { BookCol, DbConstants } from '../../common/constants/DbConstants';
+import { BookCol, DbConstants, StatsCol } from '../../common/constants/DbConstants';
 import { AppConstants } from '../../common/constants/AppConstants';
 import { AppState } from '../../model/AppState';
 
@@ -405,12 +405,46 @@ export class BookRepository {
     AppState.bumpBookshelf();
   }
 
-  /** 物理删除；chapter / page_cache / annotation 由外键 CASCADE 带走（需外键已开启） */
+  /**
+   * 物理删除；chapter / page_cache / annotation 由外键 CASCADE 带走（需外键已开启）。
+   *
+   * ⚠️⚠️ **删除前必须先把书名回填进统计行**，否则阅读记录里那本书
+   * 只能显示「已移除的书」—— 本表（`reading_daily_stats`）**没有外键**，
+   * 统计行不会被 CASCADE 带走，而书名只存在于即将被删掉的 `book` 行里。
+   *
+   * 这一步是"快照"机制的另一半：
+   *  - 写入时快照（`StatsService.submit` 带 `bookTitle`）覆盖"读过之后被删"；
+   *  - 删除时回填覆盖"**从未读过、或读过但快照为空**就被删"的情况 ——
+   *    例如"移除到回收站 → 重新导入同一文件"，那条路径会直接 hardDelete
+   *    旧记录（见 `ImportService`），旧记录的统计行可能是补列之前写的、
+   *    快照为空。只靠写入时快照会漏掉这一批。
+   *
+   * ⚠️ 顺序不能反：先回填、后删除。反了就没有书名可回填了。
+   * ⚠️ 回填只写 `book_title = ''` 的行，不覆盖已有快照 ——
+   * 已有快照可能来自改名前的写入，但"删除时的书名"才是最终名，
+   * 这里选择**不覆盖**是为了与 `StatsRepository.upsert` 的
+   * `CASE WHEN excluded.book_title <> ''` 保持同一套语义（非空即权威）。
+   */
   static async hardDelete(bookId: number): Promise<void> {
     await RdbHelper.ensureReady();
+    /**
+     * ⚠️ 用 `IFNULL(子查询, book_title)` 而不是裸子查询：
+     * 子查询在"书已经不存在"时返回 **NULL**，而 `book_title` 是
+     * `NOT NULL` 列 —— 直接赋值会抛约束错误，把一次正常的删除变成失败。
+     * 包一层 `IFNULL` 后，取不到书名就**保持原值**（等于没改），
+     * 删除照常完成。幂等调用（对同一个 id 删两次）因此也是安全的。
+     */
+    await db().getStore().executeSql(
+      `UPDATE ${DbConstants.TABLE_DAILY_STATS} SET ${StatsCol.BOOK_TITLE} = IFNULL(` +
+      `(SELECT ${BookCol.TITLE} FROM ${DbConstants.TABLE_BOOK} WHERE ${BookCol.ID} = ?), ` +
+      `${StatsCol.BOOK_TITLE}) ` +
+      `WHERE ${StatsCol.BOOK_ID} = ? AND ${StatsCol.BOOK_TITLE} = ''`,
+      [bookId, bookId]);
     await db().getStore().executeSql(
       `DELETE FROM ${DbConstants.TABLE_BOOK} WHERE id = ?`, [bookId]);
     AppState.bumpBookshelf();
+    // 统计行可能刚被回填，让统计页/阅读记录重查一次
+    AppState.bumpStats();
   }
 
   /** 标记文件丢失 */
