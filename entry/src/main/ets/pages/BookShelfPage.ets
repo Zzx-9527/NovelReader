@@ -817,7 +817,7 @@ export struct BookShelfPage {
    * 所以这里先收集要显示的项，再用同一个数组去取用户点了哪一项。
    */
   private showBookActions(book: Book): void {
-    const actions: string[] = ['开始阅读'];
+    const actions: string[] = ['开始阅读', '书籍详情'];
     /**
      * ⚠️ 「移入分组」只在**已有分组**时出现。
      *
@@ -842,6 +842,8 @@ export struct BookShelfPage {
       }
       if (picked === '开始阅读') {
         this.openReader(book);
+      } else if (picked === '书籍详情') {
+        this.openBookDetail(book);
       } else if (picked === '移入分组') {
         this.showGroupPicker(book);
       } else if (picked === '换编码（正文乱码时用）') {
@@ -1073,6 +1075,17 @@ export struct BookShelfPage {
       .pushUrl({ url: RouteName.READER_PAGE, params: param })
       .catch(() => {
         this.toast('打开阅读页失败');
+      });
+  }
+
+  /** 打开书籍详情页（长按菜单「书籍详情」） */
+  private openBookDetail(book: Book): void {
+    const param: RouteParam = new RouteParam();
+    param.bookId = book.id;
+    this.getUIContext().getRouter()
+      .pushUrl({ url: RouteName.BOOK_DETAIL_PAGE, params: param })
+      .catch(() => {
+        this.toast('打开书籍详情失败');
       });
   }
 

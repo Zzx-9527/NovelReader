@@ -49,12 +49,12 @@ export class RouteName {
    */
   static readonly READER_CATALOG_PAGE: string = 'pages/ReaderCatalogPage';
   /**
-   * ⚠️ 原 `BOOK_DETAIL_PAGE = 'pages/BookDetailPage'` **已删除**：
-   * 该页面从未存在（无文件、`main_pages.json` 未登记），常量与
-   * `BookDetailState`、`StatsService.bookDurationToday` 一样是零引用残留。
-   * 本文件 `:71` 的既有教训再次应验：指向空页面的路由常量比字符串更难发现是错的。
-   * 将来做详情页时，把页面、登记、常量**三件一起**加回来。
+   * 书籍详情页（长按书籍 →「书籍详情」进入）。
+   *
+   * ⚠️ 页面、`main_pages.json` 登记、本常量**三件必须同时存在**
+   * （本文件下方 `SETTINGS_PAGE` 的教训：指向空页面的常量比字符串更难发现是错的）。
    */
+  static readonly BOOK_DETAIL_PAGE: string = 'pages/BookDetailPage';
   /**
    * ⚠️ 原 `READING_RECORD_PAGE` **已删除**：阅读记录的内容已按用户要求
    * 整体搬进「统计」Tab 的最末一块

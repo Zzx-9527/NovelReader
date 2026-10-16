@@ -187,6 +187,17 @@ struct GroupDetailPage {
       });
   }
 
+  /** 打开书籍详情页 */
+  private openBookDetail(book: Book): void {
+    const param: RouteParam = new RouteParam();
+    param.bookId = book.id;
+    this.getUIContext().getRouter()
+      .pushUrl({ url: RouteName.BOOK_DETAIL_PAGE, params: param })
+      .catch(() => {
+        this.toast('打开书籍详情失败');
+      });
+  }
+
   /**
    * 右上角「更多」菜单。
    *
@@ -274,8 +285,8 @@ struct GroupDetailPage {
    * ⚠️ 文案与下标由同一个数组推导（设计文档第 28 条）。
    */
   private showBookActions(book: Book): void {
-    const actions: string[] = ['开始阅读', '移出分组', '从书架移除'];
-    const dangerIndexes: string = '2';
+    const actions: string[] = ['开始阅读', '书籍详情', '移出分组', '从书架移除'];
+    const dangerIndexes: string = '3';
 
     this.openThemeMenu(book.title, actions, dangerIndexes, (index: number) => {
       const picked: string = actions[index];
@@ -284,6 +295,8 @@ struct GroupDetailPage {
       }
       if (picked === '开始阅读') {
         this.openReader(book);
+      } else if (picked === '书籍详情') {
+        this.openBookDetail(book);
       } else if (picked === '移出分组') {
         this.removeFromGroup(book);
       } else if (picked === '从书架移除') {
