@@ -70,6 +70,44 @@ export class ReaderWindowEffects {
   }
 
   /**
+   * 显示/隐藏系统状态栏。
+   *
+   * ## 语义
+   *
+   * 阅读页的"隐藏状态栏"是**正文态专属**的沉浸增强：
+   *  - `hide=true`（正文阅读中）→ 状态栏隐藏，正文多出一行空间；
+   *  - `hide=false`（菜单/设置面板弹出，或离开阅读页）→ 恢复显示。
+   *
+   * ⚠️ 恢复是**自动的**，不让用户管：菜单里的"返回"按钮在状态栏下面
+   * 既看不清也点不到 —— 隐藏必须随浮层让位，这是页面同步逻辑的事
+   * （见 `ReaderPage.syncWindowChrome`），本方法只负责调 API。
+   *
+   * ## 用 SystemBarEnable 而不是 setWindowSystemBarProperties
+   *
+   * 透明化背景色只是"看不见字但那块还在"，触摸与高度占位都留着；
+   * `setWindowSystemBarEnable([])` 才是真正把系统条从屏幕上撤掉。
+   * 恢复时显式列出 `'status'`（导航条由全屏布局自己处理，始终给 `'navigation'`）。
+   *
+   * ⚠️ 与沉浸式全屏的关系：`setWindowLayoutFullScreen(true)`（Ability 启动时
+   * 已设）是前提；本方法只在"系统条要不要显示"这一层切换。
+   * 页面的安全区 padding 不用跟着变 —— 状态栏隐藏后顶部安全区高度归零，
+   * 内容自然上移，`@StorageProp('safeAreaTop')` 的订阅会自动重排。
+   */
+  static async applySystemBarsVisible(context: common.Context, visible: boolean): Promise<void> {
+    try {
+      const win: window.Window = await window.getLastWindow(context);
+      if (visible) {
+        await win.setWindowSystemBarEnable(['status', 'navigation']);
+      } else {
+        await win.setWindowSystemBarEnable(['navigation']);
+      }
+    } catch (e) {
+      // 部分机型/系统策略不允许应用隐藏系统条 —— 记日志、当没发生
+      Logger.warn(LogTag.READ, `切换状态栏显隐失败（可能被系统策略拒绝）: ${Logger.errText(e as Object)}`);
+    }
+  }
+
+  /**
    * 注册音量键翻页监听，解析为注销函数（注册失败时解析为 null）。
    *
    * ## 为什么在窗口上拦截，而不是页面 `onKeyEvent`

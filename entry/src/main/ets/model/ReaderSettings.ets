@@ -103,6 +103,14 @@ export class ReaderSettings {
   volumeKeyPage: boolean = false;
   /** 阅读时保持屏幕常亮（默认开：阅读场景下屏幕熄灭几乎总是打扰） */
   keepScreenOn: boolean = true;
+  /**
+   * 阅读时隐藏状态栏（默认关）。
+   *
+   * ⚠️ 只影响阅读页正文态：菜单/面板弹出时页面会**自动恢复**状态栏
+   * （顶栏的返回按钮必须可见可点），这不是用户要管的细节，
+   * 所以设置文案只写"阅读时隐藏"，恢复行为由页面自动处理。
+   */
+  hideStatusBar: boolean = false;
 
   // ---------------------------------------------------------------- 书架
   gridMode: boolean = true;

@@ -67,6 +67,13 @@ export class SettingsKeys {
   static readonly VOLUME_KEY_PAGE: string = 'volume_key_page';
   /** 阅读时保持屏幕常亮 */
   static readonly KEEP_SCREEN_ON: string = 'keep_screen_on';
+  /**
+   * 阅读时隐藏状态栏（正文沉浸）。
+   *
+   * ⚠️ 只在阅读页**正文态**生效：菜单/设置面板弹出时自动恢复显示 ——
+   * 顶栏的"返回"必须让用户看得见、点得着。
+   */
+  static readonly HIDE_STATUS_BAR: string = 'hide_status_bar';
 
   // ---------------------------------------------------------------- 书架
   static readonly GRID_MODE: string = 'grid_mode';

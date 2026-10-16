@@ -344,6 +344,9 @@ struct ReaderPage {
     });
     ReaderWindowEffects.applyBrightness(context, -1).catch(() => {
     });
+    // 状态栏必须恢复显示：隐藏是阅读页的定制，退到书架后系统条要回来
+    ReaderWindowEffects.applySystemBarsVisible(context, true).catch(() => {
+    });
   }
 
   /**
@@ -671,7 +674,7 @@ struct ReaderPage {
               // hideMenu 会连带收掉设置面板 —— 本地镜像同步，
               // 否则状态已 false 而 sheet 还开着（下次点"设置"没反应）
               this.sheetShow = false;
-              this.syncVolumeKeyPaging();
+              this.syncWindowChrome();
             })
 
           ReaderBottomBar({
@@ -723,7 +726,7 @@ struct ReaderPage {
               this.vm.setSettingsVisible(true);
               // 本地镜像同步拉起 sheet（bindSheet 的 isShow 读它）
               this.sheetShow = true;
-              this.syncVolumeKeyPaging();
+              this.syncWindowChrome();
             }
           })
           /**
@@ -791,7 +794,7 @@ struct ReaderPage {
           },
           onCancel: () => {
             this.vm.setBookmarkVisible(false);
-            this.syncVolumeKeyPaging();
+            this.syncWindowChrome();
           }
         })
       }
@@ -839,7 +842,7 @@ struct ReaderPage {
           this.vm.setSettingsVisible(false);
         }
         this.sheetShow = false;
-        this.syncVolumeKeyPaging();
+        this.syncWindowChrome();
       }
     })
   }
@@ -899,7 +902,7 @@ struct ReaderPage {
       onClose: () => {
         this.vm.setSettingsVisible(false);
         this.sheetShow = false;
-        this.syncVolumeKeyPaging();
+        this.syncWindowChrome();
       }
     })
   }
@@ -1120,10 +1123,10 @@ struct ReaderPage {
   // ------------------------------------------------------------ 正文
 
   /**
-   * 把"窗口级"阅读设置应用到真实窗口：屏幕亮度、保持常亮。
+   * 把"窗口级"阅读设置应用到真实窗口：屏幕亮度、保持常亮、状态栏显隐。
    *
    * ⚠️ 为什么单独一个方法、并且**只记日志不抛错**：
-   *  1. 这两个设置都要 `window.Window`，而页面拿不到 —— 所以走
+   *  1. 这些设置都要 `window.Window`，而页面拿不到 —— 所以走
    *     `ReaderWindowEffects`（它用 `window.getLastWindow` 自己取）；
    *  2. 它们**可以被系统拒绝**（省电模式、机型限制）。失败时用户改的
    *     设置本身是成功的，不该弹"设置失败" —— 那会让人以为设置没保存。
@@ -1142,9 +1145,9 @@ struct ReaderPage {
     ReaderWindowEffects.applyKeepScreenOn(context, settings.keepScreenOn).catch(() => {
       // 同上：内部已记日志
     });
-    // 音量键翻页：设置可能刚在面板里被改过，每次显示都按当前设置重建监听。
-    // 内部先注销旧的，避免叠加成"一次按键翻两页"。
-    this.applyVolumeKeyPaging(settings.volumeKeyPage);
+    // 状态栏显隐：按"设置 + 当前浮层状态"决定（面板里刚改过也能立即生效）。
+    // 走 syncWindowChrome 而不是直接调 API：它同时把音量键监听也按新设置重建。
+    this.syncWindowChrome();
   }
 
   /**
@@ -1190,7 +1193,7 @@ struct ReaderPage {
       // 注册完成时菜单可能已经弹出来了（注册是异步的）：
       // 按注册时的最新浮层状态决定要不要立刻挂起。
       if (this.isOverlayShowing()) {
-        this.syncVolumeKeyPaging();
+        this.syncWindowChrome();
       }
     }).catch(() => {
       // 内部已记日志
@@ -1230,6 +1233,33 @@ struct ReaderPage {
     } else if (this.state.settings.volumeKeyPage && !this.windowEffectsReset) {
       this.applyVolumeKeyPaging(true);
     }
+  }
+
+  /**
+   * **窗口级联动的统一入口**：浮层显隐 / 设置变化后调用，
+   * 一次同步"音量键挂起恢复"与"状态栏隐藏恢复"两件事。
+   *
+   * ## 为什么收成一个方法
+   *
+   * 两件事的触发条件**完全相同**（浮层弹出 → 让位；收起 → 恢复），
+   * 分开写就意味着每个浮层调用点要调两个方法 —— 迟早有漏一个的。
+   * 10 个浮层调用点全部改走这里，新增窗口级联动（以后可能有
+   * "浮层弹出暂停 TTS"之类）也只改这一个方法。
+   *
+   * ⚠️ 状态栏的恢复是**自动的**，用户不用管：设置只说"阅读时隐藏"，
+   * 菜单弹出时顶栏"返回"必须在状态栏之下可见可点 ——
+   * 隐藏必须随浮层让位，这是本应用的体验承诺而不是用户要记得的事。
+   */
+  private syncWindowChrome(): void {
+    this.syncVolumeKeyPaging();
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined || this.windowEffectsReset) {
+      return;
+    }
+    const hide: boolean = this.state.settings.hideStatusBar && !this.isOverlayShowing();
+    ReaderWindowEffects.applySystemBarsVisible(context, !hide).catch(() => {
+      // 内部已记日志
+    });
   }
 
   /** 注销音量键监听（幂等：没有注册时是空操作） */
@@ -1430,7 +1460,7 @@ struct ReaderPage {
       this.vm.nextPage();
     } else {
       this.vm.toggleMenu();
-      this.syncVolumeKeyPaging();
+      this.syncWindowChrome();
     }
   }
 
@@ -1476,7 +1506,7 @@ struct ReaderPage {
     this.bookmarkDraft = this.vm.buildBookmarkDraft(startOriginal, endOriginal);
     this.annotationMode = 'bookmark';
     this.vm.setBookmarkVisible(true);
-    this.syncVolumeKeyPaging();
+    this.syncWindowChrome();
   }
 
   /**
@@ -1491,7 +1521,7 @@ struct ReaderPage {
     this.bookmarkDraft = this.vm.buildAnnotationDraft(startOriginal, endOriginal);
     this.annotationMode = 'note';
     this.vm.setBookmarkVisible(true);
-    this.syncVolumeKeyPaging();
+    this.syncWindowChrome();
   }
 
   /**
@@ -1520,7 +1550,7 @@ struct ReaderPage {
     this.bookmarkDraft.note = note;
     this.vm.saveBookmark(this.bookmarkDraft).then((result: BookmarkSaveResult) => {
       this.vm.setBookmarkVisible(false);
-      this.syncVolumeKeyPaging();
+      this.syncWindowChrome();
       if (!result.ok) {
         // ⚠️ 失败必须单独提示，否则用户以为存上了
         this.getUIContext().getPromptAction().showToast({ message: '书签保存失败' });
@@ -1548,7 +1578,7 @@ struct ReaderPage {
     const endOriginal: number = draft.endOffset >= 0 ? draft.endOffset : startOriginal;
     this.vm.addNote(startOriginal, endOriginal, note).then((id: number) => {
       this.vm.setBookmarkVisible(false);
-      this.syncVolumeKeyPaging();
+      this.syncWindowChrome();
       this.getUIContext().getPromptAction().showToast({
         message: id > 0 ? '已保存笔记' : '笔记保存失败'
       });

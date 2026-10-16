@@ -140,6 +140,7 @@ export class SettingsService {
     s.brightness = this.getNumber(SettingsKeys.BRIGHTNESS, s.brightness);
     s.volumeKeyPage = this.getBoolean(SettingsKeys.VOLUME_KEY_PAGE, s.volumeKeyPage);
     s.keepScreenOn = this.getBoolean(SettingsKeys.KEEP_SCREEN_ON, s.keepScreenOn);
+    s.hideStatusBar = this.getBoolean(SettingsKeys.HIDE_STATUS_BAR, s.hideStatusBar);
 
     s.gridMode = this.getBoolean(SettingsKeys.GRID_MODE, s.gridMode);
     s.bookSort = this.getString(SettingsKeys.BOOK_SORT, s.bookSort);
@@ -165,6 +166,7 @@ export class SettingsService {
     this.putNumber(SettingsKeys.BRIGHTNESS, s.brightness);
     this.putBoolean(SettingsKeys.VOLUME_KEY_PAGE, s.volumeKeyPage);
     this.putBoolean(SettingsKeys.KEEP_SCREEN_ON, s.keepScreenOn);
+    this.putBoolean(SettingsKeys.HIDE_STATUS_BAR, s.hideStatusBar);
 
     this.putBoolean(SettingsKeys.GRID_MODE, s.gridMode);
     this.putString(SettingsKeys.BOOK_SORT, s.bookSort);

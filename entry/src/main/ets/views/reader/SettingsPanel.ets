@@ -100,6 +100,7 @@ export struct SettingsPanel {
     next.brightness = s.brightness;
     next.keepScreenOn = s.keepScreenOn;
     next.volumeKeyPage = s.volumeKeyPage;
+    next.hideStatusBar = s.hideStatusBar;
     next.gridMode = s.gridMode;
     next.bookSort = s.bookSort;
     next.ttsSpeed = s.ttsSpeed;
@@ -165,6 +166,7 @@ export struct SettingsPanel {
            */
           this.buildBrightnessRow()
           this.buildKeepScreenOnRow()
+          this.buildHideStatusBarRow()
           this.buildVolumeKeyRow()
         }
         .width('100%')
@@ -728,8 +730,7 @@ export struct SettingsPanel {
    * 本面板里"二选一"只有一种表达。
    */
   @Builder
-  buildKeepScreenOnRow() {
-    Column({ space: AppTheme.GAP_S }) {
+  buildKeepScreenOnRow() {    Column({ space: AppTheme.GAP_S }) {
       Row() {
         Text('保持常亮')
           .fontSize(AppTheme.FONT_SUBTITLE)
@@ -774,6 +775,74 @@ export struct SettingsPanel {
             }
             const next: ReaderSettings = this.derive();
             next.keepScreenOn = false;
+            this.emit(next);
+          })
+      }
+      .width('100%')
+      .padding(3)
+      .border({ width: 1, color: this.theme.secondary })
+      .borderRadius(AppTheme.CHIP_RADIUS + 3)
+      .backgroundColor(this.theme.barBg)
+    }
+    .width('100%')
+  }
+
+  /**
+   * 「隐藏状态栏」开关行。
+   *
+   * ⚠️ 文案只写"阅读时隐藏"，**不提恢复**：菜单/面板弹出时状态栏自动
+   * 恢复是页面的自动行为（顶栏"返回"必须可见可点），不是用户要管的细节 ——
+   * 写出来只会让人以为要自己来回切换。
+   *
+   * ⚠️ 与亮度/常亮同属窗口级设置，排在同一组（排版项之后）。
+   */
+  @Builder
+  buildHideStatusBarRow() {
+    Column({ space: AppTheme.GAP_S }) {
+      Row() {
+        Text('隐藏状态栏')
+          .fontSize(AppTheme.FONT_SUBTITLE)
+          .fontColor(this.theme.text)
+          .layoutWeight(1)
+
+        Text(this.settings.hideStatusBar ? '已开启' : '已关闭')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.theme.secondary)
+      }
+      .width('100%')
+
+      Row() {
+        Text('开')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.hideStatusBar ? this.theme.bg : this.theme.secondary)
+          .backgroundColor(this.settings.hideStatusBar ? this.theme.text : Color.Transparent)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 7, bottom: 7 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (this.settings.hideStatusBar) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            next.hideStatusBar = true;
+            this.emit(next);
+          })
+
+        Text('关')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.hideStatusBar ? this.theme.secondary : this.theme.bg)
+          .backgroundColor(this.settings.hideStatusBar ? Color.Transparent : this.theme.text)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 7, bottom: 7 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (!this.settings.hideStatusBar) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            next.hideStatusBar = false;
             this.emit(next);
           })
       }
