@@ -51,7 +51,26 @@ export class RouteName {
    */
   static readonly READER_CATALOG_PAGE: string = 'pages/ReaderCatalogPage';
   static readonly BOOK_DETAIL_PAGE: string = 'pages/BookDetailPage';
-  static readonly SETTINGS_PAGE: string = 'pages/SettingsPage';
+  /**
+   * ⚠️ 原 `READING_RECORD_PAGE` **已删除**：阅读记录的内容已按用户要求
+   * 整体搬进「统计」Tab 的最末一块
+   * （`views/stats/StatsPage.buildReadingRecord`），不再是独立页面 ——
+   * 那一页的版面（总时长 / 三格账目 / 各书时长列表）原样落在统计页下方，
+   * 随页面一起滚动。
+   *
+   * 归属理由：统计看"时间**分布**"（柱状图、热力图），阅读记录看
+   * "时间**去向**"（每本书各读了多久）。同一问题的两个层次放在一页里，
+   * 用户不必先在脑子里把两件事联系起来再决定去哪一页。
+   */
+  /**
+   * ⚠️ 原 `SETTINGS_PAGE = 'pages/SettingsPage'` **已删除**：那一页从未存在
+   * （`main_pages.json` 未登记、文件也没有），常量唯一的使用者是「我的」页里
+   * 一个必然失败的跳转。阅读设置的调节功能在 `views/reader/SettingsPanel.ets`，
+   * 入口在阅读页「点屏幕中间 → 设置」—— 不需要一个独立页面。
+   *
+   * ⚠️ 加路由常量前先确认页面真的存在：一个指向空页面的常量，
+   * 会把"这里能跳过去"写进类型系统，比字符串字面量更难发现是错的。
+   */
   static readonly IMPORT_CONFIRM_PAGE: string = 'pages/ImportConfirmPage';
   /**
    * 「把已导入的书加入分组」页。

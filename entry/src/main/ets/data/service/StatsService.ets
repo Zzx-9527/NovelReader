@@ -1,4 +1,5 @@
 import { StatsSummary, DailyStats } from '../../model/DailyStats';
+import { ReadingRecordSummary } from '../../model/ReadingRecord';
 import { Book } from '../../model/Book';
 import { BookRepository, BookSort } from '../repository/BookRepository';
 import { AnnotationRepository } from '../repository/AnnotationRepository';
@@ -69,6 +70,27 @@ export class StatsService {
   /** 某本书的累计阅读时长（秒） */
   static async bookDuration(bookId: number): Promise<number> {
     return StatsRepository.bookTotalDuration(bookId);
+  }
+
+  /**
+   * 「阅读记录」页要的全部数据：总时长 / 书数 / 天数 / 连续天数 / 每本书时长。
+   *
+   * ⚠️ **书数由列表长度得出**，不另查一次 `COUNT(DISTINCT book_id)` ——
+   * 页面上"共 N 本"与下面的列表必须永远一致，两个数字来自两次查询就迟早
+   * 会打架（统计表没有外键，删书后可能留下残行）。见 `ReadingRecordSummary`。
+   *
+   * ⚠️ 失败时**不吞异常**：本页的核心就是这些数字，
+   * 返回一个全 0 的"成功"结果会让用户看到"总时长 0 分钟"并以为数据丢了。
+   * 调用方（页面）负责把异常转成可重试的错误态 —— 与 `loadSummary` 同一取舍。
+   */
+  static async loadReadingRecord(): Promise<ReadingRecordSummary> {
+    const result = new ReadingRecordSummary();
+    result.totalSeconds = await StatsRepository.totalDuration();
+    result.readingDays = await StatsRepository.readingDayCount();
+    result.continuousDays = await StatsRepository.continuousDays();
+    result.books = await StatsRepository.listBookDurations();
+    result.bookCount = result.books.length;
+    return result;
   }
 
   /** 某本书在指定日期的阅读时长（秒），用于书籍详情页"今天读了多久" */

@@ -1,7 +1,6 @@
 import { AppColor, AppTheme } from '../common/theme/AppTheme';
 import { AppFont } from '../common/theme/AppFont';
 import { AppThemeMode, ThemeApplier } from '../common/theme/ThemeApplier';
-import { RouteName } from '../model/RouteParam';
 import { bundleManager } from '@kit.AbilityKit';
 import { BackupService } from '../data/service/BackupService';
 import { PageCacheRepository } from '../data/repository/PageCacheRepository';
@@ -224,45 +223,14 @@ export struct ProfilePage {
 
         Column() {
           /**
-           * ⚠️ 四行**内联写死**，不用带参 `@Builder`。
+           * ⚠️ **本卡片只剩「外观」一行**（原「阅读设置」是死链已删，
+           * 「清除分页缓存」「清空所有数据」两行已按用户要求移入
+           * 下面的「数 据」卡片，见那边的说明）。
            *
-           * 本项目反复记录过这个坑（设计文档第 15/41 条）：带参 `@Builder`
-           * 在同一处 `build()` 里被调多次时**参数会串位**——
-           * 而这里恰好要调四次，且本轮还要给其中两行加不同的颜色与标签
-           * （参数从 3 个涨到 5 个），串位的面积会直接扩大。
-           * 代价是四段结构相似的代码，收益是"点了第 3 行绝不会执行第 1 行的事"。
-           *
-           * 判据：**结构相同但每份都不一样的行，宁可内联**。
+           * ⚠️ 因此这里**不再需要"多行内联写死、防 `@Builder` 串位"那套处理**
+           * （设计文档第 15/41 条）：那条纪律只对**同一处调多次**成立，
+           * 一行不存在串位。将来若再往本卡片加行，那条纪律重新适用。
            */
-          Row() {
-            Column({ space: 3 }) {
-              Text('阅读设置')
-                .fontSize(16)
-                .fontColor(AppColor.textPrimary)
-                .width('100%')
-              Text('字号、行距、背景、翻页方式')
-                .fontSize(12)
-                .fontColor(AppColor.textHint)
-                .width('100%')
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start)
-
-            IconChevron()
-          }
-          .width('100%')
-          .padding({ top: 17, bottom: 17, left: 18, right: 18 })
-          .alignItems(VerticalAlign.Center)
-          .onClick(() => {
-            // 走 UIContext 上的 Router/PromptAction：@ohos.router 与 promptAction
-            // 的全局函数均已废弃（见 §5.6 第 19 条）
-            this.getUIContext().getRouter()
-              .pushUrl({ url: RouteName.SETTINGS_PAGE })
-              .catch(() => {
-                this.getUIContext().getPromptAction()
-                  .showToast({ message: '设置页尚未实现' });
-              });
-          })
 
           /**
            * 「外观」行：应用级深浅色的**常驻入口**。
@@ -345,57 +313,12 @@ export struct ProfilePage {
           .width('100%')
           .padding({ top: 15, bottom: 15, left: 18, right: 18 })
           .alignItems(VerticalAlign.Center)
-          .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
-
-          Row() {
-            Column({ space: 3 }) {
-              Text('清除分页缓存')
-                .fontSize(16)
-                .fontColor(AppColor.textPrimary)
-                .width('100%')
-              Text(`当前 ${this.cacheCount} 条`)
-                .fontSize(12)
-                .fontColor(AppColor.textHint)
-                .fontFeature(AppFont.TABULAR)
-                .width('100%')
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start)
-
-            IconChevron()
-          }
-          .width('100%')
-          .padding({ top: 17, bottom: 17, left: 18, right: 18 })
-          .alignItems(VerticalAlign.Center)
-          .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
-          .onClick(() => {
-            this.clearCache();
-          })
-
-          Row() {
-            Column({ space: 3 }) {
-              Text('清空所有数据')
-                // ⚠️ 危险色标在**列表行**上，而不是只在弹窗里
-                .fontColor(AppColor.danger)
-                .fontSize(16)
-                .width('100%')
-              Text('删除全部书籍、进度、书签与统计（书源文件保留）')
-                .fontSize(12)
-                .fontColor(AppColor.textHint)
-                .width('100%')
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start)
-
-            IconChevron()
-          }
-          .width('100%')
-          .padding({ top: 17, bottom: 17, left: 18, right: 18 })
-          .alignItems(VerticalAlign.Center)
-          .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
-          .onClick(() => {
-            this.confirmWipeAll();
-          })
+          /**
+           * ⚠️ **没有上边框** —— 它是本卡片的第一行（原「阅读设置」行已删）。
+           * 留着那条线的话，卡片顶端会凭空多出一根悬空的横线：
+           * 行的分隔线语义是"与上一行分开"，第一行之上没有上一行。
+           * 判据：**分隔线画在"两行之间"，不是画在"每一行上"。**
+           */
         }
         .width('100%')
         .backgroundColor(AppColor.bgCard)
@@ -406,11 +329,25 @@ export struct ProfilePage {
       .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_M })
 
       /**
-       * 「数据管理」区块：备份 / 恢复。
+       * 「数 据」区块：备份 / 恢复 / 清理。
        *
-       * ⚠️ 与上面那张卡**分开**：数据备份是"用户创造的数据"的出入口，
-       * 与"清除类"操作（缓存/清空）语义相反 —— 放同一张卡里，
-       * 「导出备份」和「清空所有数据」上下相邻，误触的心理成本很高。
+       * ⚠️ **原「清除分页缓存」「清空所有数据」两行从上面的「阅 读」卡片
+       * 移到了这里**（用户要求），理由是"按操作对象分组"：
+       *  - 「阅 读」= 改变**阅读观感**的设置（外观）；
+       *  - 「数 据」= 对**数据本身**的增删出入（备份、恢复、清理）。
+       *
+       * 判据：**看一个操作"动了什么"，而不是"由什么产生"。**
+       * 分页缓存虽然由排版参数产生，但它是一张会被 DELETE 的表、界面上
+       * 也以条数（"当前 N 条"）呈现 —— 那是数据量，不是阅读偏好；
+       * 清空缓存前后正文的字号/行距/背景完全一样。
+       * `PageCacheRepository` 自己也把 `page_cache` 称作"**纯派生数据**"。
+       *
+       * ⚠️ **行序有硬约束：「清空所有数据」必须排在最末**（用户要求，
+       * 也与本卡片原先的顾虑一致）：
+       * 它是不可逆的破坏性操作，与「导出备份」「导入恢复」语义相反 ——
+       * 紧邻摆放会把"备份"和"清空"放在同一个拇指落点附近，误触代价极高。
+       * 放在最后一行，它与上面每个安全操作之间都隔着至少一行。
+       * 判据：**破坏性操作放在列表末端，且不与它的反义操作相邻。**
        */
       Column() {
         Text('数 据')
@@ -468,6 +405,74 @@ export struct ProfilePage {
           .opacity(this.backingUp ? 0.4 : 1)
           .onClick(() => {
             this.doImportBackup();
+          })
+
+          /**
+           * 「清除分页缓存」—— 从上面的「阅 读」卡片移来（见本卡片顶部说明）。
+           *
+           * ⚠️ 副标题必须**实时反映真实条数**：`当前 N 条` 由 `cacheCount` 驱动，
+           * 用户点完这一行后它应当立刻变成 0（`clearCache()` 里会重新 `loadCacheInfo()`）。
+           *
+           * ⚠️ 它排在备份/恢复**之后**：本行是"清理派生数据"，
+           * 与上面两行的"用户数据出入口"是两件事，但都无害、可随时再做，
+           * 因此可以相邻；真正要隔离的是下面那一行。
+           */
+          Row() {
+            Column({ space: 3 }) {
+              Text('清除分页缓存')
+                .fontSize(16)
+                .fontColor(AppColor.textPrimary)
+                .width('100%')
+              Text(`当前 ${this.cacheCount} 条`)
+                .fontSize(12)
+                .fontColor(AppColor.textHint)
+                .fontFeature(AppFont.TABULAR)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            IconChevron()
+          }
+          .width('100%')
+          .padding({ top: 17, bottom: 17, left: 18, right: 18 })
+          .alignItems(VerticalAlign.Center)
+          .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
+          .opacity(this.clearing ? 0.4 : 1)
+          .onClick(() => {
+            this.clearCache();
+          })
+
+          /**
+           * 「清空所有数据」—— **本卡片最后一行**（见本卡片顶部说明：
+           * 破坏性操作必须在末端，且不与「导出备份」相邻）。
+           *
+           * ⚠️ 危险色标在**列表行**上，而不是只在确认弹窗里：
+           * 只在弹窗里上色的话，用户在**点之前**完全看不出这是破坏性操作。
+           */
+          Row() {
+            Column({ space: 3 }) {
+              Text('清空所有数据')
+                .fontColor(AppColor.danger)
+                .fontSize(16)
+                .width('100%')
+              Text('删除全部书籍、进度、书签与统计（书源文件保留）')
+                .fontSize(12)
+                .fontColor(AppColor.textHint)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            IconChevron()
+          }
+          .width('100%')
+          .padding({ top: 17, bottom: 17, left: 18, right: 18 })
+          .alignItems(VerticalAlign.Center)
+          .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
+          .opacity(this.clearing ? 0.4 : 1)
+          .onClick(() => {
+            this.confirmWipeAll();
           })
         }
         .width('100%')

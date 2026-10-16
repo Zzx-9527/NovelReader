@@ -1,6 +1,7 @@
 import { relationalStore } from '@kit.ArkData';
 import { RdbHelper } from '../database/RdbHelper';
 import { DailyStats, StatsSummary } from '../../model/DailyStats';
+import { BookReadingRecord } from '../../model/ReadingRecord';
 import { DbConstants, StatsCol } from '../../common/constants/DbConstants';
 import { DateUtil } from '../../common/utils/DateUtil';
 import { AppState } from '../../model/AppState';
@@ -156,5 +157,46 @@ export class StatsRepository {
     summary.readingDays = await StatsRepository.readingDayCount();
     summary.continuousDays = await StatsRepository.continuousDays();
     return summary;
+  }
+
+  // ------------------------------------------------------------ 阅读记录
+
+  /**
+   * 每本书的累计阅读时长，按时长降序。
+   *
+   * ⚠️ 两个条件都不能少：
+   *  - `book_id <> 0` —— 0 是"全局统计"哨兵行（见类注释），
+   *    它不是一本书。漏掉这个条件的话，全局总时长会被当成一本书排在榜首，
+   *    而且它的数值恰好等于所有书之和，看起来"很合理"，很难发现是错的。
+   *  - `SUM(...) > 0` —— 理论上不会有 0 秒的行（写入侧已挡掉 `seconds <= 0`），
+   *    但 `HAVING` 让"这本书有记录但时长为 0"不进列表：
+   *    列表要回答的是"我读了多久"，0 分钟的书不该占一行。
+   *
+   * ⚠️ 书名走 `LEFT JOIN book` 而不是先查 stats 再逐本查书名：
+   * 逐本查是 N+1 次查询，而这是一页列表。`LEFT` 是必须的 ——
+   * `reading_daily_stats` **没有外键**，书被物理删除后统计行会留下，
+   * 用 `INNER JOIN` 会让这些时长凭空从列表里消失（总数却还算着它）。
+   * 这类行的书名取不到，由页面回退成「已移除的书」。
+   */
+  static async listBookDurations(): Promise<BookReadingRecord[]> {
+    const list: BookReadingRecord[] = [];
+    await db().query(
+      `SELECT s.book_id AS book_id, IFNULL(b.title, '') AS title, ` +
+      `SUM(s.duration_seconds) AS total_seconds ` +
+      `FROM ${DbConstants.TABLE_DAILY_STATS} s ` +
+      `LEFT JOIN ${DbConstants.TABLE_BOOK} b ON b.id = s.book_id ` +
+      `WHERE s.book_id <> ? ` +
+      `GROUP BY s.book_id HAVING SUM(s.duration_seconds) > 0 ` +
+      `ORDER BY total_seconds DESC, s.book_id ASC`,
+      [DbConstants.GLOBAL_STATS_BOOK_ID],
+      (rs: relationalStore.ResultSet) => {
+        const item: BookReadingRecord = {
+          bookId: rs.getLong(rs.getColumnIndex('book_id')),
+          title: rs.getString(rs.getColumnIndex('title')),
+          seconds: rs.getLong(rs.getColumnIndex('total_seconds'))
+        };
+        list.push(item);
+      });
+    return list;
   }
 }
