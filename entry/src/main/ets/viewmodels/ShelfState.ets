@@ -55,6 +55,14 @@ export class ShelfState {
 
   gridMode: boolean = true;
   sort: BookSort = BookSort.LAST_READ;
+  /**
+   * 书名搜索关键词（空串 = 不过滤）。
+   *
+   * ⚠️ 搜索是**纯内存过滤**，不查库：`entries` 已经是当前排序下的全量数据，
+   * 每敲一个字查一次库既慢（IO + 异步时序）也没有额外信息可拿。
+   * 过滤实现在 `BookShelfViewModel.applySearch()`，保持"排序/过滤都在 VM"的分层。
+   */
+  searchKeyword: string = '';
 
   /** 待用户确认的导入（编码探测完成、尚未入库）；null 表示没有 */
   pendingImport: ImportPreparation | null = null;
@@ -94,19 +102,5 @@ export class ShelfState {
     return !this.loading && !this.reparsing
       && this.books.length === 0 && this.groups.length === 0;
   }
-}
-
-/**
- * 书籍详情页状态对象。
- */
-@Observed
-export class BookDetailState {
-  book: Book | null = null;
-  loading: boolean = true;
-  error: string = '';
-  /** 是否检测到沙箱文件丢失 */
-  fileMissing: boolean = false;
-  /** 受影响的书签数量（重新分章前提示用） */
-  annotationCount: number = 0;
 }
 

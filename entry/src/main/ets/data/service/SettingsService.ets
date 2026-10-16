@@ -138,6 +138,8 @@ export class SettingsService {
     s.pageMode = this.getString(SettingsKeys.PAGE_MODE, s.pageMode);
     s.theme = this.getString(SettingsKeys.THEME, s.theme);
     s.brightness = this.getNumber(SettingsKeys.BRIGHTNESS, s.brightness);
+    s.volumeKeyPage = this.getBoolean(SettingsKeys.VOLUME_KEY_PAGE, s.volumeKeyPage);
+    s.keepScreenOn = this.getBoolean(SettingsKeys.KEEP_SCREEN_ON, s.keepScreenOn);
 
     s.gridMode = this.getBoolean(SettingsKeys.GRID_MODE, s.gridMode);
     s.bookSort = this.getString(SettingsKeys.BOOK_SORT, s.bookSort);
@@ -161,6 +163,8 @@ export class SettingsService {
     this.putString(SettingsKeys.PAGE_MODE, s.pageMode);
     this.putString(SettingsKeys.THEME, s.theme);
     this.putNumber(SettingsKeys.BRIGHTNESS, s.brightness);
+    this.putBoolean(SettingsKeys.VOLUME_KEY_PAGE, s.volumeKeyPage);
+    this.putBoolean(SettingsKeys.KEEP_SCREEN_ON, s.keepScreenOn);
 
     this.putBoolean(SettingsKeys.GRID_MODE, s.gridMode);
     this.putString(SettingsKeys.BOOK_SORT, s.bookSort);

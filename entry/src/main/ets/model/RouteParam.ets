@@ -5,14 +5,12 @@
  * 页面侧用 as 断言取回。统一在这里定义，避免各页面各写一个匿名对象。
  */
 export class RouteParam {
-  /** 目标书籍 id（详情页 / 阅读页 / 书签页 / 搜索页） */
+  /** 目标书籍 id（阅读页） */
   bookId: number = 0;
   /** 目标章节序号（0-based，阅读页可选） */
   chapterIndex: number = -1;
   /** 章内 UTF-16 偏移（阅读页可选） */
   offset: number = 0;
-  /** 搜索关键词（搜索页） */
-  keyword: string = '';
   /**
    * 目标分组 id（"选择书籍加入分组"页用）。
    *
@@ -50,7 +48,13 @@ export class RouteName {
    * 原因见该文件的说明（页面栈下标脆弱、`back` 不承诺传参）。
    */
   static readonly READER_CATALOG_PAGE: string = 'pages/ReaderCatalogPage';
-  static readonly BOOK_DETAIL_PAGE: string = 'pages/BookDetailPage';
+  /**
+   * ⚠️ 原 `BOOK_DETAIL_PAGE = 'pages/BookDetailPage'` **已删除**：
+   * 该页面从未存在（无文件、`main_pages.json` 未登记），常量与
+   * `BookDetailState`、`StatsService.bookDurationToday` 一样是零引用残留。
+   * 本文件 `:71` 的既有教训再次应验：指向空页面的路由常量比字符串更难发现是错的。
+   * 将来做详情页时，把页面、登记、常量**三件一起**加回来。
+   */
   /**
    * ⚠️ 原 `READING_RECORD_PAGE` **已删除**：阅读记录的内容已按用户要求
    * 整体搬进「统计」Tab 的最末一块
@@ -92,5 +96,4 @@ export class RouteName {
   static readonly GROUP_DETAIL_PAGE: string = 'pages/GroupDetailPage';
   /** 来源标识（放在 RouteParam.from 里，用于返回时的行为分支） */
   static readonly BOOK_SHELF: string = 'shelf';
-  static readonly BOOK_DETAIL: string = 'detail';
 }

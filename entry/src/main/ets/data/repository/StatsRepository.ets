@@ -132,14 +132,6 @@ export class StatsRepository {
     return days;
   }
 
-  /** 某本书某天的时长（秒） */
-  static async bookDurationOnDate(bookId: number, date: string): Promise<number> {
-    return db().queryNumber(
-      `SELECT IFNULL(SUM(duration_seconds), 0) FROM ${DbConstants.TABLE_DAILY_STATS} ` +
-      `WHERE book_id = ? AND date = ?`,
-      [bookId, date], 0);
-  }
-
   /** 每日时长明细（统计页折线/柱状图用） */
   static async listDailyRange(bookId: number, from: string, to: string): Promise<DailyStats[]> {
     const list: DailyStats[] = [];

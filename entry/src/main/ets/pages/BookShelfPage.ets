@@ -61,6 +61,14 @@ export struct BookShelfPage {
    * 会让"打开一个弹窗"也去驱动整个书架列表重绘。
    */
   @State private groupDialogVisible: boolean = false;
+  /**
+   * 书名搜索框是否展开。
+   *
+   * ⚠️ 纯视图状态（见 build 内搜索框的说明）：不进 `ShelfState`，
+   * 收起时**不清空关键词** —— 重新展开还在，用户切走再看一眼的需求是连续的。
+   * 只有清空（✕）才真正把列表恢复全量。
+   */
+  @State private searchVisible: boolean = false;
   /** 弹窗是"新建"还是"重命名"；重命名时用 `editingGroupId` 记住改的是哪一个 */
   @State private editingGroupId: number = -1;
   /** 重命名时输入框的初值 */
@@ -374,6 +382,58 @@ export struct BookShelfPage {
         top: AppTheme.GAP_M
       })
 
+      /**
+       * ②′ 书名搜索框（可折叠）。
+       *
+       * ⚠️ 默认收起、点放大镜展开：搜索是低频操作，常驻会挤占
+       * 标题行下方的黄金位置；展开后自动聚焦，收起时清空关键词，
+       * 让列表立刻恢复全量（无 IO，纯内存）。
+       *
+       * ⚠️ 用 `@State` 本地变量控制显隐，而不是塞进 `ShelfState`：
+       * "搜索框开没开"是**视图状态**，不影响任何数据，
+       * 放进状态对象会让人以为它参与刷新登记表那套机制。
+       */
+      if (this.searchVisible) {
+        Row({ space: AppTheme.GAP_S }) {
+          Image($r('app.media.search'))
+            .width(16)
+            .height(16)
+            .objectFit(ImageFit.Contain)
+            .fillColor(AppColor.textHint)
+
+          TextInput({
+            text: this.state.searchKeyword,
+            placeholder: '搜索书名或分组',
+          })
+            .fontSize(AppTheme.FONT_BODY)
+            .fontColor(AppColor.textPrimary)
+            .placeholderColor(AppColor.textHint)
+            .placeholderFont({ size: AppTheme.FONT_BODY })
+            .backgroundColor(Color.Transparent)
+            .padding(0)
+            .layoutWeight(1)
+            .defaultFocus(true)
+            .onChange((value: string) => {
+              this.vm.setSearchKeyword(value);
+            })
+
+          if (this.state.searchKeyword.length > 0) {
+            Text('✕')
+              .fontSize(AppTheme.FONT_BODY)
+              .fontColor(AppColor.textHint)
+              .padding({ left: 8, right: 2, top: 8, bottom: 8 })
+              .onClick(() => {
+                this.vm.setSearchKeyword('');
+              })
+          }
+        }
+        .width('100%')
+        .padding({ top: 6, bottom: 6, left: 12, right: 12 })
+        .margin({ top: AppTheme.GAP_M })
+        .border({ width: 1, color: AppColor.divider })
+        .borderRadius(AppTheme.CHIP_RADIUS + 3)
+      }
+
       // ③ 通栏发丝线（原②操作行已并入「更多」菜单，这一行直接顶上）
       Row()
         .width('100%')
@@ -468,7 +528,25 @@ export struct BookShelfPage {
    */
   @Builder
   buildBookList() {
-    if (this.state.gridMode) {
+    /**
+     * 搜索无结果态：**必须**在两种视图前判 ——
+     * 空的 `Grid`/`List` 渲染出来是一片空白，用户分不清
+     * "没有这本书"和"页面坏了"。
+     * ⚠️ 只看"过滤后为空 + 有关键词"：书架本来为空走的是上面的导入引导，
+     * 两者语义不同，不能共用一个空态。
+     */
+    if (this.state.entries.length === 0 && this.state.searchKeyword.trim().length > 0) {
+      Column({ space: AppTheme.GAP_M }) {
+        Text('没有找到匹配的书')
+          .fontSize(AppTheme.FONT_SUBTITLE)
+          .fontColor(AppColor.textSecondary)
+        Text(`换个关键词试试（当前：${this.state.searchKeyword.trim()}）`)
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(AppColor.textHint)
+      }
+      .width('100%')
+      .padding({ top: 80 })
+    } else if (this.state.gridMode) {
       Grid() {
         ForEach(this.state.entries, (entry: ShelfEntry) => {
           GridItem() {
@@ -690,6 +768,7 @@ export struct BookShelfPage {
   private showHeaderActionsMenu(): void {
     const actions: string[] = [
       this.state.gridMode ? '切换为列表' : '切换为网格',
+      '搜索书名',
       '排列',
       '新建分组',
       this.state.importing ? '正在导入…' : '导入 TXT'
@@ -702,6 +781,8 @@ export struct BookShelfPage {
       }
       if (picked === actions[0]) {
         this.vm.toggleGridMode();
+      } else if (picked === '搜索书名') {
+        this.searchVisible = true;
       } else if (picked === '排列') {
         this.showSortMenu();
       } else if (picked === '新建分组') {

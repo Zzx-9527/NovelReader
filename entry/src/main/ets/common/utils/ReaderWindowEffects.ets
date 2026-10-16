@@ -1,5 +1,6 @@
 import { window } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
+import { KeyCode, inputConsumer, KeyEvent } from '@kit.InputKit';
 import { Logger } from '../utils/Logger';
 import { LogTag } from '../constants/AppConstants';
 
@@ -49,5 +50,118 @@ export class ReaderWindowEffects {
       // 系统策略拒绝（省电模式等）属正常情况，不值得打扰用户
       Logger.warn(LogTag.READ, `设置亮度失败（可能被系统策略拒绝）: ${Logger.errText(e as Object)}`);
     }
+  }
+
+  /**
+   * 设置阅读时屏幕常亮。
+   *
+   * ⚠️ 离开阅读页必须传 `false` 恢复：常亮是**窗口属性**，
+   * 不恢复的话用户退到书架、甚至别的应用（若窗口共享）都保持常亮，
+   * 费电且违背"只在阅读时生效"的语义。
+   * 调用点在 `ReaderPage.aboutToDisappear`，与 `applyBrightness(-1)` 恢复亮度同一时机。
+   */
+  static async applyKeepScreenOn(context: common.Context, keepOn: boolean): Promise<void> {
+    try {
+      const win: window.Window = await window.getLastWindow(context);
+      await win.setWindowKeepScreenOn(keepOn);
+    } catch (e) {
+      Logger.warn(LogTag.READ, `设置常亮失败（可能被系统策略拒绝）: ${Logger.errText(e as Object)}`);
+    }
+  }
+
+  /**
+   * 注册音量键翻页监听，解析为注销函数（注册失败时解析为 null）。
+   *
+   * ## 为什么在窗口上拦截，而不是页面 `onKeyEvent`
+   *
+   * ArkUI 的 `onKeyEvent` 只在**焦点组件**上触发，而阅读页的焦点归属
+   * 会随"长按选中 / 弹窗 / 面板"漂移，监听会随机失效；
+   * `inputConsumer.on('keyPressed')` 是应用级的，不受焦点影响 —— 翻页这种
+   * "随时都要响应"的操作必须挂在应用级监听上。
+   *
+   * ## inputConsumer 代替 window.on('keyEvent')
+   *
+   * SDK 22 起 `window.on('keyEvent')` 已移除，改用 `inputConsumer.on('keyPressed')`。
+   * 优势：
+   *  - **能拦截系统音量调节**：订阅后系统不再弹出音量面板（旧方案做不到）；
+   *  - **不依赖 Window 对象**：省去 `getLastWindow` 异步取窗口的步骤。
+   *
+   * 方法签名保持 async 以便平滑替换调用方代码。
+   *
+   * 返回值：
+   *  - **null** = 注册失败，调用方按"未启用"处理（静默）；
+   *  - **注销函数** = 移除监听。**页面销毁时必须调用**，
+   *    否则重建后可能重复注册导致翻页响应多次。
+   *
+   * ⚠️ 回调里必须 try/catch：翻页方法内部若抛错，异常会沿系统回调
+   * 传播成未处理拒绝，表现为"按一次键之后再也不响应"。
+   *
+   * @param context 页面 Context（保留兼容，不再使用）
+   * @param onPrev 按"音量减"（向下翻，与阅读方向一致）
+   * @param onNext 按"音量加"（向上翻）
+   * @returns Promise；resolve 出注销函数（或 null = 未注册成功）
+   */
+  static async registerVolumeKeyPaging(context: common.Context,
+    onPrev: () => void, onNext: () => void): Promise<(() => void) | null> {
+    // 使用 inputConsumer 订阅音量键按下事件：
+    // - inputConsumer 拦截优先级高，能阻止系统音量调节面板弹出
+    // - 通过 action: 1（按下）过滤，松开（UP）不触发，避免一次按键翻两页
+    // - isRepeat: true 允许长按连续翻页
+    const nextHandler = (): void => {
+      try {
+        onNext();
+      } catch (e) {
+        Logger.error(LogTag.READ, `音量+翻页回调异常: ${Logger.errText(e as Object)}`);
+      }
+    };
+    const prevHandler = (): void => {
+      try {
+        onPrev();
+      } catch (e) {
+        Logger.error(LogTag.READ, `音量-翻页回调异常: ${Logger.errText(e as Object)}`);
+      }
+    };
+
+    let registeredUp = false;
+    let registeredDown = false;
+
+    try {
+      inputConsumer.on('keyPressed', {
+        key: KeyCode.KEYCODE_VOLUME_UP,
+        action: 1,
+        isRepeat: true,
+      }, nextHandler);
+      registeredUp = true;
+    } catch (e) {
+      Logger.warn(LogTag.READ, `音量+键订阅失败: ${Logger.errText(e as Object)}`);
+    }
+
+    try {
+      inputConsumer.on('keyPressed', {
+        key: KeyCode.KEYCODE_VOLUME_DOWN,
+        action: 1,
+        isRepeat: true,
+      }, prevHandler);
+      registeredDown = true;
+    } catch (e) {
+      Logger.warn(LogTag.READ, `音量-键订阅失败: ${Logger.errText(e as Object)}`);
+    }
+
+    if (!registeredUp && !registeredDown) {
+      return null;
+    }
+
+    return (): void => {
+      try {
+        if (registeredUp) {
+          inputConsumer.off('keyPressed', nextHandler);
+        }
+        if (registeredDown) {
+          inputConsumer.off('keyPressed', prevHandler);
+        }
+      } catch (e) {
+        Logger.warn(LogTag.READ, `音量键翻页注销失败: ${Logger.errText(e as Object)}`);
+      }
+    };
   }
 }

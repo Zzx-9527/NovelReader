@@ -152,28 +152,12 @@ export class GroupRepository {
     AppState.bumpGroup();
   }
 
-  static async updateSortOrder(groupId: number, sortOrder: number): Promise<void> {
-    await RdbHelper.ensureReady();
-    await db().getStore().executeSql(
-      `UPDATE ${DbConstants.TABLE_BOOK_GROUP} SET sort_order = ?, updated_at = ? WHERE id = ?`,
-      [sortOrder, Date.now(), groupId]);
-    AppState.bumpGroup();
-  }
-
-  /** 批量更新排序（拖拽排序后一次落库） */
-  static async updateSortOrders(groups: BookGroup[]): Promise<void> {
-    await RdbHelper.ensureReady();
-    const store = db().getStore();
-    await db().withTransaction<void>(async () => {
-      for (let i = 0; i < groups.length; i++) {
-        await store.executeSql(
-          `UPDATE ${DbConstants.TABLE_BOOK_GROUP} SET sort_order = ?, updated_at = ? WHERE id = ?`,
-          [i, Date.now(), groups[i].id]);
-      }
-    });
-    AppState.bumpGroup();
-    AppState.bumpBookshelf();
-  }
+  /**
+   * ⚠️ 原 `updateSortOrder` / `updateSortOrders` **已删除**（拖拽排序未做，
+   * 两者零调用）。`sort_order` 目前只由新建时的 `maxSortOrder()+1` 决定，
+   * 查询侧 `ORDER BY sort_order` 仍然正确。将来做分组拖拽排序时，
+   * 用"事务内按列表下标批量落库"的写法重建批量版即可（单行版不需要）。
+   */
 
   /** 某个分组下的书籍 id（含回收站中的书，确保全部解绑） */
   static async memberIds(groupId: number): Promise<number[]> {

@@ -1085,32 +1085,6 @@ export struct StatsPage {
     return Math.min(maxBarHeight, Math.max(6, Math.round(seconds / max * maxBarHeight)));
   }
 
-  // ══════════════════════════════════════════════ 书架与标注（本次新增区块）
-
-  /** 账目行的行内样式复用太散，抽成一个带参 @Builder **只收纯文本**（无行为） */
-  @Builder
-  ledgerRow(label: string, value: string) {
-    Row() {
-      Text(label)
-        .fontSize(13)
-        .fontColor(AppColor.textSecondary)
-        .layoutWeight(1)
-      Text(value)
-        .fontSize(19)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(AppColor.textPrimary)
-        .fontFeature(AppFont.TABULAR)
-    }
-    .width('100%')
-    .padding({ top: 14, bottom: 14 })
-    .alignItems(VerticalAlign.Bottom)
-    .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
-  }
-
-  // ⚠️ 「书架」「标注」两个区块已删除（用户要求）：
-  // ShelfOverview / AnnotationCounts 及其加载逻辑一并移除（StatsService 中的
-  // loadShelfOverview / loadAnnotationCounts 保留——以后要用随时能接回来）。
-
   // ══════════════════════════════════════════════ 阅读记录（本次从独立页搬入）
 
   /**

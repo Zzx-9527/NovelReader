@@ -65,7 +65,9 @@ export class BookShelfViewModel {
       await this.attachCoverBooks(groups);
       this.state.groups = groups;
       // 分组与书**混排**成一条数组（用户要求：分组就相当于一本书）
-      this.state.entries = BookShelfViewModel.buildEntries(groups, books, this.state.sort);
+      this.state.entries = BookShelfViewModel.applySearch(
+        BookShelfViewModel.buildEntries(groups, books, this.state.sort),
+        this.state.searchKeyword);
       const continueBook: Book | null = await BookRepository.getContinueReading();
       this.state.continueBook = continueBook;
       this.state.error = '';
@@ -253,6 +255,48 @@ export class BookShelfViewModel {
   async toggleGridMode(): Promise<void> {
     this.state.gridMode = !this.state.gridMode;
     SettingsService.getInstance().putBoolean(SettingsKeys.GRID_MODE, this.state.gridMode);
+  }
+
+  /**
+   * 按关键词过滤混排列表（书名 / 分组名包含即命中，大小写不敏感）。
+   *
+   * ⚠️ 纯内存过滤、不查库：`entries` 已是当前排序下的全量数据，
+   * 每敲一个字查一次库既慢（IO + 异步时序）也没有额外信息可拿。
+   *
+   * ⚠️ 空关键词直接原样返回（同一数组引用）：过滤为恒等操作时
+   * 生成新数组会让 `ForEach` 全部重建（key 相同但引用变了），
+   * 视觉上表现为列表闪一下。
+   *
+   * ⚠️ 大小写不敏感用 `toLowerCase` 双侧归一：英文书名搜索
+   * " abc" 命中 "ABC" 是用户预期；中文不受影响（大小写无关）。
+   */
+  private static applySearch(entries: ShelfEntry[], keyword: string): ShelfEntry[] {
+    const trimmed: string = keyword.trim().toLowerCase();
+    if (trimmed.length === 0) {
+      return entries;
+    }
+    const filtered: ShelfEntry[] = [];
+    for (const entry of entries) {
+      const name: string = entry.isGroup ? entry.group.name : entry.book.title;
+      if (name.toLowerCase().includes(trimmed)) {
+        filtered.push(entry);
+      }
+    }
+    return filtered;
+  }
+
+  /**
+   * 更新搜索关键词并重算列表（不查库）。
+   *
+   * ⚠️ 只重算 `entries`，不动 `books` / `groups`：它们是原始数据，
+   * 清空搜索框时要能**无 IO 恢复**全量列表 —— 若过滤时把原始数据也改了，
+   * 恢复就只能重新查库，搜索的轻量性就不成立了。
+   */
+  setSearchKeyword(keyword: string): void {
+    this.state.searchKeyword = keyword;
+    this.state.entries = BookShelfViewModel.applySearch(
+      BookShelfViewModel.buildEntries(this.state.groups, this.state.books, this.state.sort),
+      keyword);
   }
 
   /** 切换排序，并记住选择 */

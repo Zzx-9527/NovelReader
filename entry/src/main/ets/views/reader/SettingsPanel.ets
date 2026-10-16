@@ -98,6 +98,8 @@ export struct SettingsPanel {
     next.pageMode = s.pageMode;
     next.theme = s.theme;
     next.brightness = s.brightness;
+    next.keepScreenOn = s.keepScreenOn;
+    next.volumeKeyPage = s.volumeKeyPage;
     next.gridMode = s.gridMode;
     next.bookSort = s.bookSort;
     next.ttsSpeed = s.ttsSpeed;
@@ -162,6 +164,8 @@ export struct SettingsPanel {
            * 就在表达这个区别。
            */
           this.buildBrightnessRow()
+          this.buildKeepScreenOnRow()
+          this.buildVolumeKeyRow()
         }
         .width('100%')
         .padding({ bottom: AppTheme.GAP_L })
@@ -712,5 +716,144 @@ export struct SettingsPanel {
       return '';
     }
     return `${Math.round(this.settings.brightness * 100)}%`;
+  }
+
+  // ------------------------------------------------------------ 常亮 / 音量键
+
+  /**
+   * 「保持常亮」开关行。
+   *
+   * ⚠️ 与亮度同属**窗口级**设置（不重排正文），所以排在亮度之后；
+   * 样式沿用分段选择器（开 / 关），与「翻页方式」同一套写法 ——
+   * 本面板里"二选一"只有一种表达。
+   */
+  @Builder
+  buildKeepScreenOnRow() {
+    Column({ space: AppTheme.GAP_S }) {
+      Row() {
+        Text('保持常亮')
+          .fontSize(AppTheme.FONT_SUBTITLE)
+          .fontColor(this.theme.text)
+          .layoutWeight(1)
+
+        Text(this.settings.keepScreenOn ? '阅读时不熄屏' : '跟随系统')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.theme.secondary)
+      }
+      .width('100%')
+
+      Row() {
+        Text('开')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.keepScreenOn ? this.theme.bg : this.theme.secondary)
+          .backgroundColor(this.settings.keepScreenOn ? this.theme.text : Color.Transparent)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 7, bottom: 7 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (this.settings.keepScreenOn) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            next.keepScreenOn = true;
+            this.emit(next);
+          })
+
+        Text('关')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.keepScreenOn ? this.theme.secondary : this.theme.bg)
+          .backgroundColor(this.settings.keepScreenOn ? Color.Transparent : this.theme.text)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 7, bottom: 7 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (!this.settings.keepScreenOn) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            next.keepScreenOn = false;
+            this.emit(next);
+          })
+      }
+      .width('100%')
+      .padding(3)
+      .border({ width: 1, color: this.theme.secondary })
+      .borderRadius(AppTheme.CHIP_RADIUS + 3)
+      .backgroundColor(this.theme.barBg)
+    }
+    .width('100%')
+  }
+
+  /**
+   * 「音量键翻页」开关行。
+   *
+   * ⚠️ 标题旁必须带一句说明"音量同时会变"：按键无法阻止系统调音量
+   * （没有 API 撤销），不告知的话用户第一次按会觉得"坏了"。
+   * 把行为边界写在界面上，比让用户踩一遍再抱怨便宜。
+   */
+  @Builder
+  buildVolumeKeyRow() {
+    Column({ space: AppTheme.GAP_S }) {
+      Row() {
+        Text('音量键翻页')
+          .fontSize(AppTheme.FONT_SUBTITLE)
+          .fontColor(this.theme.text)
+          .layoutWeight(1)
+
+        Text(this.settings.volumeKeyPage ? '已开启' : '已关闭')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.theme.secondary)
+      }
+      .width('100%')
+
+      Text('音量+/- 上下翻页；按键仍会调整系统音量')
+        .fontSize(AppTheme.FONT_CAPTION)
+        .fontColor(this.theme.secondary)
+        .width('100%')
+
+      Row() {
+        Text('开')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.volumeKeyPage ? this.theme.bg : this.theme.secondary)
+          .backgroundColor(this.settings.volumeKeyPage ? this.theme.text : Color.Transparent)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 7, bottom: 7 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (this.settings.volumeKeyPage) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            next.volumeKeyPage = true;
+            this.emit(next);
+          })
+
+        Text('关')
+          .fontSize(AppTheme.FONT_CAPTION)
+          .fontColor(this.settings.volumeKeyPage ? this.theme.secondary : this.theme.bg)
+          .backgroundColor(this.settings.volumeKeyPage ? Color.Transparent : this.theme.text)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .padding({ top: 7, bottom: 7 })
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .onClick(() => {
+            if (!this.settings.volumeKeyPage) {
+              return;
+            }
+            const next: ReaderSettings = this.derive();
+            next.volumeKeyPage = false;
+            this.emit(next);
+          })
+      }
+      .width('100%')
+      .padding(3)
+      .border({ width: 1, color: this.theme.secondary })
+      .borderRadius(AppTheme.CHIP_RADIUS + 3)
+      .backgroundColor(this.theme.barBg)
+    }
+    .width('100%')
   }
 }

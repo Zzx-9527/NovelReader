@@ -58,6 +58,15 @@ export class SettingsKeys {
    */
   static readonly APP_THEME_MODE: string = 'app_theme_mode';
   static readonly BRIGHTNESS: string = 'brightness';
+  /**
+   * 音量键翻页（仅阅读页生效）。
+   *
+   * ⚠️ 与文档 5.6 的旧 key 清单对不上：设计文档列过 `volume_key_page`，
+   * 但代码里从未落地 —— 本次补全按同一命名写在这里。
+   */
+  static readonly VOLUME_KEY_PAGE: string = 'volume_key_page';
+  /** 阅读时保持屏幕常亮 */
+  static readonly KEEP_SCREEN_ON: string = 'keep_screen_on';
 
   // ---------------------------------------------------------------- 书架
   static readonly GRID_MODE: string = 'grid_mode';

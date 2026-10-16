@@ -165,6 +165,23 @@ struct ReaderPage {
    */
   private touchDownAt: number = 0;
   /**
+   * 音量键翻页监听的注销函数；null = 当前未注册。
+   *
+   * ⚠️ 不参与渲染，所以是普通成员而非 `@State`（改它不该触发 build）。
+   * 注册是异步的（要先取窗口），`onPageShow` 每次回来都会重建 ——
+   * 必须"先注销旧的、再注册新的"，否则监听叠加、一次按键翻两页。
+   */
+  private volumeKeyUnregister: (() => void) | null = null;
+  /**
+   * "已离开本页"标记：`aboutToDisappear` 置真。
+   *
+   * ⚠️ 为什么需要：音量键注册要先 `await getLastWindow()`，
+   * 用户若在这个空档退出了阅读页，注册完成时页面已销毁 ——
+   * 晚到的注销函数若不处理，就成了谁也收不走的泄漏监听。
+   * 离开路径置位后，注册回调看到该标记会**立即自我注销**。
+   */
+  private windowEffectsReset: boolean = false;
+  /**
    * 加书签弹窗的草稿（章节名 / 选文 / 备注）。
    *
    * 放在**页面**而不是 ViewModel 的 state 里：它是"一次交互的临时数据"，
@@ -275,11 +292,38 @@ struct ReaderPage {
   }
 
   aboutToDisappear(): void {
+    // ⚠️ 先置"已离开"标记，再注销音量键监听：
+    // 若注册回调还悬在半路（await 取窗口中），它看到标记会自我注销，
+    // 不会留下一个页面销毁后仍存活的窗口监听。
+    this.windowEffectsReset = true;
+    this.unregisterVolumeKeyPaging();
     // 必须释放：结算阅读时长 + 关闭文件句柄
     this.vm.close().then(() => {
       this.vm.dispose();
     }).catch(() => {
       this.vm.dispose();
+    });
+    // ⚠️ 必须恢复窗口级设置：常亮与手动亮度都是**窗口属性**，
+    // 不恢复的话退到书架后屏幕仍常亮、亮度仍停在手动值。
+    // 传"关闭常亮 + 跟随系统亮度"，让窗口回到无定制状态。
+    this.resetWindowEffects();
+  }
+
+  /**
+   * 恢复窗口级设置（常亮关、亮度交还系统）。
+   *
+   * ⚠️ 放在 `aboutToDisappear` 而不是 `onPageHide`：去目录页时页面还在栈里，
+   * 回来还会调 `onPageShow` 重新应用 —— 那个时机恢复只会让亮度闪一下；
+   * 页面销毁（返回书架）才是真正该交还控制权的时刻。
+   */
+  private resetWindowEffects(): void {
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) {
+      return;
+    }
+    ReaderWindowEffects.applyKeepScreenOn(context, false).catch(() => {
+    });
+    ReaderWindowEffects.applyBrightness(context, -1).catch(() => {
     });
   }
 
@@ -608,6 +652,7 @@ struct ReaderPage {
               // hideMenu 会连带收掉设置面板 —— 本地镜像同步，
               // 否则状态已 false 而 sheet 还开着（下次点"设置"没反应）
               this.sheetShow = false;
+              this.syncVolumeKeyPaging();
             })
 
           ReaderBottomBar({
@@ -659,6 +704,7 @@ struct ReaderPage {
               this.vm.setSettingsVisible(true);
               // 本地镜像同步拉起 sheet（bindSheet 的 isShow 读它）
               this.sheetShow = true;
+              this.syncVolumeKeyPaging();
             }
           })
           /**
@@ -726,6 +772,7 @@ struct ReaderPage {
           },
           onCancel: () => {
             this.vm.setBookmarkVisible(false);
+            this.syncVolumeKeyPaging();
           }
         })
       }
@@ -773,6 +820,7 @@ struct ReaderPage {
           this.vm.setSettingsVisible(false);
         }
         this.sheetShow = false;
+        this.syncVolumeKeyPaging();
       }
     })
   }
@@ -832,6 +880,7 @@ struct ReaderPage {
       onClose: () => {
         this.vm.setSettingsVisible(false);
         this.sheetShow = false;
+        this.syncVolumeKeyPaging();
       }
     })
   }
@@ -1071,6 +1120,106 @@ struct ReaderPage {
     ReaderWindowEffects.applyBrightness(context, settings.brightness).catch(() => {
       // 内部已记日志，这里只是把 Promise 收干净，避免未处理的拒绝
     });
+    ReaderWindowEffects.applyKeepScreenOn(context, settings.keepScreenOn).catch(() => {
+      // 同上：内部已记日志
+    });
+    // 音量键翻页：设置可能刚在面板里被改过，每次显示都按当前设置重建监听。
+    // 内部先注销旧的，避免叠加成"一次按键翻两页"。
+    this.applyVolumeKeyPaging(settings.volumeKeyPage);
+  }
+
+  /**
+   * 按当前开关重建音量键翻页监听。
+   *
+   * ⚠️ 必须**先注销再注册**：`inputConsumer.on('keyPressed')` 不去重，
+   * 重复注册（onPageShow 每次回来都跑）会让一次按键触发多次翻页。
+   * 注销函数存在 `volumeKeyUnregister`，注册前先调用并清空。
+   *
+   * ⚠️ 关闭开关时只注销、不注册：让"关掉设置"立即生效，不用等重启。
+   */
+  private applyVolumeKeyPaging(enabled: boolean): void {
+    // 先摘旧的（若有）
+    this.unregisterVolumeKeyPaging();
+    if (!enabled) {
+      return;
+    }
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) {
+      return;
+    }
+    ReaderWindowEffects.registerVolumeKeyPaging(
+      context,
+      (): void => {
+        // 音量减 = 上一页（与"左 1/3 屏"方向一致的直觉）
+        this.vm.prevPage();
+      },
+      (): void => {
+        // 音量加 = 下一页
+        this.vm.nextPage();
+      }
+    ).then((unregister: (() => void) | null) => {
+      // ⚠️ await 期间用户可能已离开本页（aboutToDisappear 已跑过）：
+      // 此时注销表已由离开路径处理过，这里若再存下注销函数，
+      // 这个晚到的注册就成了泄漏源 —— 检查"已离开"标记再决定收不收。
+      if (this.windowEffectsReset) {
+        if (unregister !== null) {
+          unregister();
+        }
+        return;
+      }
+      this.volumeKeyUnregister = unregister;
+      // 注册完成时菜单可能已经弹出来了（注册是异步的）：
+      // 按注册时的最新浮层状态决定要不要立刻挂起。
+      if (this.isOverlayShowing()) {
+        this.syncVolumeKeyPaging();
+      }
+    }).catch(() => {
+      // 内部已记日志
+    });
+  }
+
+  /**
+   * 浮层（菜单 / 设置面板 / 书签笔记弹窗）是否正开着。
+   *
+   * ⚠️ 判据必须与第 2 层翻页层的显隐条件**同源**：翻页层在浮层弹出时缺席，
+   * 音量键翻页作为"另一个翻页入口"必须同时让位 ——
+   * 两处判据不一致就会出现"屏幕上明明不能翻页、音量键却还在翻"的分裂。
+   */
+  private isOverlayShowing(): boolean {
+    return this.state.menuVisible || this.state.settingsVisible
+      || this.state.bookmarkVisible;
+  }
+
+  /**
+   * 浮层显隐变化后同步音量键监听（弹出 → 挂起；收起 → 恢复）。
+   *
+   * ## 为什么要挂起而不是继续翻页
+   *
+   * 菜单栏（上一章/下一章/进度条）弹出时，用户的意图是**操作**而不是阅读，
+   * 此时按音量键应当是**正常调音量**——这也是系统级的一致预期：
+   * 屏幕上出现了操作面板，按键就不该还干着阅读的事。
+   * `inputConsumer` 订阅期间系统音量面板本来就不弹，所以"挂起"必须真的
+   * 注销订阅（而不是回调里判空），音量键才能交还给系统。
+   *
+   * ⚠️ 幂等：反复调用安全。挂起 = 注销（内部判空）；恢复 = 按设置重建。
+   * ⚠️ 恢复走 `applyVolumeKeyPaging`（而不是直接注册）：它同时尊重
+   * 设置开关——用户在面板里顺手把音量键翻页关掉时，收起面板不会误恢复。
+   */
+  private syncVolumeKeyPaging(): void {
+    if (this.isOverlayShowing()) {
+      this.unregisterVolumeKeyPaging();
+    } else if (this.state.settings.volumeKeyPage && !this.windowEffectsReset) {
+      this.applyVolumeKeyPaging(true);
+    }
+  }
+
+  /** 注销音量键监听（幂等：没有注册时是空操作） */
+  private unregisterVolumeKeyPaging(): void {
+    if (this.volumeKeyUnregister !== null) {
+      const unregister: (() => void) | null = this.volumeKeyUnregister;
+      this.volumeKeyUnregister = null;
+      unregister();
+    }
   }
 
   /**
@@ -1262,6 +1411,7 @@ struct ReaderPage {
       this.vm.nextPage();
     } else {
       this.vm.toggleMenu();
+      this.syncVolumeKeyPaging();
     }
   }
 
@@ -1307,6 +1457,7 @@ struct ReaderPage {
     this.bookmarkDraft = this.vm.buildBookmarkDraft(startOriginal, endOriginal);
     this.annotationMode = 'bookmark';
     this.vm.setBookmarkVisible(true);
+    this.syncVolumeKeyPaging();
   }
 
   /**
@@ -1321,6 +1472,7 @@ struct ReaderPage {
     this.bookmarkDraft = this.vm.buildAnnotationDraft(startOriginal, endOriginal);
     this.annotationMode = 'note';
     this.vm.setBookmarkVisible(true);
+    this.syncVolumeKeyPaging();
   }
 
   /**
@@ -1349,6 +1501,7 @@ struct ReaderPage {
     this.bookmarkDraft.note = note;
     this.vm.saveBookmark(this.bookmarkDraft).then((result: BookmarkSaveResult) => {
       this.vm.setBookmarkVisible(false);
+      this.syncVolumeKeyPaging();
       if (!result.ok) {
         // ⚠️ 失败必须单独提示，否则用户以为存上了
         this.getUIContext().getPromptAction().showToast({ message: '书签保存失败' });
@@ -1376,6 +1529,7 @@ struct ReaderPage {
     const endOriginal: number = draft.endOffset >= 0 ? draft.endOffset : startOriginal;
     this.vm.addNote(startOriginal, endOriginal, note).then((id: number) => {
       this.vm.setBookmarkVisible(false);
+      this.syncVolumeKeyPaging();
       this.getUIContext().getPromptAction().showToast({
         message: id > 0 ? '已保存笔记' : '笔记保存失败'
       });
