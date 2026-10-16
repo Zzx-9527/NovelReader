@@ -177,6 +177,16 @@ export class AppConstants {
    */
   static readonly SCROLL_RESTORE_GIVEUP_MS: number = 1500;
   /**
+   * 滚动模式"滚停后晋升可见章"的防抖（ms）。
+   *
+   * ⚠️ 晋升 = 完整加载一章（解码 + 划线查询 + 窗口平移 + 布局重建），
+   * 几十毫秒级的重活。用户一屏滑过去可能连跨两章边界，
+   * 每次进入新章都立即晋升会把主线程打满、滚动卡顿。
+   * 滚停 250ms 后仍停在相邻章才真的换章 —— 观感无损失
+   * （预览文字已在视口里），性能却稳了。
+   */
+  static readonly SCROLL_PROMOTE_DEBOUNCE_MS: number = 250;
+  /**
    * 导入确认页"换编码重新解析"前让出主线程的延迟（ms）。
    *
    * ⚠️ 存在的理由：`ImportService.parseInto` 是**同步**的 CPU 密集操作

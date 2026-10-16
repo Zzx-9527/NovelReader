@@ -6,7 +6,7 @@ import { TextRun } from '../model/TextRun';
 import { ReadingPosition } from '../model/ReadingPosition';
 import { ReaderSettings } from '../model/ReaderSettings';
 import { PageCache } from '../model/PageCache';
-import { ReaderState, BookmarkSaveResult, BookmarkDraft } from './ReaderState';
+import { ReaderState, BookmarkSaveResult, BookmarkDraft, ScrollSection } from './ReaderState';
 import { AppState } from '../model/AppState';
 import { BookRepository } from '../data/repository/BookRepository';
 import { ChapterRepository } from '../data/repository/ChapterRepository';
@@ -48,6 +48,16 @@ const PLACEHOLDER_MAX_CHARS: number = 3000;
  * 用户既看不到原因也不知道怎么办。给一条明确提示远好于崩溃。
  */
 const MAX_CHAPTER_RENDER_CHARS: number = 200000;
+
+/**
+ * 滚动窗口里**相邻章预览块**的截断上限。
+ *
+ * ⚠️ 只影响预览，不影响当前章：预览块的职责是"让滚动流不断"，
+ * 用户真正滑进去时它会被晋升为当前章、完整加载（含超大章拦截）。
+ * 截断值取 5 万：远大于正常单章（几万字几乎不被截），
+ * 又足以挡住分章失败产生的巨型章把预览排版压死。
+ */
+const PREVIEW_MAX_CHARS: number = 50000;
 
 /**
  * 阅读页 ViewModel。
@@ -387,6 +397,8 @@ export class ReaderViewModel {
       // target >= 0 时说明是"恢复进度"触发的加载，定位到该偏移；否则停在章首
       this.renderAt(target >= 0 ? target : 0);
       this.progress?.updatePosition(chapterIndex, this.state.offset, this.computePercent());
+      // 滚动模式：当前章已就位，重建连续窗口（上一章 + 当前 + 下一章）
+      this.rebuildScrollWindow();
     } catch (e) {
       this.state.error = `加载章节失败：${Logger.errText(e as BusinessError)}`;
     } finally {
@@ -764,19 +776,123 @@ export class ReaderViewModel {
   }
 
   /**
-   * 章末自动衔接下一章（滚动模式用）。
+   * 重建滚动模式的**连续窗口**（上一章 + 当前章 + 下一章）。
    *
-   * 与 `nextChapter()` 的区别只有一处，但很关键：**静默加载**。
-   * 滚动模式读到章末时不该出现"正文消失 → 转圈 → 新正文"这一步 ——
-   * 那正是"不能无缝衔接"的观感来源。
+   * ## 语义：滚动模式不再是"一次一章"
    *
-   * @returns 是否真的切了章；没有下一章时返回 false，页面据此不再重试
+   * 三块正文铺在**同一股滚动流**里：向上滑能看到上一章的结尾，
+   * 越过章边界就直接滑进下一章的开头 —— 全程没有"换内容"的动作。
+   * 当前章只是窗口中间那块的**锚**：进度、书签、划线的坐标系始终锚在它上。
+   *
+   * ## 什么时候调
+   *
+   *  - 当前章加载完成（`loadChapter` 末尾，仅 scroll 模式）；
+   *  - 页面检测到视口进入相邻章（`promoteScrollWindow`）——
+   *    滑进下一章后它成为"当前章"，窗口随之平移，
+   *    前后各一块的预载保证继续滑永远有内容。
+   *
+   * ## 内存口径
+   *
+   * 常驻正文最多 3 章（正常单章几万字 ⇒ 约 15 万字符级别，完全可控）。
+   * 解码走 `ChapterReadService`（自带 LRU + 字节偏移随机读），
+   * 平移窗口通常**零 IO**（相邻章已在 LRU 里）。
+   *
+   * ⚠️ 相邻章**不做**超大章拒绝渲染那套拦截（那是给"当前章"的）：
+   * 预览块若异常庞大（分章失败的巨型章），截断到
+   * `PREVIEW_MAX_CHARS` 只保证不压死排版 —— 用户滑进去时
+   * `promoteScrollWindow` 会把它晋升为当前章，由 `loadChapter`
+   * 给出"分章可能失败"的正式错误提示。
+   *
+   * ⚠️ 整个数组一次性替换 + 代数自增：让 ForEach 键变化、
+   * 子组件重建 —— 复用旧实例会显示旧排版的内容。
    */
-  async continueToNextChapter(): Promise<boolean> {
-    if (this.state.loading || !this.state.hasNext) {
+  private rebuildScrollWindow(): void {
+    if (this.state.settings.pageMode !== 'scroll' || this.readService === null) {
+      return;
+    }
+    const currentIndex: number = this.state.chapterIndex;
+    if (currentIndex < 0 || currentIndex >= this.state.chapters.length) {
+      return;
+    }
+    const sections: ScrollSection[] = [];
+    // 上一章（存在才放）
+    if (currentIndex > 0) {
+      sections.push(this.buildScrollSection(currentIndex - 1, false));
+    }
+    // 当前章（中间锚点）
+    sections.push(this.buildScrollSection(currentIndex, true));
+    // 下一章（存在才放）
+    if (currentIndex < this.state.chapters.length - 1) {
+      sections.push(this.buildScrollSection(currentIndex + 1, false));
+    }
+    this.state.scrollSections = sections;
+    this.state.scrollWindowRev += 1;
+    Logger.info(LogTag.READ,
+      `滚动窗口重建: 当前=${currentIndex} 块数=${sections.length} 代=${this.state.scrollWindowRev}`);
+  }
+
+  /** 构建窗口里的一个章节块（解码 + 装饰；失败降级为空文本块） */
+  private buildScrollSection(chapterIndex: number, isCurrent: boolean): ScrollSection {
+    const section = new ScrollSection();
+    section.chapterIndex = chapterIndex;
+    section.isCurrent = isCurrent;
+    const chapter: Chapter = this.state.chapters[chapterIndex];
+    section.title = chapter.title;
+    try {
+      let text: string = this.readService!.decodeChapter(
+        chapter.startOffset, chapter.endOffset, null);
+      if (!isCurrent && text.length > PREVIEW_MAX_CHARS) {
+        // 预览块截断：它的职责只是"让连续滚动不断流"，
+        // 晋升为当前章时会有完整加载与超大章拦截
+        text = text.substring(0, PREVIEW_MAX_CHARS);
+      }
+      // 与 renderAt 的滚动分支同一套装饰（剥页首换行由标题块自然承担：
+      // 块首是标题不是正文，所以这里只需要补缩进）
+      section.decoratedText = ReaderViewModel.indentParagraphHeads(
+        text, this.state.settings.firstLineIndent, false);
+    } catch (e) {
+      // 解码失败：降级为空块 —— 窗口仍连续，用户滑过去看到"空白 + 标题"，
+      // 真正点进去（晋升为当前章）时 loadChapter 会给出正式错误
+      section.decoratedText = '';
+      Logger.warn(LogTag.READ,
+        `滚动窗口章节块解码失败: chapter=${chapterIndex} ${Logger.errText(e as Object)}`);
+    }
+    return section;
+  }
+
+  /**
+   * 滚动模式：视口进入相邻章时，把它**晋升为当前章**并平移窗口。
+   *
+   * 由页面在 `onScroll` 里检测"视口顶部落在哪一块"后调用。
+   *
+   * ⚠️ **这是滚动模式换章的唯一路径**（不再有"章末自动衔接"）：
+   * 晋升会完整走 `loadChapter`（恢复划线、提交进度、超大章拦截），
+   * 与从目录跳章是同一套语义 —— 用户滑进来的章和点进来的章，
+   * 在数据层面毫无区别。
+   *
+   * @returns 是否真的换了章；已在目标章时返回 false（页面无需做任何事）
+   */
+  async promoteScrollWindow(chapterIndex: number): Promise<boolean> {
+    if (chapterIndex === this.state.chapterIndex) {
       return false;
     }
-    await this.switchChapter(this.state.chapterIndex + 1, 0, true);
+    if (chapterIndex < 0 || chapterIndex >= this.state.chapters.length) {
+      return false;
+    }
+    if (this.readService === null || this.state.loading) {
+      return false;
+    }
+    /**
+     * ⚠️ **静默**加载 + 以章首为落点：
+     * 用户是"滑进来"的，视口已经停在目标章中间——
+     * `loadChapter` 完成后窗口平移，内容在**原来的滚动流**里替换，
+     * 页面负责用"块锚点"把视口钉回同一屏（见页面 `promoteTo` 的补偿逻辑）。
+     * 任何 loading 态的闪烁都会破坏"同一股滚动流"的观感。
+     */
+    await this.loadChapter(chapterIndex, true);
+    this.state.offset = 0;
+    this.commitPosition();
+    await this.progress?.flush(true);
     return true;
   }
 
@@ -884,6 +1000,30 @@ export class ReaderViewModel {
     }
     this.lastScrollReportAt = now;
     this.state.offset = offset;
+    this.commitPosition();
+  }
+
+  /**
+   * 滚动模式：按**可见章节**提交位置（连续滚动跨章时由页面调用）。
+   *
+   * ⚠️ 与 `reportScrollOffset` 的分工：那个报"当前章内的偏移"（坐标锚在当前章），
+   * 本方法报"用户看到的是哪一章"。滑过章边界时视口顶部的章会变，
+   * 底栏章节名与全书百分比必须跟着变 —— 但此时章内偏移是**未知的**
+   * （正文还没晋升/加载），所以偏移记 0（章首），等用户在该章内滚动时
+   * 由 `reportScrollOffset` 按真实滚动量覆盖。
+   *
+   * ⚠️ 只改"当前章锚点对应的展示值"，**不触发窗口晋升**：
+   * 晋升（`promoteScrollWindow`）是页面在用户**停止滚动**时才做的重活 ——
+   * 滑动过程中每帧都换章会把解码、划线查询、窗口平移全变成高频操作。
+   */
+  reportVisibleChapter(chapterIndex: number): void {
+    if (chapterIndex === this.state.chapterIndex
+      || chapterIndex < 0 || chapterIndex >= this.state.chapters.length) {
+      return;
+    }
+    this.state.chapterIndex = chapterIndex;
+    this.state.chapterTitle = this.state.chapters[chapterIndex].title;
+    this.state.offset = 0;
     this.commitPosition();
   }
 

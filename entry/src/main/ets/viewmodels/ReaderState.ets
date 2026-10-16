@@ -28,6 +28,28 @@ export class ReaderState {
   /** 实际渲染的文本：scroll 模式为整章，page 模式为当前页 */
   renderedText: string = '';
   /**
+   * 滚动模式的**连续窗口**：相邻章节的正文块列表（可含上一章 / 当前章 / 下一章）。
+   *
+   * ⚠️ 这是滚动模式的渲染数据源（页面 `ForEach` 遍历它），
+   * 与 `renderedText`（**当前章**的渲染文本）并存：
+   * 进度、书签、划线、选中换算的**坐标系锚在当前章**（`fullText`/`renderedText`），
+   * 窗口只是把相邻章的内容**铺在同一股滚动流里** ——
+   * 二者职责不同，不能合并：合并意味着换章时整个坐标系要搬家，
+   * 而选中/书签的偏移换算全都要跟着改。
+   *
+   * ⚠️ 整个数组**一次性替换**（不是原地改元素），确保 @Observed 观察得到。
+   */
+  scrollSections: ScrollSection[] = [];
+  /**
+   * 滚动窗口的**代数**：每次窗口平移（换当前章）+1。
+   *
+   * ⚠️ 页面 ForEach 的键生成要用它：仅用 chapterIndex 作键时，
+   * "窗口滑回来又看到同一章"会命中旧组件实例、显示**旧排版**的内容
+   * （ArkUI 复用实例、不重建子树）。代数一变，键就变，强制重建。
+   */
+  scrollWindowRev: number = 0;
+
+  /**
    * 当前章的**划线**（只含 `ANNOTATION_HIGHLIGHT`，不含书签与笔记）。
    *
    * ⚠️ 为什么正文里只画划线：书签是"一个位置"而不是"一段范围"，
@@ -182,4 +204,27 @@ export class ReaderRestoreInfo {
     info.percent = pos.percent;
     return info;
   }
+}
+
+/**
+ * 滚动模式连续窗口里的**一个章节块**（标题 + 已装饰正文）。
+ *
+ * ⚠️ `decoratedText` 是**渲染副本**（经 `indentParagraphHeads` 装饰），
+ * 与 `ReaderState.renderedText` 同一性质 —— 偏移换算一律走原文，
+ * 本类只负责"画什么"，不参与任何坐标计算。
+ *
+ * ⚠️ 划线**只对当前章生效**（`isCurrent` 为 true 的块由页面按
+ * `state.highlights` 分段渲染）；相邻章的划线不取 ——
+ * 它们在视口里只是"将读未读的预览"，为几十行预览多做一次 DB 查询
+ * 与一整套双游标对齐，代价大于收益。滑过去变成当前章时自然补上。
+ */
+export class ScrollSection {
+  /** 章节序号（全书 0-based） */
+  chapterIndex: number = -1;
+  /** 章节标题（目录同名；渲染成块头） */
+  title: string = '';
+  /** 已装饰的整章正文（渲染副本，勿回填原文） */
+  decoratedText: string = '';
+  /** 是否当前章（决定划线渲染与底栏章节名的口径） */
+  isCurrent: boolean = false;
 }

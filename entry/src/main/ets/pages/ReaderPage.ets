@@ -1,5 +1,5 @@
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
-import { ReaderState, BookmarkSaveResult, BookmarkDraft } from '../viewmodels/ReaderState';
+import { ReaderState, BookmarkSaveResult, BookmarkDraft, ScrollSection } from '../viewmodels/ReaderState';
 import { ReaderViewModel } from '../viewmodels/ReaderViewModel';
 import { ReaderJump, ReaderJumpRegistry } from '../viewmodels/ReaderJumpRegistry';
 import { RouteName, RouteParam } from '../model/RouteParam';
@@ -79,6 +79,25 @@ struct ReaderPage {
   private viewportHeight: number = 0;
   /** 自动衔接的冷却截止时间戳，见 `AppConstants.AUTO_CONTINUE_COOLDOWN_MS` */
   private autoContinueBlockedUntil: number = 0;
+  /**
+   * 滚动模式各章节块的**实测高度**（vp），键为章序号。
+   *
+   * ⚠️ "视口顶部落在哪一章"由这些值算出：按排版估算行数会随
+   * 空行/标题高度漂移，实测一次就准。窗口平移后键仍按**章序号**记 ——
+   * 章内容不变（只是窗口位置变）时高度是稳定的。
+   */
+  private sectionHeights: Map<number, number> = new Map();
+  /**
+   * 连续滚动中**视口顶部所在章**（最近一次上报给 VM 的值）。
+   * 与 `state.chapterIndex` 分开记：晋升是异步的，比较它才能知道
+   * "用户已滑到另一章"这个动作是否已处理完。
+   */
+  private visibleChapterIndex: number = -1;
+  /**
+   * "滚停后晋升可见章"的定时器 id；-1 = 无挂起的晋升。
+   * 快速滑动会连跨多个边界，每次进入新章都重置 —— 只有停够 250ms 才真的换章。
+   */
+  private promoteTimerId: number = -1;
   /**
    * 待恢复的**滚动位置**（章内原文偏移）；-1 表示无需恢复。
    *
@@ -1659,65 +1678,126 @@ struct ReaderPage {
     }
   }
 
+  /**
+   * 滚动模式：**一个章节块**（章间分隔 + 标题 + 整章正文）。
+   *
+   * ## 章间分隔（用户确认的视觉信号）
+   *
+   * 非第一块时先画"发丝线 + 空白"再进标题：滚动流是连续的，
+   * 没有分隔的话"上一章结尾"和"下一章标题"之间没有任何视觉断点，
+   * 用户分不清这是同一章的空行还是新的一章。分隔线只出现在**块与块之间**
+   * （章内段落之间不画），所以它天然是"章节边界"的专属信号。
+   *
+   * ## 划线只画在当前章
+   *
+   * 当前章走 `buildTextRuns`（`Span` 分段上底纹）；
+   * 相邻章是预览，直接整段一个 `Span`（数据源没有它们的划线，
+   * 见 `ScrollSection` 说明）——滑进去晋升为当前章后自然补上底纹。
+   *
+   * ⚠️ 当前章的正文 `Text` **与旧的滚动分支完全同一套属性**（字号/行高/
+   * 字距/缩进/选中/长按菜单），包括共用 `textController`——
+   * 同一时刻视口里虽然有多章，但**可选中**的只有当前章：
+   * 相邻章不开 `copyOption`，就没有参与触摸竞争的资格，
+   * `parallelGesture` 的单击也不会被它们吃掉。
+   */
+  @Builder
+  buildScrollSection(section: ScrollSection) {
+    Column() {
+      // 章间分隔线（第一块上面不画：它上面要么是屏幕顶、要么无上一章）
+      if (section.chapterIndex > 0) {
+        Row()
+          .width('100%')
+          .height(AppTheme.HAIRLINE)
+          .backgroundColor(this.theme().secondary)
+          .opacity(AppTheme.READER_RULE_ALPHA)
+          .margin({ top: AppTheme.GAP_L * 2, bottom: AppTheme.GAP_L * 2 })
+      }
+
+      // 章节标题（复用与分页模式同一套标题样式）
+      Text(section.title.length > 0 ? section.title : `第 ${section.chapterIndex + 1} 章`)
+        .fontSize(this.state.settings.fontSize + AppTheme.SIZE_STEP)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.theme().text)
+        .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
+        .letterSpacing(AppTheme.TRACK_CHAPTER)
+        .lineHeight(this.headingLineHeight())
+        .maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+        .padding({ top: AppTheme.GAP_S, bottom: AppTheme.GAP_M })
+
+      // 正文
+      // ⚠️ 选项参数必须是**确定类型**的值：条件表达式 `cond ? {...} : undefined`
+      // 会被 arkts-no-untyped-obj-literals 拒绝（对象字面量没有类型注解）。
+      // 两个分支各写一个完整的 `Text`（互斥 if），类型与样式各自完整 ——
+      // 这也是本项目处理"同形不同配置"的标准做法（交替渲染、不共用节点）。
+      if (section.isCurrent) {
+        Text('', { controller: this.textController }) {
+          ForEach(this.buildTextRuns(), (run: TextRun) => {
+            if (run.highlighted) {
+              Span(run.text)
+                .textBackgroundStyle(AppTheme.highlightSpanStyle())
+            } else {
+              Span(run.text)
+            }
+          }, (run: TextRun, index: number) => `s${index}_${run.highlighted}_${run.text.length}`)
+        }
+          .fontSize(this.state.settings.fontSize)
+          .fontColor(this.theme().text)
+          .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
+          .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
+          .letterSpacing(this.state.settings.letterSpacing)
+          .textIndent(0)
+          .width('100%')
+          .copyOption(CopyOptions.InApp)
+          .editMenuOptions(this.buildTextEditMenu())
+          .selection(this.selStart, this.selEnd)
+          .onTextSelectionChange((start: number, end: number) => {
+            this.hasSelection = end > start;
+            this.selStart = start;
+            this.selEnd = end;
+          })
+      } else {
+        Text() {
+          Span(section.decoratedText)
+        }
+          .fontSize(this.state.settings.fontSize)
+          .fontColor(this.theme().text)
+          .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
+          .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
+          .letterSpacing(this.state.settings.letterSpacing)
+          .textIndent(0)
+          .width('100%')
+      }
+    }
+    .width('100%')
+    // 记录每块的实际高度：视口顶部落在哪一章由这些实测值算出
+    // （估算行数会随空行/标题高度漂移，实测一次就准）
+    .onAreaChange((oldArea: Area, newArea: Area) => {
+      this.recordSectionHeight(section.chapterIndex, Number(newArea.height));
+    })
+  }
+
   @Builder
   buildReaderBody() {
     if (this.state.settings.pageMode === 'scroll') {
-      // 滚动模式：标题 + 整章正文在一个可滚动容器里，标题跟着滚走
+      // 滚动模式：**连续窗口**——上一章 + 当前章 + 下一章铺在同一股滚动流里，
+      // 向上滑能看到上一章结尾、越过边界直接滑进下一章，全程无"换内容"。
       Scroll(this.scroller) {
         Column() {
-          this.buildChapterHeading()
-          /**
-           * 正文：与分页模式**同一套 `Span` 渲染**（理由见 `buildReaderBody` 分页分支的说明：
-           * `measureTextSize` 不接受 `StyledString`，只有 `Span` 能不破坏
-           * "测量与渲染同源"）。
-           *
-           * ⚠️ 滚动模式的 `renderedText` 是**整章**，分页模式是**当前页** ——
-           * 两者共用 `buildTextRuns`：它在 `pageRawStart()` 里已经分了这两种情况
-           * （scroll 返回 0，即"整章都是本页"），所以这里不需要任何额外分支。
-           */
-          Text('', { controller: this.textController }) {
-            ForEach(this.buildTextRuns(), (run: TextRun) => {
-              if (run.highlighted) {
-                Span(run.text)
-                  .textBackgroundStyle(AppTheme.highlightSpanStyle())
-              } else {
-                Span(run.text)
-              }
-            }, (run: TextRun, index: number) => `s${index}_${run.highlighted}_${run.text.length}`)
-          }
-            .fontSize(this.state.settings.fontSize)
-            .fontColor(this.theme().text)
-            // 字体与分页测量同源（见 ReaderSettings.resolveFontFamily）——
-            // 缺了这一行，分页按设置字体量、渲染却用系统字体，会溢出/裁行
-            .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
-            .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
-            .letterSpacing(this.state.settings.letterSpacing)
-            // 同 paged 模式：缩进一律由文本承担，`textIndent` 恒为 0。
-            // 滚动模式的 `renderedText` 是整章，VM 在 `renderAt` 的
-            // scroll 分支里也会走 `indentParagraphHeads`。
-            .textIndent(0)
-            .width('100%')
-            // 与分页模式一致：允许长按选中，并在系统菜单里加"书签"
-            .copyOption(CopyOptions.InApp)
-            .editMenuOptions(this.buildTextEditMenu())
-            // 选区端点：如实回填当前选区，取消时压成 (0,0)（见字段说明）
-            .selection(this.selStart, this.selEnd)
-            // 跟踪"是否有选中"：有选中时第一次点击只取消选择（见 handleReaderTap）
-            .onTextSelectionChange((start: number, end: number) => {
-              this.hasSelection = end > start;
-              // ⚠️ 只在真正有选中时回填：`(0,0)` 是我们主动取消时设的，
-              // 系统随后的回调若也报 (0,0) 再回填一次是无害的幂等操作
-              this.selStart = start;
-              this.selEnd = end;
-            })
+          ForEach(this.state.scrollSections, (section: ScrollSection) => {
+            this.buildScrollSection(section)
+          }, (section: ScrollSection) =>
+            // ⚠️ 键必须带窗口代数：窗口平移时同一章会以"新内容"重新入列，
+            // 复用旧实例会显示旧排版（代数变了键就变，强制重建）
+            `sec_${this.state.scrollWindowRev}_${section.chapterIndex}`)
         }
         .width('100%')
         // ⚠️ 左右页边距必须**真的**加在渲染上，否则与分页算的宽度对不上：
         // 分页按"容器宽度 − 2×pageMargin"算每行字数，渲染却铺满全宽，
         // 结果每行实际能放更多字 ⇒ 每页末尾被裁掉几行。
         .padding({ left: this.state.settings.pageMargin, right: this.state.settings.pageMargin })
-        // 量的是"标题 + 正文"的**内容总高度**：判断是否滚到章末时
-        // 标题占的高度也算在内，否则会提前一行触发自动衔接
+        // 量的是"全部章节块"的**内容总高度**：滚动上限判断、位置恢复都要它
         .onAreaChange((oldArea: Area, newArea: Area) => {
           this.onScrollContentChange(newArea);
         })
@@ -1728,7 +1808,7 @@ struct ReaderPage {
       // 一旦以后在正文之上再放常驻元素（页眉/工具栏），"元素 + 100%"就会溢出屏幕，
       // Scroll 底部一段永远滚不到。layoutWeight 取的是真正的剩余空间。
       .layoutWeight(1)
-      // 量出可视高度：判断"这一章能不能滚""是否已滚到章末"都要它
+      // 量出可视高度：判断"能不能滚"、视口顶部落在哪一章都要它
       .onAreaChange((oldArea: Area, newArea: Area) => {
         this.viewportHeight = Number(newArea.height);
         /**
@@ -2037,52 +2117,147 @@ struct ReaderPage {
     }
     // 绝对偏移：与章末判断同源，唯一可信来源
     const absoluteY: number = this.scroller.currentOffset().yOffset;
-    // 用滚动量估算当前字符偏移：行高与每行字数都由字号推出
+    this.handleContinuousScroll(absoluteY);
+
+    // 章内偏移上报：只有当视口顶部在**当前章块**内时才按滚动量换算；
+    // 落在相邻章块时偏移属于别的坐标系，交给 handleContinuousScroll 的
+    // 可见章上报（reportVisibleChapter）处理。
+    const currentTop: number = this.sectionTop(this.state.chapterIndex);
     const lineHeight: number = Math.max(1,
       this.state.settings.fontSize * this.state.settings.lineHeight);
-    // ⚠️ 每行字数走 charsPerLineEstimate()：恢复滚动位置用的是同一个算法，
-    // 两处各写一份的话"存进去的偏移"和"滚出来的位置"会悄悄错开
     const charsPerLine: number = this.charsPerLineEstimate();
-    const lines: number = Math.floor(absoluteY / lineHeight);
-    this.vm.reportScrollOffset(lines * charsPerLine);
-
-    if (this.shouldContinueToNextChapter()) {
-      // 先上锁再切章：切章过程中还会到达若干次滚动回调，
-      // 此时"到底了没"用的仍是旧内容的高度，不锁就会连跳好几章
-      this.autoContinueBlockedUntil = Date.now() + AppConstants.AUTO_CONTINUE_COOLDOWN_MS;
-      // 接住 Promise：不接的话衔接失败会被完全静默吞掉（设计文档第 26 条）
-      this.continueToNextChapter().catch((e: Object) => {
-        Logger.error(LogTag.READ, `章末自动衔接失败: ${Logger.errText(e)}`);
-      });
+    if (absoluteY >= currentTop) {
+      const withinY: number = absoluteY - currentTop;
+      const lines: number = Math.floor(withinY / lineHeight);
+      this.vm.reportScrollOffset(lines * charsPerLine);
     }
-  }
-
-  /** 是否已滚到章末，该自动衔接下一章了 */
-  private shouldContinueToNextChapter(): boolean {
-    if (Date.now() < this.autoContinueBlockedUntil
-      || this.state.loading || !this.state.hasNext) {
-      return false;
-    }
-    // ⚠️ 先判断"这一章到底能不能滚"：
-    // 章节短到一屏放得下时 `scrollContentHeight <= viewportHeight`，
-    // 滚动条本来就在底部 —— 少了这一句就会"短章无限自动连跳"直到全书末尾。
-    if (this.viewportHeight <= 0 || this.scrollContentHeight <= this.viewportHeight + 1) {
-      return false;
-    }
-    const y: number = this.scroller.currentOffset().yOffset;
-    return y + this.viewportHeight >= this.scrollContentHeight - 2;
   }
 
   /**
-   * 无缝衔接：静默加载下一章，并把正文滚回顶部。
+   * 连续滚动：算出**视口顶部落在哪一章**，分两路处理。
    *
-   * 滚回顶部这步不能省：内容换了但滚动位置还停在上一章的 max 处，
-   * 新章会直接从末尾开始显示 —— 那就不是"衔接"而是"跳章"了。
+   * ## 两路的分工
+   *
+   *  - 视口仍在当前章 → 什么都不做（章内偏移由调用方按滚动量上报）；
+   *  - 视口进入相邻章 → **展示值即时跟随**（`reportVisibleChapter`，
+   *    底栏章节名/百分比立刻变），**晋升延后**到滚动停止（`setTimeout` 防抖）。
+   *
+   * ## 为什么晋升要防抖
+   *
+   * 晋升 = 完整加载一章（解码 + 划线查询 + 窗口平移 + 布局重建），
+   * 是几十毫秒级的重活。用户一屏滑过去可能连跨两章边界，
+   * 每帧都晋升会把主线程打满、滚动直接卡顿。而"停下来了才晋升"
+   * 在观感上无损失：预览块已经在视口里了，用户看到的文字是连续的。
    */
-  private async continueToNextChapter(): Promise<void> {
-    const switched: boolean = await this.vm.continueToNextChapter();
-    if (switched) {
-      this.scroller.scrollEdge(Edge.Top);
+  private handleContinuousScroll(absoluteY: number): void {
+    // 程序化滚动冷却期内不检测跨章：恢复位置/跳章的滚动不是用户跨章
+    if (Date.now() < this.autoContinueBlockedUntil) {
+      return;
+    }
+    const target: number = this.chapterAtViewportTop(absoluteY);
+    if (target < 0 || target === this.visibleChapterIndex) {
+      return;
+    }
+    const previous: number = this.visibleChapterIndex;
+    this.visibleChapterIndex = target;
+    // 展示值即时跟随（章节名/百分比），不触发任何加载
+    this.vm.reportVisibleChapter(target);
+    if (previous >= 0 && previous !== target) {
+      // 防抖晋升：滚停 250ms 后仍停在相邻章，才真正换当前章
+      if (this.promoteTimerId >= 0) {
+        clearTimeout(this.promoteTimerId);
+      }
+      this.promoteTimerId = setTimeout(() => {
+        this.promoteTimerId = -1;
+        this.promoteToVisibleChapter().catch((e: Object) => {
+          Logger.error(LogTag.READ, `晋升可见章失败: ${Logger.errText(e)}`);
+        });
+      }, AppConstants.SCROLL_PROMOTE_DEBOUNCE_MS);
+    }
+  }
+
+  /**
+   * 滚停后把**视口所在章**晋升为当前章，并把视口钉回同一屏。
+   *
+   * ## 锚定补偿（本方法的关键）
+   *
+   * 晋升会重建窗口：旧的三块（…上一章/当前章/下一章…）换成
+   * 以新章为中心的三块。新章从"中间块"变成了"上一章块"，
+   * 它在滚动流里的**起点位置变了** —— 不补偿的话，视口会突然跳到别处，
+   * 用户看到内容"闪跳"，连续滚动的意义就没了。
+   *
+   * 补偿算法：
+   * ```
+   * 晋升前：prevY = 视口 y，preTop = 新章块的起点（窗口平移前）
+   * 晋升后：newTop = 同一块的新起点（窗口平移后）
+   * scrollTo(prevY - preTop + newTop)
+   * ```
+   * 差值修正后视口指向**同一块内容的同一位置** —— 屏幕上的字纹丝不动，
+   * 只有底栏的章节名变了。
+   */
+  private async promoteToVisibleChapter(): Promise<void> {
+    const target: number = this.visibleChapterIndex;
+    if (target < 0 || target === this.state.chapterIndex) {
+      return;
+    }
+    const prevY: number = this.scroller.currentOffset().yOffset;
+    const preTop: number = this.sectionTop(target);
+    const switched: boolean = await this.vm.promoteScrollWindow(target);
+    if (!switched) {
+      return;
+    }
+    this.visibleChapterIndex = target;
+    /**
+     * ⚠️ 新块高度**此刻还量不出来**（布局未发生），不能等它：
+     * 但 `sectionTop` 用的是**已记录**的实测高度——同一章的内容没变，
+     * 高度不变，所以 preTop/newTop 都可信。
+     * 窗口平移只改变"各块的排布顺序"，不改变"每块自己多高"。
+     */
+    const newTop: number = this.sectionTop(target);
+    this.armAutoContinueCooldown();
+    this.scroller.scrollTo({ xOffset: 0, yOffset: Math.max(0, prevY - preTop + newTop) });
+  }
+
+  /** 视口顶部（绝对 y）落在哪个章节块；-1 = 无法判断（高度未就绪） */
+  private chapterAtViewportTop(y: number): number {
+    const sections: ScrollSection[] = this.state.scrollSections;
+    if (sections.length === 0) {
+      return -1;
+    }
+    let acc: number = 0;
+    for (const section of sections) {
+      const h: number = this.sectionHeights.get(section.chapterIndex) ?? 0;
+      // 高度未量出的块按"落在其中"处理（首帧），
+      // 否则首帧会全部判到第一块
+      if (y < acc + (h > 0 ? h : 1)) {
+        return section.chapterIndex;
+      }
+      acc += h;
+      if (h <= 0) {
+        // 没量过高度的块给一个保守的屏高估计，避免累计全 0
+        acc += this.viewportHeight;
+      }
+    }
+    return sections[sections.length - 1].chapterIndex;
+  }
+
+  /** 某章块在滚动内容中的起点 y（按实测高度累加；未量出的块按屏高估） */
+  private sectionTop(chapterIndex: number): number {
+    let acc: number = 0;
+    for (const section of this.state.scrollSections) {
+      if (section.chapterIndex === chapterIndex) {
+        return acc;
+      }
+      const h: number = this.sectionHeights.get(section.chapterIndex) ?? 0;
+      acc += h > 0 ? h : this.viewportHeight;
+    }
+    return acc;
+  }
+
+  /** 记录章节块实测高度（onAreaChange 回调） */
+  private recordSectionHeight(chapterIndex: number, height: number): void {
+    if (height > 0) {
+      this.sectionHeights.set(chapterIndex, height);
     }
   }
 
@@ -2158,26 +2333,13 @@ struct ReaderPage {
   }
 
   /**
-   * 滚动模式：换章后把滚动位置对齐到新内容。
+   * 滚动模式：**主动跳章**（目录/进度条/上一章/下一章按钮）后对齐滚动位置。
    *
-   * ⚠️ 为什么必须有它（本项目实测的进度写坏路径）：
-   * 滚动模式下正文是**整章一个 `Text`**，换章后 `Scroll` 的偏移**不会自动归零** ——
-   * 内容换了，滚动位置还停在上一章的 `y` 处。此时框架会触发 `onScroll`，
-   * 而 `onReaderScroll` 会把那个残留的 `y` 按**新章的排版**换算成章内偏移上报，
-   * 于是：
-   *   - 视图上"跳到新章却停在中间/末尾"；
-   *   - 进度被写成一个凭空的、偏大的偏移（`ProgressService` 随即落库）。
+   * ⚠️ 与连续滚动的"晋升"是两条路：这里是**用户明确要求跳章**，
+   * 目标是"新章的章首"，所以滚到新章块的起点（不再有上一章在它上面）；
+   * 而连续滚动里的晋升要求"视口纹丝不动"（锚定补偿）。
    *
-   * 所以换章后必须显式回顶，**不能指望滚动容器自己回顶**。
-   * （此路径现在只在**分页/目录跳章**等真正重载内容的场景触发；
-   * 滚动模式的连续阅读已改为三段布局 + 内存晋升，不再走这里。）
-   *
-   * ⚠️ **一律回顶**，不再有"回到底部"的分支：换章的目标现在统一是章首
-   * （「上一章」也改成落到章首了，见 `ReaderViewModel.prevChapter`）。
-   * 这同时去掉了一个隐患 —— `scrollEdge(Edge.Bottom)` 会让位置贴近章末，
-   * 被 `shouldContinueToNextChapter()` 判成"读完了"而自动跳下一章。
-   *
-   * ⚠️ 同时清掉 `scrollRestoreOffset`：它可能还挂着打开时那次恢复的目标，
+   * ⚠️ 清掉 `scrollRestoreOffset`：它可能还挂着打开时那次恢复的目标，
    * 不清就会在这次换章之后又被滚一次（用户会看到"跳过去又被拽走"）。
    */
   private resetScrollAfterChapterChange(): void {
@@ -2186,23 +2348,24 @@ struct ReaderPage {
     }
     this.scrollRestoreOffset = -1;
     this.scrollRestoreRequestedAt = 0;
+    this.visibleChapterIndex = this.state.chapterIndex;
     /**
-     * ⚠️ 先上冷却锁再滚：程序化滚动同样会触发 `onScroll`，
-     * 而"滚到顶部"虽然离章末很远，但**上一章的残留位置**可能恰好接近新内容的
-     * 章末（内容换了、偏移没换），那一下仍可能被误判成"读完了"。
-     * 上锁的代价可忽略，却能杜绝"换章后莫名跳到再下一章"。
+     * ⚠️ 先上冷却锁再滚：程序化滚动同样会触发 `onScroll`。
+     * 冷却锁现在防的是"滚停防抖晋升被旧位置的残留回调误触发"。
      */
     this.armAutoContinueCooldown();
-    this.scroller.scrollEdge(Edge.Top);
+    // 滚到**当前章块的起点**（窗口含上一章时不是 0）
+    const targetTop: number = this.sectionTop(this.state.chapterIndex);
+    this.scroller.scrollTo({ xOffset: 0, yOffset: Math.max(0, targetTop) });
   }
 
   /**
-   * 给"章末自动衔接"上冷却锁。
+   * 程序化滚动后的冷却锁。
    *
    * ⚠️ 凡是**我们主动改变滚动位置**的地方都要先上锁：
-   * 滚动位置的改变会触发 `onScroll`，而 `shouldContinueToNextChapter()`
-   * 只看"当前滚动位置 + 内容高度" —— 它分不清"用户自己滑到底"与
-   * "我们程序化滚到底"。不上锁，程序化滚到章末就会被当成"读完了"而跳章。
+   * 程序化 `scrollTo` 同样会触发 `onScroll`，其中的"视口跨章检测"
+   * （`handleContinuousScroll`）分不清"用户滑过边界"与"程序滚动路过边界" ——
+   * 不上锁，恢复位置/跳章的滚动会被当成用户跨章，触发一次多余的晋升。
    */
   private armAutoContinueCooldown(): void {
     this.autoContinueBlockedUntil = Date.now() + AppConstants.AUTO_CONTINUE_COOLDOWN_MS;
@@ -2256,6 +2419,9 @@ struct ReaderPage {
     if (this.state.settings.pageMode !== 'scroll') {
       return;
     }
+    // 重排（改字号/行距/边距/刷新）会改变每章块的高度 ——
+    // 旧的实测高度全部作废，不清的话"视口落在哪章"会按旧高度算错
+    this.sectionHeights.clear();
     this.requestScrollRestore(this.state.offset);
     this.scheduleScrollRestore();
   }
@@ -2333,11 +2499,18 @@ struct ReaderPage {
       this.state.settings.fontSize * this.state.settings.lineHeight);
     const charsPerLine: number = this.charsPerLineEstimate();
     const lines: number = Math.round(offset / charsPerLine);
-    if (lines <= 0) {
-      // 章首：本来就在顶部，不需要滚（也避免触发一次无意义的滚动回调）
+    /**
+     * 目标 y = **当前章块的起点** + 章内偏移换算出的行数。
+     * ⚠️ 连续窗口下当前章不在滚动流顶部（上面可能有上一章），
+     * 必须加上块起点；窗口不含上一章（第 0 章或刚跳章）时 sectionTop 为 0，
+     * 与旧行为一致。
+     */
+    const sectionTop: number = this.sectionTop(this.state.chapterIndex);
+    if (lines <= 0 && sectionTop <= 0) {
+      // 章首且无上一章：本来就在顶部，不需要滚（也避免触发一次无意义的滚动回调）
       return;
     }
-    const targetY: number = lines * lineHeight;
+    const targetY: number = sectionTop + lines * lineHeight;
     /**
      * ⚠️ 先上冷却锁再滚：程序化滚动会触发 `onScroll`，而"恢复到一个靠近章末的
      * 位置"（续读恰好读到章尾、或点了一个靠后的书签）与"用户自己滑到底"
