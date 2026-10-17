@@ -102,7 +102,12 @@ export class GroupRepository {
     return group;
   }
 
-  /** 已删除的分组（供回收站清理） */
+  /**
+   * 已删除的分组（供回收站清理）。
+   *
+   * ⚠️ **刻意保留但暂无调用者**（不要顺手删）：分组回收站 UI 未做；
+   * "已删除的分组 + 组内书"的彻底清理目前靠 `wipeAll` 整库清空承担。
+   */
   static async listDeleted(): Promise<BookGroup[]> {
     const list: BookGroup[] = [];
     await db().query(

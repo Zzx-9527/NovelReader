@@ -3,7 +3,7 @@ import { ReaderState, BookmarkSaveResult, BookmarkDraft, ScrollSection } from '.
 import { ReaderViewModel } from '../viewmodels/ReaderViewModel';
 import { ReaderJump, ReaderJumpRegistry } from '../viewmodels/ReaderJumpRegistry';
 import { RouteName, RouteParam } from '../model/RouteParam';
-import { AppColor, AppTheme, ReaderTheme } from '../common/theme/AppTheme';
+import { AppTheme, ReaderTheme } from '../common/theme/AppTheme';
 import { AppFont } from '../common/theme/AppFont';
 import { Logger } from '../common/utils/Logger';
 import { AppConstants, LogTag } from '../common/constants/AppConstants';
@@ -2113,9 +2113,9 @@ struct ReaderPage {
    * 早期实现直接拿它当绝对偏移换算章内进度，于是每帧算出的都是
    * 几 vp 对应的一行半行 ⇒ 存进库的偏移几乎恒为 0 ⇒ 续读永远回到章首。
    *
-   * 判据：**同一个量只允许有一个真相来源**。本项目早已在章末判断里
-   * 用 `currentOffset()` 拿绝对偏移（见 `shouldContinueToNextChapter`），
-   * 进度上报却仍在用回调参数 —— 两处口径不一致，正是设计文档第 28 条
+   * 判据：**同一个量只允许有一个真相来源**。本项目早已在跨章检测里
+   * 用 `currentOffset()` 拿绝对偏移，进度上报却仍在用回调参数 ——
+   * 两处口径不一致，正是设计文档第 28 条
    * 那类"同一件事两处实现"的坑。现在统一到 `currentOffset()`。
    *
    * ⚠️ **不接收 `onScroll` 的回调参数**（见调用点说明）：它是每帧增量，
@@ -2542,10 +2542,10 @@ struct ReaderPage {
     }
     const targetY: number = sectionTop + lines * lineHeight;
     /**
-     * ⚠️ 先上冷却锁再滚：程序化滚动会触发 `onScroll`，而"恢复到一个靠近章末的
-     * 位置"（续读恰好读到章尾、或点了一个靠后的书签）与"用户自己滑到底"
-     * 在 `shouldContinueToNextChapter()` 眼里毫无区别 ⇒ 会被判成"读完了"
-     * 而自动跳到下一章。用户看到的是"一进来就翻章了"。
+     * ⚠️ 先上冷却锁再滚：程序化滚动会触发 `onScroll`，其中的跨章检测
+     * （`handleContinuousScroll`）分不清"恢复到靠近章末的位置"（续读恰好
+     * 读到章尾、或点了一个靠后的书签）与"用户自己滑过边界" ——
+     * 不上锁会被当成用户跨章，触发一次多余的晋升。
      *
      * 锁在**滚动之前**上：`onScroll` 是滚动动作的回调，可能同步或异步到达，
      * 先上锁才能确保两种情况都被挡住。

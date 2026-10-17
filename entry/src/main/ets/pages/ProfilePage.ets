@@ -10,6 +10,8 @@ import { ReaderSettings } from '../model/ReaderSettings';
 import { IconChevron } from '../views/common/Marks';
 import { ThemeConfirm } from '../views/common/ThemeConfirm';
 import { Logger } from '../common/utils/Logger';
+import { PathUtil } from '../common/utils/PathUtil';
+import { FileUtil } from '../common/utils/FileUtil';
 
 /**
  * 「阅读主题」色块的宽度（vp）。
@@ -77,10 +79,13 @@ export struct ProfilePage {
   @State private versionName: string = '—';
   /** 数据操作进行中（导出/导入按钮防连点） */
   @State private backingUp: boolean = false;
+  /** 沙箱内书籍文件总占用（格式化文案；空串 = 还没量到/量失败） */
+  @State private storageUsageText: string = '';
 
   aboutToAppear(): void {
     this.loadCacheInfo();
     this.loadVersionName();
+    this.loadStorageUsage();
     // 同步读一次持久化值做高亮（失败按跟随系统 —— 与 ThemeApplier 的降级一致）
     try {
       this.themeMode = SettingsService.getInstance().getAppThemeMode();
@@ -222,6 +227,29 @@ export struct ProfilePage {
     } catch (e) {
       this.cacheCount = 0;
     }
+  }
+
+  /**
+   * 统计沙箱内书籍文件的总占用并格式化。
+   *
+   * ⚠️ 同步遍历放在 `setTimeout(0)` 里让出一帧：进页面先画出来、
+   * 数字随后补上（几十 MB / 几十个文件的遍历是毫秒级，肉眼无感），
+   * 避免在首帧的构建路径里做文件 IO。
+   *
+   * ⚠️ 统计失败显示「-」而不是 0 B：0 会被读成"没占空间"，
+   * 而失败是"不知道"，两者语义不同。
+   */
+  private loadStorageUsage(): void {
+    this.storageUsageText = '';
+    setTimeout(() => {
+      try {
+        const bytes: number = PathUtil.sandboxUsage();
+        this.storageUsageText = bytes > 0 ? FileUtil.humanSize(bytes) : '0 B';
+      } catch (e) {
+        this.storageUsageText = '-';
+        Logger.warn('ProfilePage', `统计存储占用失败: ${Logger.errText(e as Object)}`);
+      }
+    }, 0);
   }
 
   build() {
@@ -547,6 +575,38 @@ export struct ProfilePage {
           .padding({ left: 2, bottom: 10 })
 
         Column() {
+          /**
+           * 「存储占用」—— **只读信息行**（无 chevron、不可点击）。
+           *
+           * ⚠️ 刻意与下面的操作行长得不一样：同一页里"数据"与"入口"
+           * 必须可区分（设计文档既定判据）—— 它没有箭头、没有按压态，
+           * 值只在进页面时算一次（导入/清除缓存后回来会重新算）。
+           *
+           * ⚠️ 排在本卡首行：它是"背景信息"，不是操作；
+           * 用户从上往下扫到的是"现在占了多少 → 导出 → 恢复 → 清缓存 → 清空"，
+           * 决策链自然。
+           */
+          Row() {
+            Column({ space: 3 }) {
+              Text('存储占用')
+                .fontSize(16)
+                .fontColor(AppColor.textPrimary)
+                .width('100%')
+              Text(this.storageUsageText.length > 0
+                ? `书籍与数据文件共 ${this.storageUsageText}`
+                : '正在统计…')
+                .fontSize(12)
+                .fontColor(AppColor.textHint)
+                .fontFeature(AppFont.TABULAR)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+          }
+          .width('100%')
+          .padding({ top: 17, bottom: 17, left: 18, right: 18 })
+          .alignItems(VerticalAlign.Center)
+
           Row() {
             Column({ space: 3 }) {
               Text('导出备份')
@@ -566,6 +626,7 @@ export struct ProfilePage {
           .width('100%')
           .padding({ top: 17, bottom: 17, left: 18, right: 18 })
           .alignItems(VerticalAlign.Center)
+          .border({ width: { top: AppTheme.HAIRLINE }, color: AppColor.divider })
           .opacity(this.backingUp ? 0.4 : 1)
           .onClick(() => {
             this.doExportBackup();

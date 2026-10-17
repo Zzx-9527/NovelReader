@@ -196,6 +196,15 @@ export class BookRepository {
     return book;
   }
 
+  /**
+   * ⚠️ 以下方法**刻意保留但暂无调用者**（不要顺手删）：
+   *  - `listDeleted` / `restore`：回收站的读/恢复两端，回收站 UI 未做；
+   *  - `countUngrouped` / `countAll`：书架统计备用（存储占用行将来可扩展）；
+   *  - `searchByTitle`：书架搜索改走了内存过滤（`applySearch`，见
+   *    `BookShelfViewModel`），本 SQL 版是为"书量上千后内存过滤变慢"
+   *    预留的升级路径 —— 现在删掉，到时要重写。
+   */
+
   /** 回收站列表 */
   static async listDeleted(): Promise<Book[]> {
     await RdbHelper.ensureReady();

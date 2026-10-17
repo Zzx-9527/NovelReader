@@ -88,6 +88,63 @@ export class PathUtil {
     }
   }
 
+  /**
+   * 递归统计一个目录的总大小（字节）。
+   *
+   * ⚠️ 全部用**同步** API（`listFile`/`statSync`）：调用点在「我的」页
+   * 打开时算一次，书籍文件通常几十 MB 量级、文件数几十个，同步遍历
+   * 几毫秒完成，不值得为它引入异步聚合的复杂度。
+   *
+   * ⚠️ 任何一项读取失败（权限/文件恰好被删）都**按 0 计**并继续：
+   * 统计是展示性信息，一项失败不应该让整行显示不出来。
+   *
+   * @param absoluteDir 目录绝对路径；不存在返回 0
+   */
+  static dirSize(absoluteDir: string): number {
+    if (absoluteDir.length === 0 || !PathUtil.isReady()) {
+      return 0;
+    }
+    let total: number = 0;
+    try {
+      if (!fs.accessSync(absoluteDir)) {
+        return 0;
+      }
+      const names: string[] = fs.listFileSync(absoluteDir);
+      for (const name of names) {
+        const child: string = `${absoluteDir}/${name}`;
+        try {
+          const stat = fs.statSync(child);
+          if (stat.isDirectory()) {
+            total += PathUtil.dirSize(child);
+          } else {
+            total += stat.size;
+          }
+        } catch (e) {
+          // 单个条目失败按 0 计，继续统计其余
+        }
+      }
+    } catch (e) {
+      // 目录不可读：返回已累计的部分
+    }
+    return total;
+  }
+
+  /**
+   * 沙箱**数据目录**的总占用（书籍文件 + 封面 + 备份 + 数据库等）。
+   *
+   * ⚠️ 统计的是 `filesDir` 整棵树 —— 它就是"这个应用存的书与数据"的全部：
+   *  - `books/`：导入的 TXT 原文件（占大头）；
+   *  - `covers/`：封面（TXT 目前没有，EPUB 预留）；
+   *  - `backup/`：本地备份残留；
+   *  - 数据库与 Preferences 在 `filesDir` 之外的 `database`/`preferences`
+   *    目录，**不在**这棵树里 —— 本方法特意不去够那些（跨目录统计要
+   *    再注入一个 context 路径，而它们通常只占几百 KB），
+   *    行文案上写清"书籍文件"即可对齐口径。
+   */
+  static sandboxUsage(): number {
+    return PathUtil.dirSize(PathUtil.getFilesDir());
+  }
+
   /** 从 URI 或路径中提取不含扩展名的文件名，用作书名兜底 */
   static fileNameWithoutExt(uriOrPath: string): string {
     let name: string = uriOrPath;
