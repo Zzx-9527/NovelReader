@@ -242,6 +242,31 @@ export class ReaderViewModel {
     if (this.state.error.length > 0) {
       return;
     }
+    /**
+     * ⚠️ **排版参数没变就什么都不做**（用户实测"跨章翻页后正文明明正常
+     * 还闪一下转圈"的根因）：
+     *
+     * 换章会让 Swiper 三槽整体重建，重建瞬间布局系统可能报出一帧
+     * "不同的尺寸" ⇒ 页面 `onPageAreaChange` 的 `changed` 判真 ⇒ 走到这里
+     * ⇒ 无条件完整 loadChapter（非静默，loading 一闪）。而此时分页输入
+     * 根本没变 —— 重排是纯浪费，还会把刚就位的新章闪掉一次。
+     *
+     * 判据用 layoutKey（排版参数 + 尺寸的指纹）：与上次相同 ⇒ 一切输入
+     * 都没变 ⇒ 断点也不会变 ⇒ 直接返回。改字号/转屏时 key 必然变化，
+     * 不受影响。
+     */
+    const newKey: string = PaginationService.buildLayoutKey(
+      this.state.settings, this.contentWidth, this.contentHeight,
+      this.firstPageExtraHeight);
+    if (newKey === this.layoutKey && this.state.breaks.length > 0) {
+      // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+      Logger.info('SlideDiag', `[R0] repaginate 跳过（key 未变）章=${this.state.chapterIndex}`
+        + ` t=${Date.now() % 100000}`);
+      return;
+    }
+    // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+    Logger.info('SlideDiag', `[R1] repaginate 执行 章=${this.state.chapterIndex}`
+      + ` oldKey=${this.layoutKey} newKey=${newKey} t=${Date.now() % 100000}`);
     this.restoreToOffset = Math.max(0, this.state.offset);
     await this.loadChapter(this.state.chapterIndex);
   }
@@ -376,38 +401,67 @@ export class ReaderViewModel {
       const target: number = this.restoreToOffset;
       this.restoreToOffset = -1;
 
+      // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+      Logger.info('SlideDiag', `[1] loadChapter 进入 章=${chapterIndex}`
+        + ` silent=${silent} t=${Date.now() % 100000}`);
+
+      /**
+       * ⚠️ **先划线、分页（显式传目标章号与文本），最后一次性切状态**：
+       *
+       * 页面的 Swiper 槽位 `.id()` 里编了 `chapterIndex` —— 这个字段一变，
+       * 三个槽位立即重建。若把章号**提前**赋值，此刻 `breaks`/`renderedText`
+       * 还是旧章的，屏幕上会出现"新章号 + 旧内容"的中间帧（用户实测闪一下）。
+       * 所有数据就位后才切章号，重建与新内容同帧到达，无中间态。
+       *
+       * ⚠️ 分页必须**显式传 chapterIndex + text**：此刻 state 里还是旧章，
+       * 无参读取会分页出旧章断点（上一轮"先闪错页再恢复"的根因）。
+       *
+       * ⚠️ 划线必须在 renderAt 之前取回（renderAt 后页面立刻画底纹）；
+       * 查询失败只清空、不阻断加载。
+       */
+      await this.reloadHighlights();
+      Logger.info('SlideDiag', `[2] 划线完成 t=${Date.now() % 100000}`);
+      await this.buildPagination(chapterIndex, text);
+      Logger.info('SlideDiag', `[3] 分页完成 章=${chapterIndex}`
+        + ` 页数=${this.state.pageCount} t=${Date.now() % 100000}`);
+
       this.state.chapterIndex = chapterIndex;
       this.state.chapterTitle = chapter.title;
       this.state.setFullText(text);
       this.state.pageIndex = 0;
       this.state.offset = 0;
       this.state.error = '';
-      /**
-       * ⚠️ 划线必须**在渲染之前**取回来。
-       *
-       * `renderAt` 之后页面立刻会调 `buildTextRuns` 去画底纹，
-       * 若此时 `state.highlights` 还是旧章的，新章正文会带上一批
-       * 不相干的高亮 —— 看起来像数据错乱，而其实只是时序问题。
-       *
-       * ⚠️ 失败**不改变章节加载结果**：划线是增强，取不到就是"这一章没有高亮"，
-       * 绝不该因为一次查询失败而让用户读不了书。所以单独 try、只清空不抛错。
-       */
-      await this.reloadHighlights();
-      await this.buildPagination();
       // target >= 0 时说明是"恢复进度"触发的加载，定位到该偏移；否则停在章首
       this.renderAt(target >= 0 ? target : 0);
+      Logger.info('SlideDiag', `[4] renderAt 完成 章=${chapterIndex}`
+        + ` 首页字数=${this.state.renderedText.length} t=${Date.now() % 100000}`);
       this.progress?.updatePosition(chapterIndex, this.state.offset, this.computePercent());
       // 滚动模式：当前章已就位，重建连续窗口（上一章 + 当前 + 下一章）
       this.rebuildScrollWindow();
     } catch (e) {
       this.state.error = `加载章节失败：${Logger.errText(e as BusinessError)}`;
     } finally {
+      Logger.info('SlideDiag', `[5] loadChapter finally loading→false 章=${chapterIndex}`
+        + ` t=${Date.now() % 100000}`);
       this.state.loading = false;
     }
   }
 
-  /** 取分页断点：先查缓存，未命中则计算并写回 */
-  private async buildPagination(): Promise<void> {
+  /**
+   * 取分页断点：先查缓存，未命中则计算并写回。
+   *
+   * ⚠️ **目标章号与章文本显式传入**（"跨章翻页先闪错页再恢复"与"换页时闪转圈"
+   * 两个修复的交汇点）：跨章翻页（silent）要求"数据全部就位后才切 state.chapterIndex"，
+   * 否则 Swiper 槽位（id 含章号）会先重建出"新章号 + 旧内容"的中间帧；
+   * 而分页若读 state（旧章的章号/文本），产出的就是错断点。
+   * 参数化之后两边都对：分页输入输出永远指向**目标章**。
+   * updateSettings 的重排场景传当前章号、文本传 null（state 即目标）。
+   *
+   * @param forChapterIndex 目标章号（缓存查/写键）
+   * @param chapterText 该章完整正文（分页输入）；null = 读当前 state（重排场景）
+   */
+  private async buildPagination(forChapterIndex: number,
+    chapterText: string | null = null): Promise<void> {
     if (this.state.settings.pageMode === 'scroll'
       || this.contentWidth <= 0 || this.contentHeight <= 0) {
       this.state.breaks = [];
@@ -418,14 +472,15 @@ export class ReaderViewModel {
     if (book === null) {
       return;
     }
+    const text: string = chapterText !== null ? chapterText : this.state.getFullText();
     this.layoutKey = PaginationService.buildLayoutKey(
       this.state.settings, this.contentWidth, this.contentHeight, this.firstPageExtraHeight);
 
     const cached: number[] = await PageCacheRepository.getBreaks(
-      book.id, this.state.chapterIndex, this.layoutKey);
+      book.id, forChapterIndex, this.layoutKey);
     if (cached.length > 0) {
       Logger.info(LogTag.PAGINATION,
-        `分页 cache=HIT 章=${this.state.chapterIndex} 页数=${cached.length}`
+        `分页 cache=HIT 章=${forChapterIndex} 页数=${cached.length}`
           + ` key=${this.layoutKey} 首 3 断点=[${cached[0]},${cached[1]},${cached[2]}]`);
       this.state.breaks = cached;
       this.state.pageCount = cached.length;
@@ -434,7 +489,7 @@ export class ReaderViewModel {
 
     this.state.repaginating = true;
     try {
-      const fullText: string = this.state.getFullText();
+      const fullText: string = text;
       /**
        * 选路：**正常章走实测分页，超大章走估算分页**。
        *
@@ -469,12 +524,12 @@ export class ReaderViewModel {
       }
       this.state.breaks = breaks;
       this.state.pageCount = breaks.length;
-      await PageCacheRepository.save(book.id, this.state.chapterIndex, this.layoutKey, breaks);
+      await PageCacheRepository.save(book.id, forChapterIndex, this.layoutKey, breaks);
       // 诊断：把"输入尺寸 → 输出断点"一次打全。首 3 个断点的差值 = 首页字符数，
       // 与正文总长对比就能立刻看出首页切得是多是少。
       const firstPageChars: number = breaks.length > 1 ? breaks[1] - breaks[0] : -1;
       Logger.info(LogTag.PAGINATION,
-        `分页 cache=MISS 章=${this.state.chapterIndex}`
+        `分页 cache=MISS 章=${forChapterIndex}`
           + ` 方式=${this.measure !== null && !tooLarge ? '实测' : '估算'}`
           + ` 容器=${this.contentWidth.toFixed(0)}x${this.contentHeight.toFixed(0)}`
           + ` 首页让位=${this.firstPageExtraHeight.toFixed(1)}`
@@ -573,6 +628,150 @@ export class ReaderViewModel {
     }
     this.state.renderedText = ReaderViewModel.indentParagraphHeads(
       pageText, this.state.settings.firstLineIndent, midParagraph);
+  }
+
+  /**
+   * 按页码取出该页的**渲染文本**（平移翻页的相邻槽位预渲染用）。
+   *
+   * ⚠️ 与 `renderAt` 的装饰口径**逐行同源**（剥页首换行 + indentParagraphHeads），
+   * 但它是**纯读取**：不改 pageIndex / offset / renderedText 任何状态 ——
+   * 相邻槽位只是"展示"，真正的翻页仍由 `nextPage()/prevPage()` 走 `renderAt`。
+   * 抽成独立方法而不是让槽位自己 substring，就是防止第二套口径出现
+   * （设计文档第 28 条）。
+   *
+   * ⚠️ **跨章**：`pageIndex - 1 < 0` 取**上一章末页**、`pageIndex + 1 >= pageCount`
+   * 取**下一章首页**。两处都优先走**真实分页断点**（先查 page_cache ——
+   * 用户刚从那章翻过来，断点几乎必在缓存里），命中的内容与"真的翻过去"
+   * 逐字一致；未命中（那章还没读过）才退回粗估/整章开头兜底。
+   *
+   * @returns 渲染文本；越界/未加载返回空串（槽位显示空白）
+   */
+  async pageTextFor(pageIndex: number): Promise<string>  {
+    if (this.state.settings.pageMode === 'scroll' || this.state.breaks.length === 0) {
+      return '';
+    }
+    const text: string = this.state.getFullText();
+
+    // ---- 章内 ----
+    if (pageIndex >= 0 && pageIndex < this.state.pageCount) {
+      const start: number = this.state.breaks[pageIndex];
+      const end: number = pageIndex + 1 < this.state.breaks.length
+        ? this.state.breaks[pageIndex + 1]
+        : text.length;
+      // ⚠️ "是否段中续排"的判定必须与 renderAt 逐字相同：
+      //   start > 0 且前一个字符不是换行 ⇒ 本页首行是上一段切过来的续行。
+      // （曾错写成 `pageIndex === 0` —— 语义正好相反，导致下一页槽位
+      // 该顶格的续行被错误补了缩进，滑动中看到的与翻页后不一致，
+      // 翻完瞬间文字位置跳一下。）
+      const midParagraph: boolean = start > 0 && text.charAt(start - 1) !== '\n';
+      return ReaderViewModel.decoratePageText(text, start, end, midParagraph,
+        this.state.settings.firstLineIndent);
+    }
+
+    // ---- 跨章：下一章首页 ----
+    if (pageIndex >= this.state.pageCount) {
+      const next: number = this.state.chapterIndex + 1;
+      if (next >= this.state.chapters.length || this.readService === null) {
+        return '';
+      }
+      try {
+        const chapter: Chapter = this.state.chapters[next];
+        const raw: string = this.readService.decodeChapter(
+          chapter.startOffset, chapter.endOffset, null);
+        // 优先用真实断点取第一页（与翻过去后 renderAt 的结果逐字一致）
+        const cached: number[] | null = await this.peekCachedBreaks(next);
+        if (cached !== null && cached.length > 1) {
+          return ReaderViewModel.decoratePageText(raw, cached[0], cached[1], false,
+            this.state.settings.firstLineIndent);
+        }
+        // 无缓存：章首 = 第一页，从开头取（章首必是段首，无缩进歧义）
+        return ReaderViewModel.decoratePageText(raw, 0, raw.length, false,
+          this.state.settings.firstLineIndent);
+      } catch (e) {
+        return '';
+      }
+    }
+
+    // ---- 跨章：上一章末尾 ----
+    const prev: number = this.state.chapterIndex - 1;
+    if (prev < 0 || this.readService === null) {
+      return '';
+    }
+    try {
+      const chapter: Chapter = this.state.chapters[prev];
+      const raw: string = this.readService.decodeChapter(
+        chapter.startOffset, chapter.endOffset, null);
+      // 优先用真实断点取最后一页（与"真的翻回去"逐字一致 —— 用户实测
+      // 粗估版"上一页的内容与实际不符"的修复）
+      const cached: number[] | null = await this.peekCachedBreaks(prev);
+      if (cached !== null && cached.length > 1) {
+        const lastStart: number = cached[cached.length - 1];
+        return ReaderViewModel.decoratePageText(raw, lastStart, raw.length, true,
+          this.state.settings.firstLineIndent);
+      }
+      // 无缓存才粗估：从末尾往前取约一页的字数（按当前排版估算）
+      const estimate: number = this.estimatePageChars();
+      const start: number = Math.max(0, raw.length - estimate);
+      return ReaderViewModel.decoratePageText(raw, start, raw.length, true,
+        this.state.settings.firstLineIndent);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /**
+   * 查某章在当前排版方案下的**已缓存**分页断点（只读：不计算、不写回）。
+   *
+   * ⚠️ 与 `buildPagination` 的分工：那个是"确保有断点"（查不到就算、写库），
+   * 这个是"有就用、没有就算了"（跨章槽位预渲染的锦上添花）——
+   * 绝不能在这里触发一次完整分页（主线程测量几十毫秒起，
+   * 滑动中做就是掉帧）。
+   */
+  private async peekCachedBreaks(chapterIndex: number): Promise<number[] | null> {
+    if (this.state.book === null) {
+      return null;
+    }
+    try {
+      const layoutKey: string = PaginationService.buildLayoutKey(
+        this.state.settings, this.contentWidth, this.contentHeight,
+        this.firstPageExtraHeight);
+      const cached: number[] = await PageCacheRepository.getBreaks(
+        this.state.book.id, chapterIndex, layoutKey);
+      return cached.length > 0 ? cached : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** 页文本装饰（剥页首换行 + 补段首缩进），renderAt 与本方法共用 */
+  private static decoratePageText(text: string, start: number, end: number,
+    startsMidParagraph: boolean, indentChars: number): string {
+    let pageText: string = text.substring(start, Math.min(end, text.length));
+    let trimHead: number = 0;
+    while (trimHead < pageText.length && pageText.charAt(trimHead) === '\n') {
+      trimHead++;
+    }
+    if (trimHead > 0) {
+      pageText = pageText.substring(trimHead);
+    }
+    return ReaderViewModel.indentParagraphHeads(
+      pageText, indentChars, startsMidParagraph);
+  }
+
+  /**
+   * 粗估一页能放多少字符（上一章末尾槽位取字的量）。
+   *
+   * ⚠️ 用的是估算口径（每行字数 × 每页行数），**不调测量函数**：
+   * 这个值只决定"上一章槽位露出多少字"——多一点少一点只影响
+   * 滑动时那 240ms 里看到的内容，正确性由翻页后的 `renderAt` 保证。
+   */
+  private estimatePageChars(): number {
+    const s: ReaderSettings = this.state.settings;
+    const charsPerLine: number = Math.max(1,
+      Math.floor(this.contentWidth / Math.max(1, s.fontSize)));
+    const lineHeight: number = Math.max(1, s.fontSize * s.lineHeight);
+    const lines: number = Math.max(1, Math.floor(this.contentHeight / lineHeight));
+    return charsPerLine * lines;
   }
 
   /**
@@ -733,7 +932,11 @@ export class ReaderViewModel {
       return; // 滚动模式由 onScroll 上报
     }
     if (this.state.pageIndex >= this.state.pageCount - 1) {
-      await this.nextChapter();
+      // ⚠️ **silent**：非静默加载会置 loading ⇒ 页面整块换"正在打开…"转圈。
+      // 跨章翻页时用户刚看完平移动画（右槽已预渲染新章开头），再闪一次转圈
+      // 纯属倒退（用户实测）。silent 下正文保持在屏，数据就位后原子切换。
+      // 数据正确性由 buildPagination 的显式参数保证（详见该方法说明）。
+      await this.switchChapter(this.state.chapterIndex + 1, 0, true);
       return;
     }
     const nextStart: number = this.state.breaks[this.state.pageIndex + 1];
@@ -761,7 +964,8 @@ export class ReaderViewModel {
       if (!this.state.hasPrev) {
         return;
       }
-      await this.switchChapter(this.state.chapterIndex - 1, -1);
+      // ⚠️ silent：与 nextPage 的跨章同理 —— 翻页回退不闪"正在打开…"
+      await this.switchChapter(this.state.chapterIndex - 1, -1, true);
       return;
     }
     this.renderAt(this.state.breaks[this.state.pageIndex - 1]);
@@ -922,6 +1126,9 @@ export class ReaderViewModel {
   /** 切换章节；toOffset 为 -1 表示定位到末尾；silent 见 loadChapter */
   async switchChapter(chapterIndex: number, toOffset: number,
     silent: boolean = false): Promise<void> {
+    // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+    Logger.info('SlideDiag', `[S0] switchChapter 进入 章=${chapterIndex}`
+      + ` silent=${silent} t=${Date.now() % 100000}`);
     await this.progress?.flush(true);
     // 主动跳章时不要沿用"待恢复偏移"
     this.restoreToOffset = -1;
@@ -932,6 +1139,9 @@ export class ReaderViewModel {
     this.renderAt(offset);
     this.commitPosition();
     await this.progress?.flush(true);
+    // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+    Logger.info('SlideDiag', `[S1] switchChapter 完成 章=${chapterIndex}`
+      + ` 页=${this.state.pageIndex}/${this.state.pageCount} t=${Date.now() % 100000}`);
   }
 
   /** 跳转到目录里的某一章 */
@@ -1055,7 +1265,8 @@ export class ReaderViewModel {
       this.restoreToOffset = keepOffset;
       await this.loadChapter(this.state.chapterIndex);
     } else {
-      await this.buildPagination();
+      // 重排当前章：state 里就是目标章，章号显式传、文本传 null（读 state）
+      await this.buildPagination(this.state.chapterIndex);
       this.renderAt(keepOffset);
     }
     this.commitPosition();

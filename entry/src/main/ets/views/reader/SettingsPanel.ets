@@ -4,17 +4,22 @@ import { ReaderSettings } from '../../model/ReaderSettings';
 import { AppConstants } from '../../common/constants/AppConstants';
 
 /**
- * 翻页方式：只放已实现的两种。
+ * 翻页方式：三种（滚动 / 左右翻页 / 平移翻页）。
  *
- * ⚠️ `cover`（仿真/覆盖翻页）虽然在 `ReaderSettings` 的注释里列着，
- * 但翻页动画并没有实现 —— 放出来就是"选了没反应"的假选项。
- * 等动画做完再补。
+ * ⚠️ `cover`（仿真翻页）**尚未实现**，刻意不放出来 ——
+ * 放出来就是"选了没反应"的假选项。等动画做完再补第 4 段。
  */
-const PAGE_MODES: string[] = ['scroll', 'page'];
+const PAGE_MODES: string[] = ['scroll', 'page', 'slide'];
 
 /** 翻页方式的展示名 */
 function pageModeLabel(mode: string): string {
-  return mode === 'page' ? '左右翻页' : '上下滚动';
+  if (mode === 'page') {
+    return '左右翻页';
+  }
+  if (mode === 'slide') {
+    return '平移翻页';
+  }
+  return '上下滚动';
 }
 
 /**
@@ -437,7 +442,8 @@ export struct SettingsPanel {
    *    内层用 `theme.bg` 反色表示选中项。原来的两颗独立胶囊
    *    看起来像两个并列动作，用户得读文案才知道是互斥的。
    *
-   * ⚠️ 只提供已实现的两种，理由见文件顶部的 `PAGE_MODES` 注释。
+   * ⚠️ 只提供已实现的三种，理由见文件顶部的 `PAGE_MODES` 注释。
+   * 四段等分由 `layoutWeight(1)` 保证，段宽不随文案长短漂移。
    */
   @Builder
   buildPageModeRow() {

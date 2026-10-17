@@ -81,7 +81,14 @@ export class ReaderSettings {
   }
 
   // ---------------------------------------------------------------- 显示
-  /** 'scroll' | 'page' | 'cover' */
+  /**
+   * 'scroll' | 'page' | 'slide' | 'cover'
+   *
+   * ⚠️ `slide`（平移翻页）：内容与 `page` 完全同源（同一套 breaks/renderAt），
+   * 只是渲染外套一层 Swiper 提供平移动画；跨章翻页由页面在动画结束时
+   * 调 `nextPage()/prevPage()` 并把 Swiper 复位到中间槽位。
+   * `cover`（仿真翻页）尚未实现，设置面板刻意不提供该选项。
+   */
   pageMode: string = 'scroll';
   /** 'light' | 'warm' | 'dark' | 'sepia' | 'eye_care' */
   theme: string = 'light';

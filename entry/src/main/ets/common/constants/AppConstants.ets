@@ -59,6 +59,9 @@ export class AppConstants {
    */
   static readonly DEFAULT_MANUAL_BRIGHTNESS: number = 0.5;
 
+  /** 平移翻页的滑动过渡时长（ms）：够看清平移、又不拖泥带水 */
+  static readonly SLIDE_ANIM_DURATION_MS: number = 240;
+
   // ---------------------------------------------------------------- 书籍格式
   /**
    * 只支持 TXT。EPUB 支持已评估并**明确放弃**（用户决策）：

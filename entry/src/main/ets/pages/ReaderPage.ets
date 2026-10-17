@@ -77,6 +77,57 @@ struct ReaderPage {
   private scroller: Scroller = new Scroller();
   /** Scroll 自身高度（= 可视高度），与正文内容高度相减才能判断"能不能滚" */
   private viewportHeight: number = 0;
+
+  // ---- 平移翻页（pageMode === 'slide'）----
+  /**
+   * Swiper 控制器：翻过一页后把索引**无动画**复位回中间槽位。
+   */
+  private swiperController: SwiperController = new SwiperController();
+  /**
+   * 防重入锁：`onChange` 与 `nextPage()/prevPage()` 的异步跨章加载可能交叠，
+   * 锁保证"一次滑动只触发一次翻页"。
+   */
+  private slideAnimating: boolean = false;
+  /**
+   * 平移模式点击分区的落点 x（vp）：onTouch Down 时记录，TapGesture 触发时
+   * 按"落点在整宽的哪三分之一"判分区（左=上一页 / 中=菜单 / 右=下一页）。
+   */
+  private slideTouchX: number = 0;
+  /**
+   * 平移槽位的**内容代数**：每次翻页（`renderedText` 将变）+1，编进槽位根节点的
+   * `.id()` 强制三槽整体重建。
+   *
+   * ⚠️ 为什么必须重建（这就是"平移模式下章节标题消失"的修复）：
+   * 三个槽位由同一个 @Builder 渲染、内容完全同构，ArkUI 对同构子树做
+   * 局部复用 —— 翻页后 `pageIndex` 变化时，`buildPagedPage` 里
+   * `if (pageIndex === 0)` 的**标题条件块**在部分槽位上不重建，
+   * 表现为"翻回第一页时标题不见了"。代数进 id，键变 ⇒ 整槽重建，无歧义。
+   */
+  @State slidePageRev: number = 0;
+  /**
+   * 平移槽位的**真实相邻页文本**（预渲染）。
+   *
+   * 滑动时用户要看到的是上一页/下一页的**真实文字**，不是当前页的副本 ——
+   * 这两个槽位由 `vm.pageTextFor(pageIndex ± 1)` 预填（含跨章：章尾的
+   * 右槽是下一章开头、章首的左槽是上一章结尾），每次翻页/换章后刷新。
+   * 当前槽位仍直接读 `state.renderedText`（唯一真相来源）。
+   */
+  @State slidePrevText: string = '';
+  @State slideNextText: string = '';
+  /** 上一槽是否为"上一章的末尾"（决定左槽要不要画标题——章首页才画） */
+  @State slidePrevIsChapterHead: boolean = false;
+  /** 下一槽是否为"下一章的开头"（决定右槽画不画标题） */
+  @State slideNextIsChapterHead: boolean = false;
+  /**
+   * 相邻槽各自的**章标题**。
+   *
+   * ⚠️ 不能复用 `buildChapterHeading()`（它读 `state.chapterTitle` = 当前章）：
+   * 章尾右滑时右槽是"下一章正文"，用当前章标题就会画出"第10章 结束"配着
+   * 第 11 章正文（用户实测"标题与实际对不上"）。相邻槽的标题必须按
+   * 槽位实际所属的章单独取。
+   */
+  @State slidePrevTitle: string = '';
+  @State slideNextTitle: string = '';
   /** 自动衔接的冷却截止时间戳，见 `AppConstants.AUTO_CONTINUE_COOLDOWN_MS` */
   private autoContinueBlockedUntil: number = 0;
   /**
@@ -430,6 +481,9 @@ struct ReaderPage {
           // 只选章（目录里点章节名）：回到章首，与分页模式的行为对齐
           this.resetScrollAfterChapterChange();
         }
+      } else {
+        // 分页/平移：换章后相邻槽位的预渲染文本必须跟着新章刷新
+        this.refreshSlideSlots();
       }
     }).catch((e: BusinessError) => {
       Logger.error(LogTag.READ, `跳章失败: ${e.message}`);
@@ -517,7 +571,13 @@ struct ReaderPage {
      * 于是"首次分页"与"转屏/改字号重排"两种情况都能停在原处。
      */
     if (this.state.settings.pageMode !== 'scroll') {
-      this.vm.repaginateCurrentChapter().catch((e: Object) => {
+      // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+      Logger.info('SlideDiag', `[T0] tryPaginate → repaginate 章=${this.state.chapterIndex}`
+        + ` t=${Date.now() % 100000}`);
+      this.vm.repaginateCurrentChapter().then(() => {
+        // 重排后页边界可能变化：平移相邻槽位的预渲染文本同步刷新
+        this.refreshSlideSlots();
+      }).catch((e: Object) => {
         Logger.error(LogTag.READ, `重排当前章失败: ${Logger.errText(e)}`);
       });
     }
@@ -617,7 +677,7 @@ struct ReaderPage {
       .backgroundColor(this.theme().bg)
 
       // 第 2 层：翻页层（点击分区 + 左右滑动）。
-      // ⚠️ 两条约束，缺一不可：
+      // ⚠️ 三条约束，缺一不可：
       //
       //  1. 只在"菜单隐藏时"存在 —— 否则它会覆盖在顶栏/底栏之上把点击截走，
       //     导致菜单弹出后无法收回（点中间等于又切换一次）。
@@ -627,9 +687,16 @@ struct ReaderPage {
       //     它们会把拖拽事件整个吃掉，下层 `Scroll` 永远收不到滑动。
       //     实测表现就是"阅读页划不动、只能点"。
       //     滚动模式下的点击交给 Scroll 自己接管（见 buildReaderBody）。
+      //
+      //  3. **平移模式也不能有这一层**（用户实测"滑动没反应"的根因）：
+      //     Swiper 的拖拽手势在**正文区内**，而本层横在它上面 —— 三个绑了
+      //     onClick 的分区会参与手势竞争，横滑被点击识别拦下，Swiper 收不到
+      //     拖拽起点。平移模式下：滑动归 Swiper；点击分区改由 Swiper 的
+      //     `onTouch`（记落点）+ `TapGesture`（触发时算分区）实现，
+      //     见 `handleSlideTap`。
       if (!this.state.menuVisible && !this.state.settingsVisible
         && this.state.error.length === 0 && !this.state.loading
-        && this.state.settings.pageMode !== 'scroll') {
+        && this.state.settings.pageMode === 'page') {
         this.buildPageControls()
       }
 
@@ -691,6 +758,7 @@ struct ReaderPage {
             onJump: (percent: number) => {
               this.vm.jumpToChapterByPercent(percent).then(() => {
                 this.resetScrollAfterChapterChange();
+                this.refreshSlideSlots();
               }).catch((e: Object) => {
                 Logger.error(LogTag.READ, `进度条跳章失败: ${Logger.errText(e)}`);
               });
@@ -699,6 +767,7 @@ struct ReaderPage {
             onPrevChapter: () => {
               this.vm.prevChapter().then(() => {
                 this.resetScrollAfterChapterChange();
+                this.refreshSlideSlots();
               }).catch((e: Object) => {
                 Logger.error(LogTag.READ, `上一章失败: ${Logger.errText(e)}`);
               });
@@ -706,6 +775,7 @@ struct ReaderPage {
             onNextChapter: () => {
               this.vm.nextChapter().then(() => {
                 this.resetScrollAfterChapterChange();
+                this.refreshSlideSlots();
               }).catch((e: Object) => {
                 Logger.error(LogTag.READ, `下一章失败: ${Logger.errText(e)}`);
               });
@@ -1094,12 +1164,20 @@ struct ReaderPage {
     // 手势挂在**整层**而不是三个分区上：一次滑动可能跨过两个分区，
     // 挂在父节点才能拿到完整位移。
     //
+    // ⚠️ **slide 模式下本手势让路**（见处理器第一行）：
+    // 横滑的翻页由正文区 Swiper 负责（它要播平移动画），
+    // 本层的 PanGesture 若还响应，两处会抢同一份拖拽 ——
+    // 属性链里不能写 if，所以用"挂上但内部短路"的方式让位。
+    //
     // 用 PanGesture 的 offsetX 而不是 SwipeGesture 的 angle：
     // 位移的正负没有歧义（左滑为负），不必去记 angle 的角度约定。
     // 只认水平方向 —— 竖直滑动不属于翻页语义，让它落空即可。
     .gesture(
       PanGesture({ direction: PanDirection.Horizontal })
         .onActionEnd((event: GestureEvent) => {
+          if (this.state.settings.pageMode === 'slide') {
+            return; // 平移翻页：滑动手势归 Swiper，这里只承担点击分区
+          }
           /**
            * ⚠️ 有选中文字时**不翻页**。
            *
@@ -1112,9 +1190,9 @@ struct ReaderPage {
           }
           const dx: number = event.offsetX;
           if (dx <= -AppConstants.PAGE_SWIPE_MIN_DISTANCE) {
-            this.vm.nextPage();
+            this.turnPageByUi(true);
           } else if (dx >= AppConstants.PAGE_SWIPE_MIN_DISTANCE) {
-            this.vm.prevPage();
+            this.turnPageByUi(false);
           }
         })
     )
@@ -1173,11 +1251,11 @@ struct ReaderPage {
       context,
       (): void => {
         // 音量减 = 上一页（与"左 1/3 屏"方向一致的直觉）
-        this.vm.prevPage();
+        this.turnPageByUi(false);
       },
       (): void => {
         // 音量加 = 下一页
-        this.vm.nextPage();
+        this.turnPageByUi(true);
       }
     ).then((unregister: (() => void) | null) => {
       // ⚠️ await 期间用户可能已离开本页（aboutToDisappear 已跑过）：
@@ -1455,12 +1533,37 @@ struct ReaderPage {
       return;
     }
     if (action === 'prev') {
-      this.vm.prevPage();
+      this.turnPageByUi(false);
     } else if (action === 'next') {
-      this.vm.nextPage();
+      this.turnPageByUi(true);
     } else {
       this.vm.toggleMenu();
       this.syncWindowChrome();
+    }
+  }
+
+  /**
+   * UI 入口的翻页（点击分区 / 音量键）。
+   *
+   * ⚠️ slide 模式必须**先播平移动画**（把 Swiper 滑到相邻槽位），
+   * 动画结束由 `onChange` 统一走"复位 + 换内容"；直接调 `vm.nextPage()`
+   * 会让正文瞬间换字而 Swiper 纹丝不动 —— 动画就名存实亡了。
+   * page 模式没有动画层，直接翻。
+   */
+  private turnPageByUi(forward: boolean): void {
+    if (this.state.settings.pageMode === 'slide' && !this.slideAnimating) {
+      // ⚠️ **这里不置 slideAnimating**（用户实测"点了翻页后卡死"的根因）：
+      // 锁若在这里上，Swiper 动画结束触发 onChange 时会被自己的
+      // `if (slideAnimating) return` 挡住 —— 复位/翻页/解锁全部不执行，
+      // Swiper 永久停在末槽（内容空白、再也翻不动）。
+      // 锁只由 onChange 自己管理：手势与点击最终都汇到那里收口。
+      this.swiperController.changeIndex(forward ? 2 : 0, true);
+      return;
+    }
+    if (forward) {
+      this.vm.nextPage();
+    } else {
+      this.vm.prevPage();
     }
   }
 
@@ -1810,7 +1913,13 @@ struct ReaderPage {
 
   @Builder
   buildReaderBody() {
-    if (this.state.settings.pageMode === 'scroll') {
+    /**
+     * 外层 Column：page / slide 两种分页模式的渲染需要一个有界根节点
+     * （slide 的 Swiper 槽位也靠它量高）。scroll 分支的 Scroll 自带
+     * `layoutWeight(1)`，多包一层无碍。
+     */
+    Column() {
+      if (this.state.settings.pageMode === 'scroll') {
       // 滚动模式：**连续窗口**——上一章 + 当前章 + 下一章铺在同一股滚动流里，
       // 向上滑能看到上一章结尾、越过边界直接滑进下一章，全程无"换内容"。
       Scroll(this.scroller) {
@@ -1881,10 +1990,314 @@ struct ReaderPage {
       .onScroll(() => {
         this.onReaderScroll();
       })
+    } else if (this.state.settings.pageMode === 'slide') {
+      // 平移翻页：与 page 完全同源的分页数据（breaks / renderedText），
+      // 只是渲染外套一层 Swiper 提供平移过渡。
+      this.buildSlideBody()
     } else {
       // 分页模式：标题只出现在本章第一页。首页让位的那一截高度
       // 已通过 setContentSize(..., headingHeight()) 交给分页服务扣除，
       // 所以这里直接渲染不会把首页最后一行挤掉。
+      this.buildPagedPage()
+    }
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  /**
+   * 平移翻页主体：三个槽位的 Swiper。
+   *
+   * ## 槽位内容是**真实的**相邻页
+   *
+   * 滑到一半时，左边露出的是上一页的真实文字、右边是下一页的真实文字 ——
+   * 这才是平移翻页（三张并排的纸拖动），不是"当前页副本跟着动"。
+   * 相邻页文本由 `vm.pageTextFor(pageIndex ± 1)` 预取（与 `renderAt`
+   * 同一套装饰口径，含跨章预取），存进 `slidePrevText/slideNextText`；
+   * 当前槽位直接读 `state.renderedText`（唯一真相来源）。
+   *
+   * ## 何时刷新槽位文本
+   *
+   * `refreshSlideSlots()`：翻页完成（onChange）、换章（chapterIndex 变，
+   * 由 build 里的 id 变化带动重渲染，但文本字段仍需主动刷）、
+   * 首次进入 slide 模式。全部汇到这一个方法。
+   */
+  @Builder
+  buildSlideBody() {
+    Swiper(this.swiperController) {
+      // ⚠️ 各槽包一层带 `.id()` 的 Column：id 含内容代数（slidePageRev）与章号，
+      // 翻页/换章后 id 变 ⇒ 三个槽位**整体重建** —— 不重建的话，同构子树被
+      // 局部复用，标题条件块会丢（实测 bug）。章号进 id 是因为跨章翻页
+      // 不经过 Swiper onChange（是 vm 内部换章）。
+      Column() {
+        this.buildSlidePrevSlot()
+      }
+      .width('100%')
+      .height('100%')
+      .id(`slide_p_${this.state.chapterIndex}_${this.slidePageRev}`)
+
+      Column() {
+        this.buildPagedPage()
+      }
+      .width('100%')
+      .height('100%')
+      .id(`slide_c_${this.state.chapterIndex}_${this.slidePageRev}`)
+
+      Column() {
+        this.buildSlideNextSlot()
+      }
+      .width('100%')
+      .height('100%')
+      .id(`slide_n_${this.state.chapterIndex}_${this.slidePageRev}`)
+    }
+    .index(1)
+    .loop(false)
+    .indicator(false)
+    .duration(AppConstants.SLIDE_ANIM_DURATION_MS)
+    .curve(Curve.Friction)
+    .width('100%')
+    .layoutWeight(1)
+    .onChange((index: number) => {
+      /**
+       * 翻页收口（手势与点击两条路径都汇到这里）：
+       * 到达非中间槽位 = 翻一页 → 立刻无动画复位到 1 → vm 换内容。
+       *
+       * ⚠️ **不能拿 slideAnimating 挡这里的收尾**（用户实测"点击翻页后
+       * 卡死、滑动弹回"的根因）：点击路径的 changeIndex 动画结束时
+       * onChange 必须照常处理，否则复位/翻页/解锁全不执行，Swiper
+       * 永久停在末槽。锁只挡"动画期间又来一次 onChange"——
+       * 那种情况下直接返回，等当前这轮的 finally 解锁。
+       */
+      if (index === 1) {
+        return; // 回弹（滑一半松手弹回中间）：无事发生
+      }
+      if (this.slideAnimating) {
+        // 处理中途又收到一次非 1 索引：先把它拉回中间，别让 Swiper 停在 0/2
+        this.swiperController.changeIndex(1, false);
+        return;
+      }
+      this.slideAnimating = true;
+      const forward: boolean = index > 1;
+      // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+      Logger.info('SlideDiag', `[P0] Swiper onChange idx=${index} 翻${forward ? '后' : '前'}`
+        + ` 章=${this.state.chapterIndex} t=${Date.now() % 100000}`);
+      const turn: Promise<void> = forward ? this.vm.nextPage() : this.vm.prevPage();
+      turn.finally(() => {
+        /**
+         * ⚠️ **先换内容、最后复位槽位**（"跨章闪一下"的真正根因修复，
+         * 由 SlideDiag 日志钉死）：
+         *
+         * 旧顺序是 onChange 里**立刻** `changeIndex(1, false)` 复位 ——
+         * 复位后当前槽显示的还是旧章文本（state 尚未更新），要等实测分页
+         * 跑完（日志实测 62ms，cache=MISS 时）才换上新内容：这一来一回
+         * 就是用户看到的"闪一下"。日志里的
+         * `Swiper FireUnselectedEvent index:2`（复位）发生在分页完成**之前**。
+         *
+         * 新顺序：滑到槽 2 后**保持不动**（画面冻结在正确的预渲染内容上）
+         * → 翻页/跨章加载完成、`slidePageRev`+1 让三槽拿到新内容
+         * → 最后无动画复位到槽 1 —— 此刻槽 1 已是新内容，视觉无缝。
+         */
+        this.slidePageRev += 1;
+        this.refreshSlideSlots();
+        this.swiperController.changeIndex(1, false);
+        this.slideAnimating = false;
+        // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+        Logger.info('SlideDiag', `[P1] 翻页完成+复位 章=${this.state.chapterIndex}`
+          + ` 页=${this.state.pageIndex}/${this.state.pageCount} t=${Date.now() % 100000}`);
+      });
+    })
+    // ---- 平移模式的点击分区 ----
+    // 翻页层（三分区 onClick）在 slide 模式不存在（见 build 里第 2 层的说明），
+    // 点击由这里接管：onTouch 记落点，TapGesture 触发时按 x 判分区。
+    // ⚠️ 必须 parallelGesture：Swiper 的子节点（正文 Text）自己参与触摸
+    // （长按选中），默认 gesture 会被子节点竞争掉 —— 与滚动模式同一坑。
+    // ⚠️ onTouch 必须能收到 Down：Swiper 自身不消费触摸（拖拽归手势系统），
+    // 回调照常触发。
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.touchDownAt = Date.now();
+        this.slideTouchX = event.touches[0].x;
+      }
+    })
+    .parallelGesture(
+      TapGesture()
+        .onAction(() => {
+          this.handleSlideTap();
+        })
+    )
+  }
+
+  /**
+   * 平移模式的点击分区处理（左 1/3 上一页 / 中 1/3 菜单 / 右 1/3 下一页）。
+   *
+   * ⚠️ 复用 `handleReaderTap` 的长按排除与"选中时先取消选择"逻辑：
+   * 直接调它，不另写一套 —— 否则又是"同一件事两处实现"。
+   */
+  private handleSlideTap(): void {
+    const x: number = this.slideTouchX;
+    const bodyWidth: number = this.contentWidth > 0 ? this.contentWidth : 1;
+    if (x < bodyWidth / 3) {
+      this.handleReaderTap('prev');
+    } else if (x > bodyWidth * 2 / 3) {
+      this.handleReaderTap('next');
+    } else {
+      this.handleReaderTap('menu');
+    }
+  }
+
+  /**
+   * 刷新平移相邻槽位的预渲染文本。
+   *
+   * 三个调用口：进入 slide 模式（aboutToAppear 时机不合适 —— 那时还没分页，
+   * 实际靠 `buildSlideBody` 首建触发一次兜底读旧值，可接受）、
+   * 翻页完成（onChange 的 finally）、以及当前槽文本变化而代数未变的兜底。
+   * 全部走 `vm.pageTextFor`（与 renderAt 同口径），无第二套文本实现。
+   */
+  private async refreshSlideSlots(): Promise<void> {
+    if (this.state.settings.pageMode !== 'slide') {
+      return;
+    }
+    const prevIndex: number = this.state.pageIndex - 1;
+    const nextIndex: number = this.state.pageIndex + 1;
+    // 越界页码交给 pageTextFor 处理跨章；连跨章都越界（全书首/末页）得空串
+    this.slidePrevText = await this.vm.pageTextFor(prevIndex);
+    this.slideNextText = await this.vm.pageTextFor(nextIndex);
+    // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+    Logger.info('SlideDiag', `[P2] 槽位刷新 章=${this.state.chapterIndex}`
+      + ` prev=${this.slidePrevText.length}字 next=${this.slideNextText.length}字`
+      + ` t=${Date.now() % 100000}`);
+    // 相邻槽是否落在"某章第一页"（决定画不画章节标题）：
+    //  - 上一槽：本章第 0 页（当前在第 1 页时）→ 画；跨章时是上一章末尾 → 不画
+    //  - 下一槽：跨章时是下一章第一页 → 画；本章内页码 > 0 → 不画
+    this.slidePrevIsChapterHead = prevIndex === 0;
+    this.slideNextIsChapterHead = nextIndex >= this.state.pageCount;
+    // 相邻槽的标题：按槽位实际所属的章取，不读当前章标题（见字段说明）。
+    // 跨章槽：prev = 上一章、next = 下一章；章内槽只有 prev 可能是本章首页。
+    this.slidePrevTitle = this.slidePrevIsChapterHead
+      ? this.titleOfChapter(this.state.chapterIndex)
+      : '';
+    this.slideNextTitle = this.slideNextIsChapterHead
+      ? this.titleOfChapter(this.state.chapterIndex + 1)
+      : '';
+  }
+
+  /**
+   * 指定章的标题（与 `headingText()` 同取法，但章号是参数）。
+   *
+   * ⚠️ 必须独立成方法而不是让 `headingText()` 收参：它在本文件多处被调，
+   * 改签名会牵连；这里复制的是**取法**（title 优先、空则"第 N 章"），
+   * 取法本身三行，复制成本低于抽象成本。
+   */
+  private titleOfChapter(index: number): string {
+    if (index < 0 || index >= this.state.chapters.length) {
+      return '';
+    }
+    const title: string = this.state.chapters[index].title;
+    return title.length > 0 ? title : `第 ${this.state.chapters[index].displayNumber()} 章`;
+  }
+
+  /**
+   * 平移左槽：上一页（或上一章末尾）。
+   *
+   * ⚠️ 独立成无参 @Builder 而不是带参复用一个：同一处 build 里带参 @Builder
+   * 调多次会串位（设计文档第 15/41 条）。三个槽各写各的，读各自的字段。
+   *
+   * ⚠️ 相邻槽是**纯展示**：无选区、无长按菜单、无划线 Span（正文字段已
+   * 足够传达内容），点击/手势由上层的翻页层统一处理。
+   */
+  @Builder
+  buildSlidePrevSlot() {
+    Column() {
+      if (this.slidePrevIsChapterHead) {
+        // 上一槽恰是本章首页（当前在第 1 页时）：画标题。
+        // ⚠️ 标题必须用槽位自己的章（slidePrevTitle），不能用
+        // buildChapterHeading() —— 那读的是 state.chapterTitle。
+        Column() {
+          Text(this.slidePrevTitle)
+            .fontSize(this.state.settings.fontSize + AppTheme.SIZE_STEP)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.theme().text)
+            .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
+            .letterSpacing(AppTheme.TRACK_CHAPTER)
+            .lineHeight(this.headingLineHeight())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+            .padding({ top: AppTheme.GAP_S, bottom: AppTheme.GAP_M })
+        }
+        .width('100%')
+        .padding({
+          left: this.state.settings.pageMargin,
+          right: this.state.settings.pageMargin
+        })
+      }
+      Text(this.slidePrevText)
+        .fontSize(this.state.settings.fontSize)
+        .fontColor(this.theme().text)
+        .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
+        .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
+        .letterSpacing(this.state.settings.letterSpacing)
+        .textIndent(0)
+        .width('100%')
+        .padding({ left: this.state.settings.pageMargin, right: this.state.settings.pageMargin })
+        .align(Alignment.TopStart)
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** 平移右槽：下一页（或下一章首页，含章节标题） */
+  @Builder
+  buildSlideNextSlot() {
+    Column() {
+      if (this.slideNextIsChapterHead) {
+        // 下一章首页：画下一章的标题（不是当前章的！跨章时 state.chapterTitle
+        // 还没更新，用它就会画出"当前章标题 + 下一章正文"的错配）
+        Column() {
+          Text(this.slideNextTitle)
+            .fontSize(this.state.settings.fontSize + AppTheme.SIZE_STEP)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.theme().text)
+            .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
+            .letterSpacing(AppTheme.TRACK_CHAPTER)
+            .lineHeight(this.headingLineHeight())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+            .padding({ top: AppTheme.GAP_S, bottom: AppTheme.GAP_M })
+        }
+        .width('100%')
+        .padding({
+          left: this.state.settings.pageMargin,
+          right: this.state.settings.pageMargin
+        })
+      }
+      Text(this.slideNextText)
+        .fontSize(this.state.settings.fontSize)
+        .fontColor(this.theme().text)
+        .fontFamily(ReaderSettings.resolveFontFamily(this.state.settings.fontFamily))
+        .lineHeight(this.state.settings.fontSize * this.state.settings.lineHeight)
+        .letterSpacing(this.state.settings.letterSpacing)
+        .textIndent(0)
+        .width('100%')
+        .padding({ left: this.state.settings.pageMargin, right: this.state.settings.pageMargin })
+        .align(Alignment.TopStart)
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /**
+   * page / slide 共用的"一页"渲染。
+   *
+   * ⚠️ 从原分页分支原样抽出（标题 + 正文 Text 一字未动）：
+   * page 模式渲染一层、slide 模式渲染三份 —— 抽成无参 @Builder 是
+   * 复用它的唯一方式（带参 @Builder 多处调用会串位，设计文档第 15/41 条）。
+   */
+  @Builder
+  buildPagedPage() {
       if (this.state.pageIndex === 0) {
         /**
          * ⚠️ **必须给标题补上和正文一样的左右边距**，否则它会顶到屏幕最左边
@@ -1999,7 +2412,6 @@ struct ReaderPage {
         .onAreaChange((oldArea: Area, newArea: Area) => {
           this.onPagedTextAreaChange(newArea);
         })
-    }
   }
 
   /**
@@ -2315,6 +2727,12 @@ struct ReaderPage {
         + ` | Scroll 视口=${this.viewportHeight.toFixed(1)}`);
     const changed: boolean = Math.abs(width - this.contentWidth) > 1
       || Math.abs(height - this.pageAreaHeight) > 1;
+    // ===== 诊断日志（定位"跨章闪一下"，问题解决后移除）=====
+    if (changed) {
+      Logger.info('SlideDiag', `[A0] 阅读区尺寸变化 w=${width.toFixed(1)} h=${height.toFixed(1)}`
+        + ` (旧 ${this.contentWidth.toFixed(1)}x${this.pageAreaHeight.toFixed(1)})`
+        + ` 章=${this.state.chapterIndex} t=${Date.now() % 100000}`);
+    }
     this.contentWidth = width;
     this.pageAreaHeight = height;
     if (changed) {
