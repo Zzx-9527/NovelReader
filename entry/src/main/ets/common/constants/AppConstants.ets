@@ -60,8 +60,13 @@ export class AppConstants {
   static readonly DEFAULT_MANUAL_BRIGHTNESS: number = 0.5;
 
   // ---------------------------------------------------------------- 书籍格式
+  /**
+   * 只支持 TXT。EPUB 支持已评估并**明确放弃**（用户决策）：
+   * 目标用户读网文，书源天然是 TXT；EPUB 的渠道（出版书/公版书）
+   * 与实际阅读场景不匹配，为不存在的需求引入 zip/XHTML 解析不值得。
+   * 判据：**不为想象中的需求写代码。** 若将来重做，见设计文档的记录。
+   */
   static readonly FORMAT_TXT: string = 'txt';
-  static readonly FORMAT_EPUB: string = 'epub';
 
   // ---------------------------------------------------------------- 分组封面
   /**
@@ -82,7 +87,6 @@ export class AppConstants {
   static readonly DIR_BACKUP: string = 'backup';
 
   static readonly EXT_TXT: string = '.txt';
-  static readonly EXT_EPUB: string = '.epub';
   static readonly EXT_JPG: string = '.jpg';
 
   // ---------------------------------------------------------------- 性能参数

@@ -14,10 +14,6 @@ export class Chapter {
   startOffset: number = 0;
   /** 原文件字节偏移（不含）；null 表示到文件末尾 */
   endOffset: number | null = null;
-  /** EPUB 章节文件路径 */
-  href: string = '';
-  /** EPUB 章内锚点 */
-  anchor: string = '';
   /** 0 = 章，1 = 卷 */
   level: number = 0;
   wordCount: number = 0;

@@ -536,7 +536,6 @@ export class BookRepository {
   /** 便于上层构造 location JSON */
   static buildLocation(chapterIndex: number, offset: number, percent: number): string {
     const pos = new ReadingPosition();
-    pos.type = AppConstants.FORMAT_TXT;
     pos.chapterIndex = chapterIndex;
     pos.offset = offset;
     pos.percent = percent;

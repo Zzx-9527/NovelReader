@@ -16,7 +16,7 @@ export class Book {
   author: string = '';
   coverPath: string = '';
   filePath: string = '';
-  /** AppConstants.FORMAT_TXT / FORMAT_EPUB */
+  /** 仅支持 TXT（EPUB 支持已评估并放弃，见 AppConstants.FORMAT_TXT 注释） */
   format: string = AppConstants.FORMAT_TXT;
   encoding: string = 'utf-8';
   fileSize: number = 0;
@@ -44,7 +44,7 @@ export class Book {
   parseError: string = '';
   /** 命中的分章规则名，便于重新分章 */
   parseRule: string = '';
-  /** 扩展元数据（EPUB OPF 等） */
+  /** 预留的扩展元数据 JSON（当前无消费者；解析器需要额外元数据时启用） */
   metadata: string = '';
   deleted: number = 0;
 

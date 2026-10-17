@@ -26,6 +26,8 @@ export const CREATE_TABLE_SQL: string[] = [
     author             TEXT    NOT NULL DEFAULT '',
     cover_path         TEXT    NOT NULL DEFAULT '',
     file_path          TEXT    NOT NULL,
+    -- 只支持 TXT；'epub' 保留在 CHECK 里是为了老库兼容（改 CHECK 需重建表），
+    -- 新写入只会是 'txt'（EPUB 支持已放弃）
     format             TEXT    NOT NULL CHECK (format IN ('txt', 'epub')),
     encoding           TEXT    NOT NULL DEFAULT 'utf-8',
     file_size          INTEGER NOT NULL DEFAULT 0 CHECK (file_size >= 0),
@@ -55,6 +57,8 @@ export const CREATE_TABLE_SQL: string[] = [
     title         TEXT    NOT NULL DEFAULT '',
     start_offset  INTEGER,
     end_offset    INTEGER,
+    -- href / anchor 是 EPUB 时代的预留列（支持已放弃），恒为空串；
+    -- 留着只为了不改建表语句（SQLite 改列要重建表迁移），零成本
     href          TEXT    NOT NULL DEFAULT '',
     anchor        TEXT    NOT NULL DEFAULT '',
     level         INTEGER NOT NULL DEFAULT 0 CHECK (level >= 0),

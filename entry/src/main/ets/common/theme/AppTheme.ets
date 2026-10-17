@@ -52,7 +52,7 @@ export class AppColor {
    *
    * ⚠️ 刻意**中性**、不用点缀色：一屏要同时出现 6~9 个封面，
    * 若都染成主题色，整片网格会糊成一块同色，反而看不出书名。
-   * 接入真实 EPUB 封面后这两项只作为"图未就绪"的兜底。
+   * TXT 导入不产封面图，首字占位块就是常态而非兜底。
    */
   static readonly coverBg: Resource = $r('app.color.cover_bg');
   static readonly coverText: Resource = $r('app.color.cover_text');

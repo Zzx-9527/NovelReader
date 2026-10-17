@@ -134,7 +134,7 @@ export class PathUtil {
    *
    * ⚠️ 统计的是 `filesDir` 整棵树 —— 它就是"这个应用存的书与数据"的全部：
    *  - `books/`：导入的 TXT 原文件（占大头）；
-   *  - `covers/`：封面（TXT 目前没有，EPUB 预留）；
+   *  - `covers/`：封面图（当前 TXT 导入不产封面文件，此目录通常为空）；
    *  - `backup/`：本地备份残留；
    *  - 数据库与 Preferences 在 `filesDir` 之外的 `database`/`preferences`
    *    目录，**不在**这棵树里 —— 本方法特意不去够那些（跨目录统计要

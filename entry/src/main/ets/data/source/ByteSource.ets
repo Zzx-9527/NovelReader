@@ -3,7 +3,7 @@
  *
  * ChapterParser（分章）与 ChapterReadService（读章）都只依赖这个接口，
  * 不直接依赖 @ohos.file.fs —— 这样解析逻辑可以脱离设备单测，
- * 也便于将来换成 EPUB 解压后的内存数据源。
+ * 也便于将来换成别的数据源（如解压后的内存数据）而无需改动消费方。
  */
 export interface ByteSource {
   /** 源的总字节数 */

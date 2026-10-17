@@ -98,8 +98,10 @@ export class ChapterRepository {
         args.push(c.title);
         args.push(c.startOffset);
         args.push(c.endOffset);
-        args.push(c.href);
-        args.push(c.anchor);
+        // href / anchor 两列是 EPUB 时代的预留（已放弃支持），
+        // schema 里仍是 NOT NULL DEFAULT '' —— 写空串占位
+        args.push('');
+        args.push('');
         args.push(c.level);
         args.push(c.wordCount);
         args.push(c.chapterIndex);
@@ -144,7 +146,7 @@ export class ChapterRepository {
   /**
    * 目录用的轻量映射：只读 listByBook 实际 SELECT 的列。
    *
-   * ⚠️ 不要拿来读 href / anchor / created_at / updated_at ——
+   * ⚠️ 不要拿来读 created_at / updated_at ——
    * 那些列不在结果集里，ResultSet.getColumnIndex 会因找不到列而抛错。
    */
   private static mapSummaryRow(rs: relationalStore.ResultSet): Chapter {
@@ -167,8 +169,8 @@ export class ChapterRepository {
   /** 全列映射，配合 ChapterCol.ALL 查询使用 */
   private static mapFullRow(rs: relationalStore.ResultSet): Chapter {
     const chapter = ChapterRepository.mapSummaryRow(rs);
-    chapter.href = rs.getString(rs.getColumnIndex(ChapterCol.HREF));
-    chapter.anchor = rs.getString(rs.getColumnIndex(ChapterCol.ANCHOR));
+    // href / anchor 列仍在 schema 中（NOT NULL DEFAULT ''，恒为空串，
+    // EPUB 支持已放弃），但全列查询会带出来 —— 读进对象没有意义，跳过
 
     const createdIdx: number = rs.getColumnIndex(ChapterCol.CREATED_AT);
     chapter.createdAt = rs.isColumnNull(createdIdx) ? 0 : rs.getLong(createdIdx);

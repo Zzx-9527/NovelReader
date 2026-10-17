@@ -4,19 +4,16 @@
  *
  * offset 语义 = 【章内解码文本的 UTF-16 代码单元下标】
  * chapterIndex = 0-based；-1 表示无进度
+ *
+ * ⚠️ 仅支持 TXT（EPUB 支持已放弃）：早期的 type/href/anchor/cfi 字段
+ * 是为 EPUB 的 CFI 定位预留的，已随支持取消而删除。
+ * JSON 里若有旧字段会被忽略（fromJson 只读本类声明的字段）。
  */
 export class ReadingPosition {
-  /** 'txt' | 'epub' */
-  type: string = 'txt';
   chapterIndex: number = -1;
   offset: number = 0;
   /** 跨章节的全局进度 0~1 */
   percent: number = 0;
-
-  // EPUB 用（V1.1）
-  href: string = '';
-  anchor: string = '';
-  cfi: string = '';
 
   static none(): ReadingPosition {
     return new ReadingPosition();
@@ -40,9 +37,6 @@ export class ReadingPosition {
       if (obj === null || obj === undefined) {
         return pos;
       }
-      if (obj.type !== undefined && obj.type !== null) {
-        pos.type = obj.type;
-      }
       if (obj.chapterIndex !== undefined && obj.chapterIndex !== null) {
         pos.chapterIndex = obj.chapterIndex;
       }
@@ -51,15 +45,6 @@ export class ReadingPosition {
       }
       if (obj.percent !== undefined && obj.percent !== null) {
         pos.percent = obj.percent;
-      }
-      if (obj.href !== undefined && obj.href !== null) {
-        pos.href = obj.href;
-      }
-      if (obj.anchor !== undefined && obj.anchor !== null) {
-        pos.anchor = obj.anchor;
-      }
-      if (obj.cfi !== undefined && obj.cfi !== null) {
-        pos.cfi = obj.cfi;
       }
     } catch (e) {
       return new ReadingPosition();

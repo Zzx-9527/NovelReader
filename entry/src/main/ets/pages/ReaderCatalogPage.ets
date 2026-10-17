@@ -3,6 +3,7 @@ import { Annotation } from '../model/Annotation';
 import { RouteParam } from '../model/RouteParam';
 import { ChapterRepository } from '../data/repository/ChapterRepository';
 import { AnnotationRepository } from '../data/repository/AnnotationRepository';
+import { BookSearchService, BookSearchHit, BookSearchResult } from '../data/service/BookSearchService';
 import { SettingsService } from '../data/service/SettingsService';
 import { AppConstants, LogTag } from '../common/constants/AppConstants';
 import { AppColor, AppTheme, ReaderTheme } from '../common/theme/AppTheme';
@@ -10,9 +11,10 @@ import { Logger } from '../common/utils/Logger';
 import { ReaderJumpRegistry } from '../viewmodels/ReaderJumpRegistry';
 import { EmptyView } from '../views/common/EmptyView';
 
-/** Tab 下标（用常量而不是裸数字：两个 Tab 的分支散在 build 与点击回调里） */
+/** Tab 下标（用常量而不是裸数字：三个 Tab 的分支散在 build 与点击回调里） */
 const TAB_CATALOG: number = 0;
 const TAB_BOOKMARK: number = 1;
+const TAB_SEARCH: number = 2;
 
 /**
  * 「标注」Tab 的类型筛选项。
@@ -107,6 +109,18 @@ struct ReaderCatalogPage {
   @State activeTab: number = TAB_CATALOG;
   @State loading: boolean = true;
   @State error: string = '';
+
+  // ---- 内容搜索（TAB_SEARCH）----
+  /** 搜索框输入内容（受控） */
+  @State searchKeyword: string = '';
+  /** 搜索结果；空数组 + searched=true 表示"搜了但没命中" */
+  @State searchHits: BookSearchHit[] = [];
+  /** 是否执行过至少一次搜索（区分"还没搜"与"搜了没结果"两种空态） */
+  @State searched: boolean = false;
+  /** 搜索进行中（防连点 + 显示等待态） */
+  @State searching: boolean = false;
+  /** 结果被上限截断（列表尾部提示） */
+  @State searchTruncated: boolean = false;
 
   private bookId: number = 0;
   /**
@@ -292,6 +306,48 @@ struct ReaderCatalogPage {
     this.getUIContext().getRouter().back();
   }
 
+  /**
+   * 执行全书内容搜索。
+   *
+   * ⚠️ 章节列表**直接传内存里的 `this.chapters`**：
+   * 打开本页时已查过一次（`loadAll`），搜索再查一遍纯属浪费；
+   * `BookSearchService` 只遍历不持有它，无生命周期风险。
+   *
+   * ⚠️ 搜索是同步重活（逐章解码全书）但包在 async 里 ——
+   * 期间 UI 需要能先渲染出"正在搜索"状态，所以先置 `searching=true`、
+   * `await` 一帧让 UI 提交后再开扫（与 ProfilePage 统计存储的做法同一思路）。
+   */
+  private async runSearch(): Promise<void> {
+    const keyword: string = this.searchKeyword.trim();
+    if (keyword.length === 0 || this.searching) {
+      return;
+    }
+    this.searching = true;
+    this.searched = true;
+    // 先让"正在搜索…"上屏
+    await new Promise<void>((resolve: (v: void) => void) => {
+      setTimeout(() => resolve(), 0);
+    });
+    try {
+      const result: BookSearchResult = await BookSearchService.search(
+        this.bookId, keyword, this.chapters);
+      this.searchHits = result.hits;
+      this.searchTruncated = result.truncated;
+    } catch (e) {
+      this.searchHits = [];
+      this.searchTruncated = false;
+      Logger.error(LogTag.READ, `全书搜索失败: ${Logger.errText(e as Object)}`);
+      this.getUIContext().getPromptAction().showToast({ message: '搜索失败' });
+    } finally {
+      this.searching = false;
+    }
+  }
+
+  /** 点击一条搜索结果：跳到该章该偏移（语义与标注跳转一致） */
+  private jumpToHit(hit: BookSearchHit): void {
+    this.jumpTo(hit.chapterIndex, hit.offset);
+  }
+
   /** 删除一条标注（书签/划线/笔记共用） */
   private removeAnnotation(annotationId: number): void {
     AnnotationRepository.softDelete(annotationId).then(() => {
@@ -352,8 +408,10 @@ struct ReaderCatalogPage {
         .justifyContent(FlexAlign.Center)
       } else if (this.activeTab === TAB_CATALOG) {
         this.buildChapterList()
-      } else {
+      } else if (this.activeTab === TAB_BOOKMARK) {
         this.buildAnnotationList()
+      } else {
+        this.buildSearchPanel()
       }
     }
     .width('100%')
@@ -377,6 +435,7 @@ struct ReaderCatalogPage {
    *
    * ⚠️ 两个 Tab 标签**内联写死**，不抽带参 `@Builder`：
    * 设计文档第 15 条 —— 同一个 `build()` 里把带参 `@Builder` 调多次，参数会串位。
+   * （现在是三个：目录 / 标注 / 搜索，同理。）
    */
   @Builder
   buildHeader() {
@@ -404,6 +463,15 @@ struct ReaderCatalogPage {
           .padding({ top: 8, bottom: 8 })
           .onClick(() => {
             this.activeTab = TAB_BOOKMARK;
+          })
+
+        Text('搜索')
+          .fontSize(AppTheme.FONT_SUBTITLE)
+          .fontWeight(this.activeTab === TAB_SEARCH ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(this.activeTab === TAB_SEARCH ? this.theme().text : this.theme().secondary)
+          .padding({ top: 8, bottom: 8 })
+          .onClick(() => {
+            this.activeTab = TAB_SEARCH;
           })
       }
       .width('100%')
@@ -636,6 +704,132 @@ struct ReaderCatalogPage {
         .layoutWeight(1)
         .cachedCount(6)
         .scrollBar(BarState.Off)
+      }
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  // ============================================================ 内容搜索
+
+  /**
+   * 搜索面板：输入框 + 结果列表。
+   *
+   * ⚠️ 四种状态互斥地覆盖：未搜过（引导文案）/ 搜索中 / 搜了没命中 /
+   * 有结果。与标注 Tab 一样，"搜了但为空"绝不能复用"还没搜"的引导，
+   * 否则用户会以为搜索坏了。
+   *
+   * ⚠️ 输入框回车或点「搜索」都触发；输入为空时按钮置灰。
+   */
+  @Builder
+  buildSearchPanel() {
+    Column() {
+      Row({ space: AppTheme.GAP_S }) {
+        TextInput({
+          text: this.searchKeyword,
+          placeholder: '搜索正文内容'
+        })
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(this.theme().text)
+          .placeholderColor(this.theme().secondary)
+          .placeholderFont({ size: AppTheme.FONT_BODY })
+          .backgroundColor(this.theme().barBg)
+          .borderRadius(AppTheme.CHIP_RADIUS)
+          .layoutWeight(1)
+          .onChange((value: string) => {
+            this.searchKeyword = value;
+          })
+          .onSubmit(() => {
+            this.runSearch();
+          })
+
+        Text('搜索')
+          .fontSize(AppTheme.FONT_BODY)
+          .fontColor(this.searchKeyword.trim().length > 0 && !this.searching
+            ? AppColor.accent : this.theme().secondary)
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .onClick(() => {
+            this.runSearch();
+          })
+      }
+      .width('100%')
+      .padding({ left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING, top: AppTheme.GAP_S, bottom: AppTheme.GAP_S })
+
+      if (this.searching) {
+        Column() {
+          Text('正在搜索…')
+            .fontSize(AppTheme.FONT_BODY)
+            .fontColor(this.theme().secondary)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else if (!this.searched) {
+        Column() {
+          EmptyView({
+            title: '搜索全书内容',
+            hint: '输入关键词，找出它在哪些章节出现过'
+          })
+        }
+        .width('100%')
+        .layoutWeight(1)
+      } else if (this.searchHits.length === 0) {
+        Column() {
+          EmptyView({
+            title: '没有找到',
+            hint: `正文中没有「${this.searchKeyword.trim()}」`
+          })
+        }
+        .width('100%')
+        .layoutWeight(1)
+      } else {
+        List() {
+          ForEach(this.searchHits, (hit: BookSearchHit) => {
+            ListItem() {
+              Column({ space: 4 }) {
+                Row({ space: AppTheme.GAP_S }) {
+                  Text(hit.chapterTitle)
+                    .fontSize(AppTheme.FONT_BODY)
+                    .fontColor(this.theme().text)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .layoutWeight(1)
+                }
+                .width('100%')
+
+                Text(hit.snippet)
+                  .fontSize(AppTheme.FONT_CAPTION)
+                  .fontColor(this.theme().secondary)
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+              }
+              .alignItems(HorizontalAlign.Start)
+              .width('100%')
+              .padding({
+                left: AppTheme.PAGE_PADDING, right: AppTheme.PAGE_PADDING,
+                top: 12, bottom: 12
+              })
+              .onClick(() => {
+                this.jumpToHit(hit);
+              })
+            }
+          }, (hit: BookSearchHit) =>
+            `${hit.chapterIndex}_${hit.offset}_${hit.snippet}`)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .cachedCount(6)
+        .scrollBar(BarState.Off)
+
+        if (this.searchTruncated) {
+          Text('结果较多，仅显示前 200 条，可换更具体的关键词')
+            .fontSize(AppTheme.FONT_CAPTION)
+            .fontColor(this.theme().secondary)
+            .width('100%')
+            .textAlign(TextAlign.Center)
+            .padding({ top: 8, bottom: 8 })
+        }
       }
     }
     .width('100%')

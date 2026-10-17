@@ -104,8 +104,8 @@ export class ChapterCol {
   static readonly TITLE: string = 'title';
   static readonly START_OFFSET: string = 'start_offset';
   static readonly END_OFFSET: string = 'end_offset';
-  static readonly HREF: string = 'href';
-  static readonly ANCHOR: string = 'anchor';
+  // HREF / ANCHOR 列仍在 schema（EPUB 时代预留，支持已放弃），列名常量随之保留，
+  // 但代码不再读写这两个列
   static readonly LEVEL: string = 'level';
   static readonly WORD_COUNT: string = 'word_count';
   static readonly CHAPTER_INDEX: string = 'chapter_index';
@@ -116,7 +116,7 @@ export class ChapterCol {
     'id, book_id, title, start_offset, end_offset, href, anchor, level, word_count, ' +
     'chapter_index, created_at, updated_at';
 
-  /** 目录列表用的精简列（不含 href/anchor/时间戳） */
+  /** 目录列表用的精简列（不含时间戳与 EPUB 遗留列） */
   static readonly SUMMARY: string =
     'id, book_id, title, start_offset, end_offset, chapter_index, level, word_count';
 }
