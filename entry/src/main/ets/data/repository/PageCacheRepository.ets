@@ -96,6 +96,20 @@ export class PageCacheRepository {
       `SELECT COUNT(*) FROM ${DbConstants.TABLE_PAGE_CACHE}`, [], 0);
   }
 
+  /**
+   * 缓存的近似磁盘占用（字节）。
+   *
+   * ⚠️ 用 `SUM(LENGTH(...))` 估算而不是去量数据库文件：
+   * SQLite 文件还有页结构/空闲页，精确拆出单表占用做不到；
+   * 这里把每行的 breaks JSON、layout_key 与固定列开销加起来，
+   * 结果略小于真实占用 —— 对"这缓存值不值得清"的判断足够准。
+   */
+  static async usageBytes(): Promise<number> {
+    return db().queryNumber(
+      `SELECT IFNULL(SUM(LENGTH(${PageCacheCol.BREAKS}) + LENGTH(${PageCacheCol.LAYOUT_KEY}) + 48), 0) ` +
+      `FROM ${DbConstants.TABLE_PAGE_CACHE}`, [], 0);
+  }
+
   /** 某本书的缓存条目数 */
   static async countByBook(bookId: number): Promise<number> {
     return db().queryNumber(

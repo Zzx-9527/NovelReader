@@ -10,7 +10,6 @@ import { ReaderSettings } from '../model/ReaderSettings';
 import { IconChevron } from '../views/common/Marks';
 import { ThemeConfirm } from '../views/common/ThemeConfirm';
 import { Logger } from '../common/utils/Logger';
-import { PathUtil } from '../common/utils/PathUtil';
 import { FileUtil } from '../common/utils/FileUtil';
 
 /**
@@ -48,7 +47,16 @@ const THEME_SWATCH_W: number = 56;
  */
 @Component
 export struct ProfilePage {
-  @State cacheCount: number = 0;
+  /**
+   * 缓存占用文案（近似字节数，经 FileUtil.humanSize 格式化）。
+   *
+   * ⚠️ 实时性：本页是 Tabs 常驻子组件，`aboutToAppear` 只在首建时跑一次；
+   * 阅读中缓存一直在写入，若只靠它，数字永远停在进 app 那一刻。
+   * 刷新由 `@StorageProp profile_cache_tick` 驱动（Index 在切到本页 /
+   * 从阅读页返回时自增），见 `loadCacheInfo` 上的说明。
+   */
+  @Watch('onCacheTickChange') @StorageProp('profile_cache_tick') cacheTick: number = 0;
+  @State cacheUsageText: string = '';
   @State clearing: boolean = false;
   /**
    * 应用级主题模式（0 跟随系统 / 1 浅色 / 2 夜间）。
@@ -79,13 +87,19 @@ export struct ProfilePage {
   @State private versionName: string = '—';
   /** 数据操作进行中（导出/导入按钮防连点） */
   @State private backingUp: boolean = false;
-  /** 沙箱内书籍文件总占用（格式化文案；空串 = 还没量到/量失败） */
-  @State private storageUsageText: string = '';
 
   aboutToAppear(): void {
     this.loadCacheInfo();
     this.loadVersionName();
-    this.loadStorageUsage();
+    /**
+     * 缓存占用实时刷新：Index 在"切到我的页"与"从阅读页返回"时自增
+     * `profile_cache_tick`，这里订阅它重查一次。
+     *
+     * ⚠️ 用 AppStorage 而不是让 Index 直接调用本页方法：Tabs 的子组件
+     * 拿不到引用（Index 只写 `ProfilePage()`，无句柄），反向注册又要
+     * 多一层接口 —— 一个自增计数器是最薄的信号通道。
+     */
+    AppStorage.SetOrCreate<number>('profile_cache_tick', 0);
     // 同步读一次持久化值做高亮（失败按跟随系统 —— 与 ThemeApplier 的降级一致）
     try {
       this.themeMode = SettingsService.getInstance().getAppThemeMode();
@@ -99,6 +113,10 @@ export struct ProfilePage {
     } catch (e) {
       this.readerTheme = 'light';
     }
+  }
+
+  aboutToDisappear(): void {
+    // 无需手动释放 AppStorage 订阅：@Watch + @StorageProp 由框架自动管理生命周期
   }
 
   /**
@@ -221,35 +239,36 @@ export struct ProfilePage {
     };
   }
 
+  /**
+   * 读取缓存占用并格式化。
+   *
+   * ⚠️ 触发源有三：首建（`aboutToAppear`）、AppStorage tick 变化
+   * （AppStorage 订阅回调，Index 切页/从阅读返回时发）、清缓存完成后。
+   * 三个口子都汇到这一个方法，显示值只有一个真相来源。
+   */
   private async loadCacheInfo(): Promise<void> {
     try {
-      this.cacheCount = await PageCacheRepository.countAll();
+      const bytes: number = await PageCacheRepository.usageBytes();
+      this.cacheUsageText = bytes > 0
+        ? `缓存占用 ${FileUtil.humanSize(bytes)}，点击清除`
+        : '暂无缓存';
     } catch (e) {
-      this.cacheCount = 0;
+      this.cacheUsageText = '暂无缓存';
     }
   }
 
   /**
-   * 统计沙箱内书籍文件的总占用并格式化。
+   * @StorageProp profile_cache_tick 变化的回调（由 @Watch 驱动）。
    *
-   * ⚠️ 同步遍历放在 `setTimeout(0)` 里让出一帧：进页面先画出来、
-   * 数字随后补上（几十 MB / 几十个文件的遍历是毫秒级，肉眼无感），
-   * 避免在首帧的构建路径里做文件 IO。
+   * 当 Index 切到本页/从阅读页返回时自增 profile_cache_tick，
+   * 本方法被自动调用，重查缓存占用。
    *
-   * ⚠️ 统计失败显示「-」而不是 0 B：0 会被读成"没占空间"，
-   * 而失败是"不知道"，两者语义不同。
+   * ⚠️ 使用 @Watch 替代原手动 subscribe/unsubscribe：新版本 ArkUI 中
+   * SubscribedAbstractProperty 不再暴露 subscribe/unsubscribe 方法，
+   * @StorageProp + @Watch 是更简洁的观测方式，且生命周期由框架自动管理。
    */
-  private loadStorageUsage(): void {
-    this.storageUsageText = '';
-    setTimeout(() => {
-      try {
-        const bytes: number = PathUtil.sandboxUsage();
-        this.storageUsageText = bytes > 0 ? FileUtil.humanSize(bytes) : '0 B';
-      } catch (e) {
-        this.storageUsageText = '-';
-        Logger.warn('ProfilePage', `统计存储占用失败: ${Logger.errText(e as Object)}`);
-      }
-    }, 0);
+  private onCacheTickChange(): void {
+    this.loadCacheInfo();
   }
 
   build() {
@@ -575,38 +594,6 @@ export struct ProfilePage {
           .padding({ left: 2, bottom: 10 })
 
         Column() {
-          /**
-           * 「存储占用」—— **只读信息行**（无 chevron、不可点击）。
-           *
-           * ⚠️ 刻意与下面的操作行长得不一样：同一页里"数据"与"入口"
-           * 必须可区分（设计文档既定判据）—— 它没有箭头、没有按压态，
-           * 值只在进页面时算一次（导入/清除缓存后回来会重新算）。
-           *
-           * ⚠️ 排在本卡首行：它是"背景信息"，不是操作；
-           * 用户从上往下扫到的是"现在占了多少 → 导出 → 恢复 → 清缓存 → 清空"，
-           * 决策链自然。
-           */
-          Row() {
-            Column({ space: 3 }) {
-              Text('存储占用')
-                .fontSize(16)
-                .fontColor(AppColor.textPrimary)
-                .width('100%')
-              Text(this.storageUsageText.length > 0
-                ? `书籍与数据文件共 ${this.storageUsageText}`
-                : '正在统计…')
-                .fontSize(12)
-                .fontColor(AppColor.textHint)
-                .fontFeature(AppFont.TABULAR)
-                .width('100%')
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start)
-          }
-          .width('100%')
-          .padding({ top: 17, bottom: 17, left: 18, right: 18 })
-          .alignItems(VerticalAlign.Center)
-
           Row() {
             Column({ space: 3 }) {
               Text('导出备份')
@@ -660,8 +647,14 @@ export struct ProfilePage {
           /**
            * 「清除分页缓存」—— 从上面的「阅 读」卡片移来（见本卡片顶部说明）。
            *
-           * ⚠️ 副标题必须**实时反映真实条数**：`当前 N 条` 由 `cacheCount` 驱动，
-           * 用户点完这一行后它应当立刻变成 0（`clearCache()` 里会重新 `loadCacheInfo()`）。
+           * ⚠️ 副标题显示**缓存的近似磁盘占用**（不是条数）：
+           * 用户关心的是"它占了多少空间、值不值得清"，字节数比条数直观。
+           *
+           * ⚠️ 数据**实时刷新**：阅读中每翻到新章就可能写入缓存，
+           * 而本页是 Tabs 的常驻子组件、`aboutToAppear` 只跑一次 ——
+           * 刷新信号由 Index 在"切到我的页"与"从阅读页返回"时写入
+           * AppStorage（`profile_cache_tick`），@StorageProp 监听它重查。
+           * 点完清除也会立刻重查归零（见 `clearCache`）。
            *
            * ⚠️ 它排在备份/恢复**之后**：本行是"清理派生数据"，
            * 与上面两行的"用户数据出入口"是两件事，但都无害、可随时再做，
@@ -673,7 +666,7 @@ export struct ProfilePage {
                 .fontSize(16)
                 .fontColor(AppColor.textPrimary)
                 .width('100%')
-              Text(`当前 ${this.cacheCount} 条`)
+              Text(this.cacheUsageText)
                 .fontSize(12)
                 .fontColor(AppColor.textHint)
                 .fontFeature(AppFont.TABULAR)
@@ -937,7 +930,8 @@ export struct ProfilePage {
     this.clearing = true;
     try {
       await BookRepository.wipeAll();
-      this.cacheCount = 0;
+      // wipeAll 连带清了 page_cache（外键 CASCADE），占用归零同步显示
+      await this.loadCacheInfo();
       this.getUIContext().getPromptAction().showToast({ message: '已清空全部数据' });
     } catch (e) {
       this.getUIContext().getPromptAction().showToast({ message: '清空失败' });

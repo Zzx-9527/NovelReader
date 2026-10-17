@@ -95,6 +95,22 @@ struct Index {
    */
   onPageShow(): void {
     ShelfRefreshRegistry.refresh();
+    this.bumpCacheTick();
+  }
+
+  /**
+   * 通知「我的」页重查分页缓存占用。
+   *
+   * ⚠️ 通过自增 `AppStorage['profile_cache_tick']` 发信号而不是持引用调方法：
+   * Tabs 子组件在 build 里创建，Index 拿不到句柄；计数器是最薄的通道
+   * （ProfilePage 侧 @StorageProp + 订阅，见其 `aboutToAppear`）。
+   *
+   * 触发时机 = 缓存**可能**变化的时刻：从阅读页返回（翻页写入了新章缓存）。
+   * 查询本身轻（一张小表的 SUM），多查几次无所谓。
+   */
+  private bumpCacheTick(): void {
+    const current: number = AppStorage.get<number>('profile_cache_tick') ?? 0;
+    AppStorage.setOrCreate('profile_cache_tick', current + 1);
   }
 
   build() {
@@ -148,6 +164,10 @@ struct Index {
         if (index === 0) {
           // 切回书架：重新取数据，保证进度、导入结果都是最新的
           ShelfRefreshRegistry.refresh();
+        }
+        if (index === 2) {
+          // 切到「我的」：重查分页缓存占用（阅读期间可能写入了很多条）
+          this.bumpCacheTick();
         }
       })
       .width('100%')
