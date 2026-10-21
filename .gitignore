@@ -1,15 +1,22 @@
+# 依赖与构建产物
 /node_modules
 /oh_modules
-/local.properties
-/.idea
 **/build
 /.hvigor
+**/.preview
 .cxx
 /.clangd
 /.clang-format
 /.clang-tidy
-**/.test
 /.appanalyzer
-/静读-鸿蒙原生本地小说阅读器-毕业答辩-5/
-/jingdu-defense-ppt/
-/.acl-recovery/acl-report-402618674a3844c1a5019fac0b7ab0c0.jsonl
+**/.test
+
+# 本机配置（不入库）
+/local.properties
+/.idea
+.DS_Store
+Thumbs.db
+
+# 本地临时文件与备份
+/.acl-recovery/
+/.git-history-backup.bundle
